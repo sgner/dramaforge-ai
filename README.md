@@ -63,7 +63,7 @@
 - **前端框架**：React 19.2.3 + TypeScript
 - **构建工具**：Vite 6.2
 - **AI 服务**：
-  目前使用的是[贞贞的AI工坊](https://ai.t8star.cn/)提供的服务
+  目前使用的是[贞贞的AI工坊](https://ai.t8star.cn/)提供的服务，其它接口可能不兼容
   - Google Gemini 3 Pro（脚本生成与优化）
   - Nanobanana API（角色设计与分镜生成）
   - Sora 2 API（视频生成）
