@@ -225,15 +225,4 @@ npm run build
 
 - Chrome/Edge（推荐）
 - Firefox
-- Safari
-
-## 贡献
-
-这是一个私有项目。如有疑问，请联系项目维护者。
-
-## 致谢
-
-- Google Gemini AI 提供脚本生成能力
-- Nanobanana API 提供图像生成服务
-- Sora API 提供视频生成
-- Lucide React 提供精美图标
+- Safari。
