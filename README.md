@@ -42,14 +42,13 @@
 - **本地 ComfyUI 集成**
   - 支持调用本地部署的 ComfyUI 接口
   - 实现完全本地化的图像和视频生成
-  - 支持自定义 ComfyUI 工作流
   - 降低 API 调用成本，提高生成速度
   - 支持离线模式，保护数据隐私
 
 - **更多 AI 服务支持**
   - Anthropic Claude API
   - Midjourney API
-  - Stable Diffusion XL
+  - Stable Diffusion
   - 其他主流 AI 视频生成服务
 
 - **增强功能**
