@@ -10,6 +10,8 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.8-blue.svg)](https://www.typescriptlang.org/)
 [![Vite](https://img.shields.io/badge/Vite-6.2-purple.svg)](https://vitejs.dev/)
 
+![https://github.com/sgner/images/blob/main/video_shot_1769513992628_0_9qj4680o7we.mp4](https://github.com/sgner/images/blob/main/video_shot_1769513992628_0_9qj4680o7we%20(2).gif)
+
 </div>
 
 ## 功能特性
@@ -77,7 +79,6 @@
 
 ![项目详情](https://github.com/sgner/images/blob/main/%E5%B1%8F%E5%B9%95%E6%88%AA%E5%9B%BE%202026-01-27%20194515.png) 
 ![角色登场](https://github.com/sgner/images/blob/main/%E5%B1%8F%E5%B9%95%E6%88%AA%E5%9B%BE%202026-01-27%20201515.png)
-
 </div>
 
 ### 流程
