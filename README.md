@@ -109,7 +109,7 @@
 
 1. 克隆仓库：
    ```bash
-   git clone https://github.com/yourusername/dramaforge-ai.git
+   git clone https://github.com/sgner/dramaforge-ai.git
    cd dramaforge-ai
    ```
 
