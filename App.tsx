@@ -9,11 +9,12 @@ import { TaskCard } from './components/TaskCard';
 import { ImageLightbox } from './components/ImageLightbox';
 import { ConfirmModal } from './components/ConfirmModal';
 import { ApiKeyModal } from './components/ApiKeyModal';
-import { DramaTask, TaskStatus, ArtStyle, ScriptScene, BigShot, Character, Language, TaskMode, ApiConfig, ProcessedSegment } from './types';
+import { DramaTask, TaskStatus, ArtStyle, ScriptScene, BigShot, Character, Language, TaskMode, ApiConfig, ProcessedSegment, createDefaultApiConfig, getProviderForStep, getModelForStep, StepType, Provider, ModelConfig } from './types';
 import { generateScriptFromNovel, optimizeSoraPrompt, expandIdeaToStory, continueStory, preprocessNovel } from './services/geminiService';
 import { generateCharacterDesign, generateStoryboardImage, generateSoraVideo } from './services/mediaService';
 import { translations } from './locales';
 import { BELL_SOUND_BASE64, ERROR_SOUND_BASE64 } from './constants';
+import { storageService } from './services/storageService';
 
 const STORAGE_KEY_TASKS = 'dramaforge_tasks';
 const STORAGE_KEY_LANG = 'dramaforge_language';
@@ -92,7 +93,6 @@ const renderLogPrefix = (service: string, text: string) => {
   );
 };
 
-// Helper to parse progress from status string
 const getProgressFromStatus = (status?: string): number => {
     if (!status) return 0;
     const match = status.match(/(\d+)%/);
@@ -105,6 +105,7 @@ const BigShotDetailModal = ({
   onClose, 
   onRegenerateStoryboard,
   onGenerateVideo,
+  onReoptimizePrompt,
   onSave,
   isManualMode,
   initialIsEditing = false,
@@ -115,6 +116,7 @@ const BigShotDetailModal = ({
   onClose: () => void; 
   onRegenerateStoryboard: () => void;
   onGenerateVideo: () => void;
+  onReoptimizePrompt: () => void;
   onSave: (updates: Partial<BigShot>) => void;
   isManualMode: boolean;
   initialIsEditing?: boolean;
@@ -451,7 +453,22 @@ const BigShotDetailModal = ({
                     )}
                 </div>
                 <div className="space-y-2">
-                    <h4 className="text-xs font-bold text-gray-500 uppercase">{t('soraPrompt')}</h4>
+                    <div className="flex justify-between items-center">
+                        <h4 className="text-xs font-bold text-gray-500 uppercase">{t('soraPrompt')}</h4>
+                        <div className="flex gap-2">
+                            {!isEditing && !shot.soraPromptOptimized && (
+                                <button 
+                                    onClick={onReoptimizePrompt}
+                                    disabled={isEditing}
+                                    className="flex items-center gap-1.5 px-2 py-1 bg-yellow-600/20 hover:bg-yellow-600/40 text-yellow-400 rounded text-xs border border-yellow-500/30 transition-all disabled:opacity-50"
+                                    title={t('reoptimizePrompt') || 'Reoptimize Prompt'}
+                                >
+                                    <Wand2 className="w-3 h-3" />
+                                    {t('reoptimizePrompt') || 'Reoptimize'}
+                                </button>
+                            )}
+                        </div>
+                    </div>
                      {isEditing ? (
                         <textarea 
                            value={editState.soraPrompt}
@@ -495,18 +512,12 @@ export default function App() {
   // Character Ref Upload State
   const charFileInputRef = useRef<HTMLInputElement>(null);
   const [uploadingCharName, setUploadingCharName] = useState<string | null>(null);
+  const [importFileInputRef, setImportFileInputRef] = useState<HTMLInputElement | null>(null);
 
   // Segment View Modal
   const [viewingSegment, setViewingSegment] = useState<ProcessedSegment | null>(null);
 
-  const [apiConfig, setApiConfig] = useState<ApiConfig>({
-    geminiKey: '',
-    geminiBaseUrl: '',
-    nanobananaKey: '',
-    nanobananaBaseUrl: '',
-    soraKey: '',
-    soraBaseUrl: ''
-  });
+  const [apiConfig, setApiConfig] = useState<ApiConfig>(createDefaultApiConfig());
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   const t = useCallback((key: string) => {
@@ -514,15 +525,48 @@ export default function App() {
   }, [lang]);
 
   useEffect(() => {
-    const savedTasks = localStorage.getItem(STORAGE_KEY_TASKS);
-    if (savedTasks) setTasks(JSON.parse(savedTasks));
+    const savedTasks = storageService.loadTasks();
+    if (savedTasks && savedTasks.length > 0) {
+      setTasks(savedTasks);
+      console.log(`[App] Loaded ${savedTasks.length} tasks from storage`);
+    } else {
+      console.log('[App] No saved tasks found, checking backups...');
+      const backupTasks = storageService.loadFromBackup();
+      if (backupTasks && backupTasks.length > 0) {
+        setTasks(backupTasks);
+        console.log(`[App] Loaded ${backupTasks.length} tasks from backup`);
+      }
+    }
+    
     const savedLang = localStorage.getItem(STORAGE_KEY_LANG);
     if (savedLang) setLang(savedLang as Language);
     
     const savedConfig = localStorage.getItem(STORAGE_KEY_API_CONFIG);
     if (savedConfig) {
         try {
-            setApiConfig(JSON.parse(savedConfig));
+            const parsed = JSON.parse(savedConfig);
+            if (parsed.providers && parsed.models && parsed.stepBindings) {
+                setApiConfig(parsed);
+            } else if (parsed.geminiKey !== undefined) {
+                const migrated = createDefaultApiConfig();
+                const geminiProvider = migrated.providers.find(p => p.id === 'google-gemini');
+                const nanoProvider = migrated.providers.find(p => p.id === 'nanobanana');
+                const soraProvider = migrated.providers.find(p => p.id === 'sora');
+                if (geminiProvider) {
+                    geminiProvider.apiKey = parsed.geminiKey || '';
+                    geminiProvider.baseUrl = parsed.geminiBaseUrl || 'https://generativelanguage.googleapis.com';
+                }
+                if (nanoProvider) {
+                    nanoProvider.apiKey = parsed.nanobananaKey || '';
+                    nanoProvider.baseUrl = parsed.nanobananaBaseUrl || 'https://api.nanobanana.com';
+                }
+                if (soraProvider) {
+                    soraProvider.apiKey = parsed.soraKey || '';
+                    soraProvider.baseUrl = parsed.soraBaseUrl || 'https://api.sora.com';
+                }
+                setApiConfig(migrated);
+                localStorage.setItem(STORAGE_KEY_API_CONFIG, JSON.stringify(migrated));
+            }
         } catch (e) {
             console.error("Failed to parse saved api config", e);
         }
@@ -530,7 +574,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_TASKS, JSON.stringify(tasks));
+    const success = storageService.saveTasks(tasks);
+    if (!success) {
+      console.error('[App] Failed to save tasks to storage');
+    }
   }, [tasks]);
 
   const handleSaveConfig = (newConfig: ApiConfig) => {
@@ -562,7 +609,9 @@ export default function App() {
     if (!activeTask || !activeTask.rawNovelText) return;
     setIsExpandingStory(true);
     try {
-        const newText = await continueStory(apiConfig.geminiKey, activeTask.rawNovelText, apiConfig.geminiBaseUrl);
+        const llmProvider = getProviderForStep(apiConfig, 'preprocessing')!;
+        const llmModel = getModelForStep(apiConfig, 'preprocessing')!;
+        const newText = await continueStory(llmProvider, llmModel, activeTask.rawNovelText);
         const updatedText = activeTask.rawNovelText + "\n\n" + newText;
         updateTask(activeTask.id, { rawNovelText: updatedText });
     } catch (e) {
@@ -596,6 +645,41 @@ export default function App() {
             if (activeTaskId === taskId) setActiveTaskId(null);
         }
     });
+  };
+
+  const exportProject = (taskId: string) => {
+    const task = tasks.find(t => t.id === taskId);
+    if (!task) return;
+    
+    storageService.exportToFile([task], `dramaforge_${task.name}_${Date.now()}.json`);
+  };
+
+  const exportAllProjects = () => {
+    storageService.exportToFile(tasks, `dramaforge_all_projects_${Date.now()}.json`);
+  };
+
+  const handleImportProject = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    
+    try {
+      const importedTasks = await storageService.importFromFile(file);
+      
+      const tasksWithNewIds = importedTasks.map((task: DramaTask) => ({
+        ...task,
+        id: `imported_${Date.now()}_${Math.random().toString(36).slice(2)}`
+      }));
+      
+      setTasks(prev => [...prev, ...tasksWithNewIds]);
+      alert(`${tasksWithNewIds.length} ${t('projectsImported') || "projects imported successfully!"}`);
+    } catch (error) {
+      console.error("Import failed:", error);
+      alert(t('importFailed') || "Failed to import project");
+    }
+    
+    if (event.target) {
+      event.target.value = '';
+    }
   };
 
   const changeLanguage = (newLang: Language) => {
@@ -707,12 +791,14 @@ export default function App() {
     if (!task) return;
     updateTask(taskId, { characters: task.characters.map(c => c.name === charName ? { ...c, generationStatus: 'Regenerating...' } : c) });
     try {
+      const imageProvider = getProviderForStep(apiConfig, 'characterDesign')!;
+      const imageModel = getModelForStep(apiConfig, 'characterDesign')!;
       const imgUrl = await generateCharacterDesign(
           task.characters.find(c => c.name === charName)!, 
           task.style, 
           task.language,
-          apiConfig.nanobananaKey,
-          apiConfig.nanobananaBaseUrl
+          imageProvider,
+          imageModel
       );
       updateTask(taskId, { characters: task.characters.map(c => c.name === charName ? { ...c, threeViewImg: imgUrl, generationStatus: undefined } : c) });
     } catch (e: any) {
@@ -733,6 +819,8 @@ export default function App() {
     if (!shot) return;
     updateBigShotStatus(taskId, shotId, "Generating Storyboard...");
     try {
+        const imageProvider = getProviderForStep(apiConfig, 'storyboarding')!;
+        const imageModel = getModelForStep(apiConfig, 'storyboarding')!;
         const involvedCharacters = task.characters.filter(c => shot.charactersInvolved?.some(name => name.toLowerCase().includes(c.name.toLowerCase())));
         const characterContext = involvedCharacters.map(c => `${c.name}: ${c.visualFeatures}`).join('; ');
         const img = await generateStoryboardImage(
@@ -741,8 +829,8 @@ export default function App() {
             task.language, 
             characterContext, 
             involvedCharacters.map(c => c.threeViewImg).filter(Boolean) as string[],
-            apiConfig.nanobananaKey,
-            apiConfig.nanobananaBaseUrl
+            imageProvider,
+            imageModel
         );
         updateTask(taskId, { bigShots: task.bigShots.map(s => s.id === shotId ? { ...s, storyboardImageUrl: img, generationStatus: undefined } : s) });
     } catch (e: any) {
@@ -759,12 +847,14 @@ export default function App() {
      if (!shot) return;
      updateBigShotStatus(taskId, shotId, "Starting Video Gen...");
      try {
+         const videoProvider = getProviderForStep(apiConfig, 'videoGeneration')!;
+         const videoModel = getModelForStep(apiConfig, 'videoGeneration')!;
          const video = await generateSoraVideo(
              shot.soraPromptOptimized || shot.soraPrompt, 
              task.style, 
              task.language, 
-             apiConfig.soraKey,
-             apiConfig.soraBaseUrl,
+             videoProvider,
+             videoModel,
              shot.storyboardImageUrl, 
              (status) => updateBigShotStatus(taskId, shot.id, status)
          );
@@ -773,6 +863,36 @@ export default function App() {
          console.error(e);
          updateBigShotStatus(taskId, shotId, "Video Failed: " + (e.message || "Error"));
      }
+  };
+
+  const regenerateSinglePrompt = async (taskId: string, shotId: string) => {
+    const task = tasks.find(t => t.id === taskId);
+    if (!task) return;
+    const shot = task.bigShots.find(s => s.id === shotId);
+    if (!shot) return;
+    
+    updateBigShotStatus(taskId, shotId, "Optimizing Prompt...");
+    try {
+        const llmProvider = getProviderForStep(apiConfig, 'promptOptimization')!;
+        const llmModel = getModelForStep(apiConfig, 'promptOptimization')!;
+        const optimized = await optimizeSoraPrompt(
+            llmProvider, 
+            llmModel,
+            shot.soraPrompt || "Scene", 
+            task.style, 
+            task.language
+        );
+        updateTask(taskId, { 
+            bigShots: task.bigShots.map(s => s.id === shotId ? { 
+                ...s, 
+                soraPromptOptimized: optimized, 
+                generationStatus: undefined 
+            } : s) 
+        });
+    } catch (e: any) {
+        console.error(e);
+        updateBigShotStatus(taskId, shotId, "Prompt Optimization Failed: " + (e.message || "Unknown error"));
+    }
   };
 
   const executeTaskStep = async (taskId: string, targetStatus?: TaskStatus) => {
@@ -793,8 +913,9 @@ export default function App() {
                 let segments: ProcessedSegment[] = [];
 
                 if (task.sourceType === 'idea' && task.originalIdea) {
-                    // For ideas, we still use AI to expand it first
-                    processedText = await expandIdeaToStory(apiConfig.geminiKey, task.originalIdea, apiConfig.geminiBaseUrl, task.language, signal);
+                    const llmProvider = getProviderForStep(apiConfig, 'preprocessing')!;
+                    const llmModel = getModelForStep(apiConfig, 'preprocessing')!;
+                    processedText = await expandIdeaToStory(llmProvider, llmModel, task.originalIdea, task.language, signal);
                 } 
                 
                 const TEXT_SEGMENT_THRESHOLD = 20000;
@@ -851,7 +972,9 @@ export default function App() {
                 break;
             }
             case TaskStatus.SCRIPT_GENERATION: {
-                const geminiOutput = await generateScriptFromNovel(apiConfig.geminiKey, task.rawNovelText, task.style, apiConfig.geminiBaseUrl, task.language, signal);
+                const llmProvider = getProviderForStep(apiConfig, 'scriptGeneration')!;
+                const llmModel = getModelForStep(apiConfig, 'scriptGeneration')!;
+                const geminiOutput = await generateScriptFromNovel(llmProvider, llmModel, task.rawNovelText, task.style, task.language, signal);
                 const initializedBigShots: BigShot[] = geminiOutput.bigShots.map((shot: any, idx: number) => ({
                     ...shot,
                     id: `shot_${Date.now()}_${idx}_${Math.random().toString(36).slice(2)}`,
@@ -860,7 +983,8 @@ export default function App() {
                 break;
             }
             case TaskStatus.CHARACTER_DESIGN: {
-                // Batch processing for characters
+                const imageProvider = getProviderForStep(apiConfig, 'characterDesign')!;
+                const imageModel = getModelForStep(apiConfig, 'characterDesign')!;
                 const BATCH_SIZE = 3;
                 let currentCharacters = [...task.characters];
                 // Filter indices that need generation
@@ -892,7 +1016,7 @@ export default function App() {
                         try {
                              // Get latest state
                              const charToGen = currentCharacters[charIndex];
-                             const imgUrl = await generateCharacterDesign(charToGen, task.style, task.language, apiConfig.nanobananaKey, apiConfig.nanobananaBaseUrl, signal);
+                             const imgUrl = await generateCharacterDesign(charToGen, task.style, task.language, imageProvider, imageModel, signal);
                              
                              // Update specific character in global state immediately
                              setTasks(prev => {
@@ -933,7 +1057,8 @@ export default function App() {
                 break;
             }
             case TaskStatus.STORYBOARDING: {
-                // Batch processing for storyboards
+                const imageProvider = getProviderForStep(apiConfig, 'storyboarding')!;
+                const imageModel = getModelForStep(apiConfig, 'storyboarding')!;
                 const BATCH_SIZE = 3;
                 let currentBigShots = [...task.bigShots];
                 const indicesToGenerate = currentBigShots
@@ -964,7 +1089,7 @@ export default function App() {
                             const involvedCharacters = task.characters.filter(c => shot.charactersInvolved?.some(name => name.toLowerCase().includes(c.name.toLowerCase())));
                             const context = involvedCharacters.map(c => `${c.name}: ${c.visualFeatures}`).join('; ');
                             
-                            const img = await generateStoryboardImage(shot.storyboardPrompt, task.style, task.language, context, involvedCharacters.map(c => c.threeViewImg).filter(Boolean) as string[], apiConfig.nanobananaKey, apiConfig.nanobananaBaseUrl, signal);
+                            const img = await generateStoryboardImage(shot.storyboardPrompt, task.style, task.language, context, involvedCharacters.map(c => c.threeViewImg).filter(Boolean) as string[], imageProvider, imageModel, signal);
                             
                             setTasks(prev => {
                                 const t = prev.find(p => p.id === taskId);
@@ -1003,7 +1128,8 @@ export default function App() {
                 break;
             }
             case TaskStatus.PROMPT_OPTIMIZATION: {
-                // Typically fast, but can be batched too
+                const llmProvider = getProviderForStep(apiConfig, 'promptOptimization')!;
+                const llmModel = getModelForStep(apiConfig, 'promptOptimization')!;
                 const BATCH_SIZE = 5;
                 let currentBigShots = [...task.bigShots];
                 const indicesToGenerate = currentBigShots.map((s, idx) => (!s.soraPromptOptimized ? idx : -1)).filter(idx => idx !== -1);
@@ -1018,7 +1144,7 @@ export default function App() {
                     await Promise.all(batchIndices.map(async (shotIndex) => {
                          try {
                              const shot = currentBigShots[shotIndex];
-                             const optimized = await optimizeSoraPrompt(apiConfig.geminiKey, shot.soraPrompt || "Scene", task.style, apiConfig.geminiBaseUrl, task.language, signal);
+                             const optimized = await optimizeSoraPrompt(llmProvider, llmModel, shot.soraPrompt || "Scene", task.style, task.language, signal);
                              
                              setTasks(prev => {
                                  const t = prev.find(p => p.id === taskId);
@@ -1050,7 +1176,8 @@ export default function App() {
                 break;
             }
             case TaskStatus.VIDEO_GENERATION: {
-                // Batch processing for videos
+                const videoProvider = getProviderForStep(apiConfig, 'videoGeneration')!;
+                const videoModel = getModelForStep(apiConfig, 'videoGeneration')!;
                 const BATCH_SIZE = 3;
                 let currentBigShots = [...task.bigShots];
                 const indicesToGenerate = currentBigShots.map((s, idx) => (!s.videoUrl ? idx : -1)).filter(idx => idx !== -1);
@@ -1081,8 +1208,8 @@ export default function App() {
                                 shot.soraPromptOptimized || shot.soraPrompt, 
                                 task.style, 
                                 task.language, 
-                                apiConfig.soraKey,
-                                apiConfig.soraBaseUrl, 
+                                videoProvider,
+                                videoModel, 
                                 shot.storyboardImageUrl, 
                                 (status) => updateBigShotStatus(taskId, shot.id, status), 
                                 signal
@@ -1222,10 +1349,33 @@ export default function App() {
                 <h2 className="text-3xl font-bold text-white mb-2 tracking-tight">{t('myProjects')}</h2>
                 <p className="text-gray-400 text-sm">{t('myProjectsDesc')}</p>
               </div>
-              <button onClick={() => setIsNewTaskModalOpen(true)} className="group relative inline-flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-brand-600 to-brand-500 hover:from-brand-500 hover:to-brand-400 text-white rounded-xl font-medium transition-all shadow-lg hover:-translate-y-0.5">
-                <Plus className="w-5 h-5 group-hover:rotate-90 transition-transform duration-300" />
-                <span>{t('newProject')}</span>
-              </button>
+              <div className="flex items-center gap-3">
+                <input 
+                  type="file" 
+                  accept=".json" 
+                  ref={(ref) => setImportFileInputRef(ref)}
+                  onChange={handleImportProject}
+                  className="hidden" 
+                />
+                <button 
+                  onClick={() => importFileInputRef?.click()}
+                  className="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-white rounded-lg font-medium flex items-center gap-2 transition-colors border border-gray-700"
+                >
+                  <UploadCloud className="w-4 h-4" />
+                  <span>{t('importProject') || 'Import'}</span>
+                </button>
+                <button 
+                  onClick={exportAllProjects}
+                  className="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-white rounded-lg font-medium flex items-center gap-2 transition-colors border border-gray-700"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>{t('exportAll') || 'Export All'}</span>
+                </button>
+                <button onClick={() => setIsNewTaskModalOpen(true)} className="group relative inline-flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-brand-600 to-brand-500 hover:from-brand-500 hover:to-brand-400 text-white rounded-xl font-medium transition-all shadow-lg hover:-translate-y-0.5">
+                  <Plus className="w-5 h-5 group-hover:rotate-90 transition-transform duration-300" />
+                  <span>{t('newProject')}</span>
+                </button>
+              </div>
             </div>
             {tasks.length === 0 ? (
               <div onClick={() => setIsNewTaskModalOpen(true)} className="border border-dashed border-gray-800 rounded-3xl bg-white/5 hover:bg-white/[0.07] transition-colors p-12 flex flex-col items-center justify-center cursor-pointer group">
@@ -1237,7 +1387,7 @@ export default function App() {
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-in fade-in duration-500">
-                {tasks.map(task => <TaskCard key={task.id} task={task} onClick={() => setActiveTaskId(task.id)} onDelete={() => deleteTask(task.id)} t={t} />)}
+                {tasks.map(task => <TaskCard key={task.id} task={task} onClick={() => setActiveTaskId(task.id)} onDelete={() => deleteTask(task.id)} onExport={() => exportProject(task.id)} t={t} />)}
               </div>
             )}
           </div>
@@ -1814,7 +1964,7 @@ export default function App() {
         isOpen={isNewTaskModalOpen} 
         onClose={() => setIsNewTaskModalOpen(false)} 
         onCreate={createTask} 
-        hasApiKey={!!apiConfig.geminiKey} 
+        hasApiKey={!!apiConfig.providers.some(p => p.apiKey)} 
         onOpenSettings={() => setIsSettingsOpen(true)} 
         t={t} 
       />
@@ -1853,6 +2003,7 @@ export default function App() {
           onClose={() => setSelectedShotConfig(null)}
           onRegenerateStoryboard={() => activeTask && regenerateSingleShot(activeTask.id, currentShotInTask.id)}
           onGenerateVideo={() => activeTask && regenerateSingleVideo(activeTask.id, currentShotInTask.id)}
+          onReoptimizePrompt={() => activeTask && regenerateSinglePrompt(activeTask.id, currentShotInTask.id)}
           onSave={(updates) => activeTask && updateTask(activeTask.id, { bigShots: activeTask.bigShots.map(s => s.id === currentShotInTask.id ? { ...s, ...updates } : s) })}
           isManualMode={activeTask?.mode === 'manual'}
           initialIsEditing={selectedShotConfig?.initialEdit}

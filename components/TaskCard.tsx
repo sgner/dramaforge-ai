@@ -1,15 +1,16 @@
 import React, { useState } from 'react';
 import { DramaTask, TaskStatus } from '../types';
-import { Play, Loader2, Film, Trash2 } from 'lucide-react';
+import { Play, Loader2, Film, Trash2, Download } from 'lucide-react';
 
 interface Props {
   task: DramaTask;
   onClick: () => void;
   onDelete: () => void;
+  onExport: () => void;
   t: (key: string) => string;
 }
 
-export const TaskCard: React.FC<Props> = ({ task, onClick, onDelete, t }) => {
+export const TaskCard: React.FC<Props> = ({ task, onClick, onDelete, onExport, t }) => {
   const [isHovering, setIsHovering] = useState(false);
 
   // Determine cover image (generated or default)
@@ -58,6 +59,18 @@ export const TaskCard: React.FC<Props> = ({ task, onClick, onDelete, t }) => {
             title={t('deleteProject')}
         >
             <Trash2 className="w-4 h-4" />
+        </button>
+
+        {/* Export Button (Visible on Hover) */}
+        <button 
+            onClick={(e) => {
+                e.stopPropagation();
+                onExport();
+            }}
+            className="absolute bottom-2 right-14 p-2 bg-black/60 hover:bg-brand-900/80 hover:text-brand-400 text-gray-400 backdrop-blur-md rounded-full border border-white/10 z-20 opacity-0 group-hover:opacity-100 transition-opacity"
+            title={t('exportProject') || 'Export Project'}
+        >
+            <Download className="w-4 h-4" />
         </button>
 
         {/* Play Icon Overlay (if completed) */}

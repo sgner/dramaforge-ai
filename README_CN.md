@@ -6,10 +6,6 @@
 
 集成 Gemini、Nanobanana 和 Sora 2，实现从脚本到视频的自动化生成
 
-[![React](https://img.shields.io/badge/React-19.2.3-blue.svg)](https://react.dev/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.8-blue.svg)](https://www.typescriptlang.org/)
-[![Vite](https://img.shields.io/badge/Vite-6.2-purple.svg)](https://vitejs.dev/)
-
 </div>
 
 ## 功能特性
@@ -34,7 +30,7 @@
 
 | 主界面 | 任务卡片 | 角色编辑 |
 |:---:|:---:|:---:|
-| ![主界面](./screenshots/main-interface.png) | ![任务卡片](./screenshots/task-card.png) | ![角色编辑](./screenshots/character-edit.png) |
+| ![主界面](https://github.com/sgner/images/blob/main/%E5%B1%8F%E5%B9%95%E6%88%AA%E5%9B%BE%202026-01-27%20192758.png) | ![任务卡片](https://github.com/sgner/images/blob/main/%E5%B1%8F%E5%B9%95%E6%88%AA%E5%9B%BE%202026-01-27%20192750.png) | ![角色编辑](https://github.com/sgner/images/blob/main/%E5%B1%8F%E5%B9%95%E6%88%AA%E5%9B%BE%202026-01-27%20194111.png) |
 
 </div>
 
@@ -42,19 +38,19 @@
 
 <div align="center">
 
-| 角色设计 | 分镜制作 | 视频生成 |
-|:---:|:---:|:---:|
-| ![角色设计](./screenshots/character-design.png) | ![分镜制作](./screenshots/storyboard.png) | ![视频生成](./screenshots/video-generation.png) |
+
+![项目详情](https://github.com/sgner/images/blob/main/%E5%B1%8F%E5%B9%95%E6%88%AA%E5%9B%BE%202026-01-27%20194515.png) 
+![角色登场](https://github.com/sgner/images/blob/main/%E5%B1%8F%E5%B9%95%E6%88%AA%E5%9B%BE%202026-01-27%20201515.png)
 
 </div>
 
-### 流程演示
+### 流程
 
 <div align="center">
 
 | 脚本生成 | 提示词优化 | 最终效果 |
 |:---:|:---:|:---:|
-| ![脚本生成](./screenshots/script-generation.png) | ![提示词优化](./screenshots/prompt-optimization.png) | ![最终效果](./screenshots/final-result.png) |
+| ![脚本生成](https://github.com/sgner/images/blob/main/%E5%B1%8F%E5%B9%95%E6%88%AA%E5%9B%BE%202026-01-27%20200719.png) | ![提示词优化](https://github.com/sgner/images/blob/main/%E5%B1%8F%E5%B9%95%E6%88%AA%E5%9B%BE%202026-01-27%20201046.png) | ![最终效果](https://github.com/sgner/images/blob/main/%E5%B1%8F%E5%B9%95%E6%88%AA%E5%9B%BE%202026-01-27%20201453.png) |
 
 </div>
 
@@ -220,15 +216,45 @@ npm run build
 - 实时进度跟踪
 - 失败重试机制
 
+## 未来扩展
+
+### 计划中的功能
+
+- **兼容 Google 官方 API**
+  - 支持直接使用 Google Gemini 官方 API
+  - 提供更稳定的脚本生成和优化服务
+  - 支持最新的 Gemini 模型更新
+
+- **兼容 OpenAI 官方 API**
+  - 集成 OpenAI GPT 系列模型用于脚本生成
+  - 支持 DALL-E 3 用于图像生成
+  - 支持 OpenAI 视频生成服务
+
+- **本地 ComfyUI 集成**
+  - 支持调用本地部署的 ComfyUI 接口
+  - 实现完全本地化的图像和视频生成
+  - 支持自定义 ComfyUI 工作流
+  - 降低 API 调用成本，提高生成速度
+  - 支持离线模式，保护数据隐私
+
+- **更多 AI 服务支持**
+  - Anthropic Claude API
+  - Midjourney API
+  - Stable Diffusion XL
+  - 其他主流 AI 视频生成服务
+
+- **增强功能**
+  - 批量任务处理
+  - 模板系统
+  - 团队协作功能
+  - 云端存储集成
+  - 移动端适配
+
 ## 浏览器支持
 
 - Chrome/Edge（推荐）
 - Firefox
 - Safari
-
-## 许可证
-
-本项目为私有和专有项目。
 
 ## 贡献
 

@@ -23,13 +23,167 @@ export enum ArtStyle {
 export type Language = 'en' | 'zh' | 'ja' | 'ko';
 export type TaskMode = 'auto' | 'manual';
 
+export type ProviderType = 'official' | 'custom' | 'relay';
+export type ProviderCategory = 'llm' | 'image' | 'video';
+export type ApiFormat = 'gemini' | 'openai' | 'openai-image' | 'openai-video' | 'custom';
+
+export interface Provider {
+  id: string;
+  name: string;
+  type: ProviderType;
+  category: ProviderCategory;
+  apiKey: string;
+  baseUrl: string;
+  enabled: boolean;
+}
+
+export interface ModelConfig {
+  id: string;
+  providerId: string;
+  modelName: string;
+  displayName: string;
+  apiPath: string;
+  apiFormat: ApiFormat;
+  customHeaders: string;
+  customBodyTemplate: string;
+  customResponsePath: string;
+  pollApiPath: string;
+  enabled: boolean;
+}
+
+export type StepType = 
+  | 'preprocessing'
+  | 'scriptGeneration'
+  | 'characterDesign'
+  | 'storyboarding'
+  | 'promptOptimization'
+  | 'videoGeneration';
+
+export interface StepModelBinding {
+  step: StepType;
+  modelId: string;
+}
+
 export interface ApiConfig {
-  geminiKey: string;
-  geminiBaseUrl?: string;
-  nanobananaKey: string;
-  nanobananaBaseUrl?: string;
-  soraKey: string;
-  soraBaseUrl?: string;
+  providers: Provider[];
+  models: ModelConfig[];
+  stepBindings: StepModelBinding[];
+}
+
+export const DEFAULT_PROVIDERS: Provider[] = [
+  {
+    id: 'google-gemini',
+    name: 'Google Gemini',
+    type: 'official',
+    category: 'llm',
+    apiKey: '',
+    baseUrl: 'https://generativelanguage.googleapis.com',
+    enabled: true
+  },
+  {
+    id: 'nanobanana',
+    name: 'Nanobanana',
+    type: 'official',
+    category: 'image',
+    apiKey: '',
+    baseUrl: 'https://api.nanobanana.com',
+    enabled: true
+  },
+  {
+    id: 'sora',
+    name: 'Sora',
+    type: 'official',
+    category: 'video',
+    apiKey: '',
+    baseUrl: 'https://api.sora.com',
+    enabled: true
+  }
+];
+
+export const DEFAULT_MODELS: ModelConfig[] = [
+  {
+    id: 'gemini-3-pro',
+    providerId: 'google-gemini',
+    modelName: 'gemini-3-pro-preview',
+    displayName: 'Gemini 3 Pro',
+    apiPath: '/v1beta/models/{model}:generateContent',
+    apiFormat: 'gemini',
+    customHeaders: '',
+    customBodyTemplate: '',
+    customResponsePath: '',
+    pollApiPath: '',
+    enabled: true
+  },
+  {
+    id: 'nano-banana',
+    providerId: 'nanobanana',
+    modelName: 'nano-banana',
+    displayName: 'Nano Banana',
+    apiPath: '/v1/images/generations',
+    apiFormat: 'openai-image',
+    customHeaders: '',
+    customBodyTemplate: '',
+    customResponsePath: '',
+    pollApiPath: '',
+    enabled: true
+  },
+  {
+    id: 'sora-2',
+    providerId: 'sora',
+    modelName: 'sora-2',
+    displayName: 'Sora 2',
+    apiPath: '/v2/videos/generations',
+    apiFormat: 'openai-video',
+    customHeaders: '',
+    customBodyTemplate: '',
+    customResponsePath: '',
+    pollApiPath: '',
+    enabled: true
+  }
+];
+
+export const DEFAULT_STEP_BINDINGS: StepModelBinding[] = [
+  { step: 'preprocessing', modelId: 'gemini-3-pro' },
+  { step: 'scriptGeneration', modelId: 'gemini-3-pro' },
+  { step: 'characterDesign', modelId: 'nano-banana' },
+  { step: 'storyboarding', modelId: 'nano-banana' },
+  { step: 'promptOptimization', modelId: 'gemini-3-pro' },
+  { step: 'videoGeneration', modelId: 'sora-2' }
+];
+
+export const STEP_LABELS: Record<StepType, string> = {
+  preprocessing: 'Preprocessing',
+  scriptGeneration: 'Script Generation',
+  characterDesign: 'Character Design',
+  storyboarding: 'Storyboarding',
+  promptOptimization: 'Prompt Optimization',
+  videoGeneration: 'Video Generation'
+};
+
+export function createDefaultApiConfig(): ApiConfig {
+  return {
+    providers: DEFAULT_PROVIDERS.map(p => ({ ...p })),
+    models: DEFAULT_MODELS.map(m => ({ ...m })),
+    stepBindings: DEFAULT_STEP_BINDINGS.map(b => ({ ...b }))
+  };
+}
+
+export function getProviderForModel(config: ApiConfig, modelId: string): Provider | undefined {
+  const model = config.models.find(m => m.id === modelId);
+  if (!model) return undefined;
+  return config.providers.find(p => p.id === model.providerId);
+}
+
+export function getModelForStep(config: ApiConfig, step: StepType): ModelConfig | undefined {
+  const binding = config.stepBindings.find(b => b.step === step);
+  if (!binding) return undefined;
+  return config.models.find(m => m.id === binding.modelId);
+}
+
+export function getProviderForStep(config: ApiConfig, step: StepType): Provider | undefined {
+  const model = getModelForStep(config, step);
+  if (!model) return undefined;
+  return getProviderForModel(config, model.id);
 }
 
 export interface Character {
