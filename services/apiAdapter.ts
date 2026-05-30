@@ -370,3 +370,212 @@ export const buildPollUrl = (provider: Provider, model: ModelConfig, taskId: str
 
   return buildUrl(provider, model) + `/${taskId}`;
 };
+
+export const buildLlmStreamRequest = (provider: Provider, model: ModelConfig, params: LlmRequestParams) => {
+  const format = model.apiFormat || 'openai';
+  let url = buildUrl(provider, model);
+  const headers = buildHeaders(provider, model, {
+    prompt: params.prompt,
+    systemInstruction: params.systemInstruction || ''
+  });
+
+  if (format === 'gemini') {
+    const keyParam = buildApiKeyQueryParam(provider, model);
+    const separator = url.includes('?') ? '&' : '?';
+    url = `${url}${separator}alt=sse`;
+    if (keyParam) {
+      url = `${url}&${keyParam}`;
+    }
+  } else {
+    const keyParam = buildApiKeyQueryParam(provider, model);
+    if (keyParam) {
+      const separator = url.includes('?') ? '&' : '?';
+      url = `${url}${separator}${keyParam}`;
+    }
+  }
+
+  const streamParams = { ...params };
+  const body = buildLlmRequestBody(model, streamParams, provider);
+
+  if (format === 'openai') {
+    body.stream = true;
+  } else if (format === 'gemini') {
+    // Gemini streaming is triggered by alt=sse in URL, no body change needed
+  } else if (format === 'custom') {
+    // For custom format, try adding stream flag if template supports it
+    if (typeof body === 'object' && body !== null) {
+      body.stream = true;
+    }
+  }
+
+  return { url, headers, body };
+};
+
+export const parseStreamChunk = (model: ModelConfig, chunk: string): string => {
+  const format = model.apiFormat || 'openai';
+
+  if (format === 'custom' && model.customResponsePath) {
+    try {
+      const parsed = JSON.parse(chunk);
+      const result = resolveJsonPath(parsed, model.customResponsePath);
+      if (typeof result === 'string') return result;
+      if (result) return JSON.stringify(result);
+    } catch {
+      // not valid JSON, skip
+    }
+    return '';
+  }
+
+  if (format === 'openai') {
+    try {
+      const parsed = JSON.parse(chunk);
+      return parsed?.choices?.[0]?.delta?.content || '';
+    } catch {
+      return '';
+    }
+  }
+
+  if (format === 'gemini') {
+    try {
+      const parsed = JSON.parse(chunk);
+      return parsed?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    } catch {
+      return '';
+    }
+  }
+
+  return '';
+};
+
+export const consumeStream = async function* (
+  response: Response,
+  model: ModelConfig
+): AsyncGenerator<string> {
+  const reader = response.body?.getReader();
+  if (!reader) return;
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith(':')) continue;
+        if (trimmed === 'data: [DONE]') continue;
+
+        if (trimmed.startsWith('data: ')) {
+          const jsonStr = trimmed.slice(6);
+          const text = parseStreamChunk(model, jsonStr);
+          if (text) yield text;
+        }
+      }
+    }
+
+    if (buffer.trim()) {
+      const trimmed = buffer.trim();
+      if (trimmed.startsWith('data: ') && trimmed !== 'data: [DONE]') {
+        const jsonStr = trimmed.slice(6);
+        const text = parseStreamChunk(model, jsonStr);
+        if (text) yield text;
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+};
+
+export interface IncrementalScriptResult {
+  analysis?: { corePlot: string; mood: string };
+  characters?: any[];
+  script?: any[];
+  bigShots?: any[];
+  _rawLength: number;
+}
+
+export const parseIncrementalJson = (rawText: string): IncrementalScriptResult | null => {
+  let text = rawText.replace(/^```json\s*/, '').replace(/\s*```$/, '').trim();
+  if (!text) return null;
+
+  const jsonStart = text.indexOf('{');
+  if (jsonStart < 0) return null;
+  if (jsonStart > 0) text = text.substring(jsonStart);
+
+  try {
+    const parsed = JSON.parse(text);
+    return { ...parsed, _rawLength: rawText.length };
+  } catch {}
+
+  const stack: string[] = [];
+  let inString = false;
+  let escapeNext = false;
+
+  interface SafePoint {
+    pos: number;
+    stackSnapshot: string[];
+  }
+  const safePoints: SafePoint[] = [];
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+
+    if (escapeNext) {
+      escapeNext = false;
+      continue;
+    }
+
+    if (inString) {
+      if (ch === '\\') {
+        escapeNext = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+    } else if (ch === '{' || ch === '[') {
+      stack.push(ch);
+    } else if (ch === '}') {
+      if (stack.length > 0 && stack[stack.length - 1] === '{') {
+        stack.pop();
+        if (stack.length <= 2) {
+          safePoints.push({ pos: i, stackSnapshot: [...stack] });
+        }
+      }
+    } else if (ch === ']') {
+      if (stack.length > 0 && stack[stack.length - 1] === '[') {
+        stack.pop();
+        if (stack.length <= 2) {
+          safePoints.push({ pos: i, stackSnapshot: [...stack] });
+        }
+      }
+    }
+  }
+
+  for (let i = safePoints.length - 1; i >= 0; i--) {
+    const point = safePoints[i];
+    let repaired = text.substring(0, point.pos + 1);
+
+    repaired = repaired.replace(/,\s*$/, '');
+
+    for (let j = point.stackSnapshot.length - 1; j >= 0; j--) {
+      repaired += point.stackSnapshot[j] === '{' ? '}' : ']';
+    }
+
+    try {
+      const parsed = JSON.parse(repaired);
+      return { ...parsed, _rawLength: rawText.length };
+    } catch {}
+  }
+
+  return null;
+};

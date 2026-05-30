@@ -11,6 +11,7 @@ import { ConfirmModal } from './components/ConfirmModal';
 import { ApiKeyModal } from './components/ApiKeyModal';
 import { DramaTask, TaskStatus, ArtStyle, ScriptScene, BigShot, Character, Language, TaskMode, ApiConfig, ProcessedSegment, createDefaultApiConfig, getProviderForStep, getModelForStep, StepType, Provider, ModelConfig } from './types';
 import { generateScriptFromNovel, optimizeSoraPrompt, expandIdeaToStory, continueStory, preprocessNovel } from './services/geminiService';
+import { IncrementalScriptResult } from './services/apiAdapter';
 import { generateCharacterDesign, generateStoryboardImage, generateSoraVideo } from './services/mediaService';
 import { translations } from './locales';
 import { BELL_SOUND_BASE64, ERROR_SOUND_BASE64 } from './constants';
@@ -611,9 +612,11 @@ export default function App() {
     try {
         const llmProvider = getProviderForStep(apiConfig, 'preprocessing')!;
         const llmModel = getModelForStep(apiConfig, 'preprocessing')!;
-        const newText = await continueStory(llmProvider, llmModel, activeTask.rawNovelText);
-        const updatedText = activeTask.rawNovelText + "\n\n" + newText;
-        updateTask(activeTask.id, { rawNovelText: updatedText });
+        let newText = '';
+        for await (const chunk of continueStory(llmProvider, llmModel, activeTask.rawNovelText)) {
+            newText += chunk;
+            updateTask(activeTask.id, { rawNovelText: activeTask.rawNovelText + "\n\n" + newText });
+        }
     } catch (e) {
         console.error(e);
         alert("Failed to expand story");
@@ -875,13 +878,17 @@ export default function App() {
     try {
         const llmProvider = getProviderForStep(apiConfig, 'promptOptimization')!;
         const llmModel = getModelForStep(apiConfig, 'promptOptimization')!;
-        const optimized = await optimizeSoraPrompt(
+        let optimized = '';
+        for await (const chunk of optimizeSoraPrompt(
             llmProvider, 
             llmModel,
             shot.soraPrompt || "Scene", 
             task.style, 
             task.language
-        );
+        )) {
+            optimized += chunk;
+            updateBigShotStatus(taskId, shotId, "Optimizing: " + optimized.slice(-50) + "...");
+        }
         updateTask(taskId, { 
             bigShots: task.bigShots.map(s => s.id === shotId ? { 
                 ...s, 
@@ -915,7 +922,11 @@ export default function App() {
                 if (task.sourceType === 'idea' && task.originalIdea) {
                     const llmProvider = getProviderForStep(apiConfig, 'preprocessing')!;
                     const llmModel = getModelForStep(apiConfig, 'preprocessing')!;
-                    processedText = await expandIdeaToStory(llmProvider, llmModel, task.originalIdea, task.language, signal);
+                    processedText = '';
+                    for await (const chunk of expandIdeaToStory(llmProvider, llmModel, task.originalIdea, task.language, signal)) {
+                        processedText += chunk;
+                        updateTask(taskId, { rawNovelText: processedText });
+                    }
                 } 
                 
                 const TEXT_SEGMENT_THRESHOLD = 20000;
@@ -974,12 +985,25 @@ export default function App() {
             case TaskStatus.SCRIPT_GENERATION: {
                 const llmProvider = getProviderForStep(apiConfig, 'scriptGeneration')!;
                 const llmModel = getModelForStep(apiConfig, 'scriptGeneration')!;
-                const geminiOutput = await generateScriptFromNovel(llmProvider, llmModel, task.rawNovelText, task.style, task.language, signal);
-                const initializedBigShots: BigShot[] = geminiOutput.bigShots.map((shot: any, idx: number) => ({
-                    ...shot,
-                    id: `shot_${Date.now()}_${idx}_${Math.random().toString(36).slice(2)}`,
-                }));
-                updateTask(taskId, { scriptAnalysis: geminiOutput.analysis, characters: geminiOutput.characters, script: geminiOutput.script, bigShots: initializedBigShots, progress: 40, stepStatus: 'completed' });
+                const shotIdMap = new Map<string, string>();
+                for await (const partial of generateScriptFromNovel(llmProvider, llmModel, task.rawNovelText, task.style, task.language, signal)) {
+                    const initializedBigShots: BigShot[] = (partial.bigShots || []).map((shot: any, idx: number) => {
+                        const key = `${shot.id || 'unknown'}_${idx}`;
+                        if (!shotIdMap.has(key)) {
+                            shotIdMap.set(key, `shot_${Date.now()}_${idx}_${Math.random().toString(36).slice(2)}`);
+                        }
+                        return { ...shot, id: shotIdMap.get(key)! };
+                    });
+                    updateTask(taskId, {
+                        scriptAnalysis: partial.analysis,
+                        characters: partial.characters || [],
+                        script: partial.script || [],
+                        bigShots: initializedBigShots,
+                        progress: 40,
+                        stepStatus: 'processing'
+                    });
+                }
+                updateTask(taskId, { progress: 40, stepStatus: 'completed' });
                 break;
             }
             case TaskStatus.CHARACTER_DESIGN: {
@@ -1144,7 +1168,10 @@ export default function App() {
                     await Promise.all(batchIndices.map(async (shotIndex) => {
                          try {
                              const shot = currentBigShots[shotIndex];
-                             const optimized = await optimizeSoraPrompt(llmProvider, llmModel, shot.soraPrompt || "Scene", task.style, task.language, signal);
+                             let optimized = '';
+                             for await (const chunk of optimizeSoraPrompt(llmProvider, llmModel, shot.soraPrompt || "Scene", task.style, task.language, signal)) {
+                                 optimized += chunk;
+                             }
                              
                              setTasks(prev => {
                                  const t = prev.find(p => p.id === taskId);
@@ -1262,7 +1289,7 @@ export default function App() {
         }
 
     } catch (e: any) {
-        if (axios.isCancel(e)) return;
+        if (axios.isCancel(e) || e.name === 'AbortError') return;
         updateTask(taskId, { status: TaskStatus.FAILED, failedStep: stepToRun, error: e.message || "Unknown error", stepStatus: 'idle' });
         playErrorSound();
     }
