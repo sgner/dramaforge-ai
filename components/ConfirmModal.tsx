@@ -11,11 +11,11 @@ interface Props {
   cancelText?: string;
 }
 
-export const ConfirmModal: React.FC<Props> = ({ 
-  isOpen, 
-  onClose, 
-  onConfirm, 
-  title, 
+export const ConfirmModal: React.FC<Props> = ({
+  isOpen,
+  onClose,
+  onConfirm,
+  title,
   message,
   confirmText = "Delete",
   cancelText = "Cancel"
@@ -23,27 +23,34 @@ export const ConfirmModal: React.FC<Props> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-      <div className="bg-brand-900 border border-brand-700 rounded-xl shadow-2xl w-full max-w-md p-6 animate-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200"
+      style={{ background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(8px)' }}
+    >
+      <div
+        className="rounded-2xl shadow-2xl w-full max-w-md p-6 animate-scale-in"
+        style={{ background: '#ffffff', border: '1px solid #e8edf3' }}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center gap-4 mb-4">
-          <div className="bg-red-500/10 p-3 rounded-full border border-red-500/20">
-            <AlertTriangle className="w-6 h-6 text-red-500" />
+          <div className="p-3 rounded-xl" style={{ background: 'rgba(220,38,38,0.08)', border: '1px solid rgba(220,38,38,0.2)' }}>
+            <AlertTriangle className="w-5 h-5 text-red-600" />
           </div>
-          <h3 className="text-xl font-bold text-white">{title}</h3>
+          <h3 className="text-lg font-semibold text-[#111827] tracking-tight">{title}</h3>
         </div>
-        <p className="text-gray-300 mb-6 leading-relaxed">
+        <p className="text-[#64748b] mb-6 leading-relaxed text-sm">
           {message}
         </p>
         <div className="flex justify-end gap-3">
-          <button 
-            onClick={onClose} 
-            className="px-4 py-2 text-gray-400 hover:text-white transition-colors text-sm font-medium"
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-[#64748b] hover:text-[#111827] transition-colors text-sm font-medium"
           >
             {cancelText}
           </button>
-          <button 
-            onClick={() => { onConfirm(); onClose(); }} 
-            className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg font-medium shadow-lg shadow-red-900/30 transition-all text-sm"
+          <button
+            onClick={() => { onConfirm(); onClose(); }}
+            className="btn-press px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg font-medium shadow-lg shadow-red-900/20 hover:-translate-y-0.5 transition-all text-sm"
           >
             {confirmText}
           </button>

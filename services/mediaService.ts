@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { Character, Provider, ModelConfig } from '../types';
+import { Character, Provider, ModelConfig, CHARACTER_CONCEPT_SHEET_LAYOUT, SceneAsset } from '../types';
 import {
   buildUrl, buildHeaders, buildApiKeyQueryParam,
   buildImageRequestBody, buildVideoRequestBody,
@@ -85,11 +85,19 @@ export const generateCharacterDesign = async (
 
   const langContext = LANG_MAP[language] || language;
 
-  const prompt = `Character Design Sheet (Three Views: Front, Side, Back) for ${character.name}. 
+  let prompt: string;
+  if (character.faceAnchor && character.hairSystem && character.clothingLayers) {
+    const fa = character.faceAnchor;
+    const hs = character.hairSystem;
+    const cl = character.clothingLayers;
+    prompt = `${character.era || ''} ${character.identity || ''} ${character.gender || ''} ${character.ageRange || ''} ${style}。面容：${fa.faceShape}，${fa.eyebrow}，${fa.eyeType}，${fa.noseType}，${fa.lipType}，${fa.boneStructure}，${fa.skinTone}肤${fa.landmarks ? '，' + fa.landmarks : ''}。发式：${hs.lengthAndStyle}，${hs.color}发${hs.headwear ? '，' + hs.headwear : ''}，${hs.bangsDirection}。服装：内层${cl.inner}，外层${cl.outer}，套层${cl.overlay}，腰部${cl.waist}，下身${cl.lower}，足部${cl.feet}。${character.specialState ? '特殊状态：' + character.specialState + '。' : ''}姿态：双手自然下垂，站姿自然，面容平静。${CHARACTER_CONCEPT_SHEET_LAYOUT} 8K超精细，材质纹理清晰可触，纯白底背景`;
+  } else {
+    prompt = `Character Design Sheet (Three Views: Front, Side, Back) for ${character.name}. 
   Visual features: ${character.visualFeatures}. 
   Clothing: ${character.clothing}. 
   Style: ${style}. 
   High quality, detailed character reference sheet, white background.`;
+  }
 
   try {
     if (character.referenceImage) {
@@ -147,16 +155,22 @@ export const generateStoryboardImage = async (
   characterImages: string[],
   provider: Provider,
   model: ModelConfig,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  sceneAsset?: SceneAsset
 ): Promise<string> => {
   if (!provider.apiKey) throw new Error("Image provider API Key is missing");
   console.log(characterImages)
   const langContext = LANG_MAP[language] || language;
 
+  let sceneContext = '';
+  if (sceneAsset) {
+    sceneContext = `\n[Scene Asset — 7-Layer Structure]\n世界观定位：${sceneAsset.worldPositioning}\n地理位置：${sceneAsset.geography}\n主体建筑：${sceneAsset.mainStructure}\n延伸空间：${sceneAsset.extendedSpace}\n自然远景：${sceneAsset.naturalAndDistant}\n光影色彩：${sceneAsset.lightAndColor}\n技术规格：${sceneAsset.techSpec}\n氛围人物：${sceneAsset.ambientCharacters}\n${sceneAsset.qualitySuffix}`;
+  }
+
   const fullPrompt = `
   *** Six-Panel Storyboard Sheet, 2 rows x 3 columns layout, 2x3 grid ***
   Visual Style: ${style}. ${langContext}.
-  
+  ${sceneContext}
   [Panel Content]
   ${description}
   `;
@@ -305,6 +319,38 @@ const pollSoraTask = async (
   }
 
   throw new Error("Video generation timed out after 1 hour. Please check your dashboard.");
+};
+
+export const generatePropImage = async (
+  propPrompt: string,
+  provider: Provider,
+  model: ModelConfig,
+  signal?: AbortSignal
+): Promise<string> => {
+  if (!provider.apiKey) throw new Error("Image provider API Key is missing");
+
+  const prompt = `Still life product photography, ${propPrompt}`;
+
+  try {
+    const url = buildFullUrl(provider, model);
+    const headers = buildHeaders(provider, model);
+    const requestBody = buildImageRequestBody(model, prompt, {
+      size: '1024x1024',
+      n: 1,
+      responseFormat: 'url'
+    }, provider);
+
+    const { data } = await axios.post(url, requestBody, { headers, signal });
+
+    const imageUrl = findUrlInResponse(data);
+    if (!imageUrl) throw new Error("No image URL found in response");
+    return imageUrl;
+  } catch (err: any) {
+    if (axios.isCancel(err)) throw err;
+    console.error("Image API Error (Prop):", err.response?.data || err.message);
+    const msg = err.response?.data?.error?.message || err.message;
+    throw new Error(`Prop generation failed: ${msg}`);
+  }
 };
 
 export const generateSoraVideo = async (

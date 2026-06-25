@@ -10,7 +10,7 @@ export interface LlmRequestParams {
 }
 
 const resolveApiPath = (model: ModelConfig): string => {
-  const apiPath = model.apiPath || '';
+  const apiPath = (model.apiPath || '').trim().replace(/`/g, '');
   return apiPath.replace('{model}', model.modelName);
 };
 
@@ -70,21 +70,20 @@ const resolveJsonPath = (data: any, path: string): any => {
 };
 
 export const buildUrl = (provider: Provider, model: ModelConfig): string => {
-  const cleanBaseUrl = provider.baseUrl ? provider.baseUrl.trim().replace(/\/+$/, '') : '';
-  const isCustomBase = cleanBaseUrl.length > 0 && provider.type !== 'official';
+  const cleanBaseUrl = provider.baseUrl ? provider.baseUrl.trim().replace(/`/g, '').replace(/\/+$/, '') : '';
 
   let defaultHost = '';
   if (model.apiFormat === 'gemini') {
     defaultHost = 'https://generativelanguage.googleapis.com';
   } else if (model.apiFormat === 'openai-image') {
-    defaultHost = 'https://api.nanobanana.com';
+    defaultHost = 'https://api.nanobanana.com/v1';
   } else if (model.apiFormat === 'openai-video') {
-    defaultHost = 'https://api.sora.com';
+    defaultHost = 'https://api.sora.com/v1';
   } else {
-    defaultHost = 'https://api.openai.com';
+    defaultHost = 'https://api.openai.com/v1';
   }
 
-  const host = isCustomBase ? cleanBaseUrl : defaultHost;
+  const host = cleanBaseUrl.length > 0 ? cleanBaseUrl : defaultHost;
   const apiPath = resolveApiPath(model);
   return `${host}${apiPath}`;
 };
@@ -104,12 +103,8 @@ export const buildHeaders = (provider: Provider, model: ModelConfig, extraCtx?: 
     'Content-Type': 'application/json'
   };
 
-  const cleanKey = provider.apiKey ? provider.apiKey.trim() : '';
-  const hasNonAscii = /[^\x00-\x7F]/.test(cleanKey);
-
-  if (model.apiFormat === 'gemini' && !hasNonAscii && provider.type !== 'official') {
-    headers['Authorization'] = `Bearer ${cleanKey}`;
-  } else if (model.apiFormat !== 'gemini') {
+  const cleanKey = provider.apiKey ? provider.apiKey.trim().replace(/`/g, '') : '';
+  if (cleanKey) {
     headers['Authorization'] = `Bearer ${cleanKey}`;
   }
 
@@ -117,11 +112,12 @@ export const buildHeaders = (provider: Provider, model: ModelConfig, extraCtx?: 
 };
 
 export const buildApiKeyQueryParam = (provider: Provider, model: ModelConfig): string => {
-  const cleanKey = provider.apiKey ? provider.apiKey.trim() : '';
-  const hasNonAscii = /[^\x00-\x7F]/.test(cleanKey);
+  const cleanKey = provider.apiKey ? provider.apiKey.trim().replace(/`/g, '') : '';
 
   if (model.apiFormat === 'gemini') {
-    if (provider.type === 'official' || hasNonAscii) {
+    const apiPath = (model.apiPath || '').toLowerCase();
+    const isOfficialGeminiPath = apiPath.includes(':generatecontent') || apiPath.includes(':streamgeneratecontent');
+    if (isOfficialGeminiPath && cleanKey) {
       return `key=${encodeURIComponent(cleanKey)}`;
     }
   }
@@ -131,6 +127,7 @@ export const buildApiKeyQueryParam = (provider: Provider, model: ModelConfig): s
 
 export const buildLlmRequestBody = (model: ModelConfig, params: LlmRequestParams, provider?: Provider): any => {
   const format = model.apiFormat || 'openai';
+  console.log('[buildLlmRequestBody] format:', format, 'prompt length:', params.prompt?.length, 'systemInstruction length:', params.systemInstruction?.length);
 
   if (format === 'custom' && model.customBodyTemplate) {
     try {
@@ -155,6 +152,14 @@ export const buildLlmRequestBody = (model: ModelConfig, params: LlmRequestParams
     if (params.systemInstruction) {
       messages.push({ role: 'system', content: params.systemInstruction });
     }
+    if (params.responseMimeType === 'application/json') {
+      const lastMsg = messages[messages.length - 1];
+      if (lastMsg) {
+        lastMsg.content += '\n\nYou MUST respond with valid JSON only. Do not include any text outside the JSON structure.';
+      } else {
+        messages.push({ role: 'system', content: 'You MUST respond with valid JSON only. Do not include any text outside the JSON structure.' });
+      }
+    }
     messages.push({ role: 'user', content: params.prompt });
 
     const body: any = {
@@ -167,8 +172,29 @@ export const buildLlmRequestBody = (model: ModelConfig, params: LlmRequestParams
       body.max_tokens = params.maxOutputTokens;
     }
 
-    if (params.responseMimeType === 'application/json') {
+    const isOfficialOpenAI = provider?.baseUrl?.includes('api.openai.com');
+    if (params.responseMimeType === 'application/json' && isOfficialOpenAI) {
       body.response_format = { type: 'json_object' };
+    }
+
+    const modelNameLower = (model.modelName || '').toLowerCase();
+    const isGeminiModel = modelNameLower.includes('gemini');
+    const isGeminiProxy = isGeminiModel && !(model.apiPath || '').includes(':generateContent');
+    if (isGeminiProxy) {
+      body.contents = [{
+        role: 'user',
+        parts: [{ text: params.prompt }]
+      }];
+      body.generationConfig = { temperature: params.temperature ?? 0.7 };
+      if (params.systemInstruction) {
+        body.systemInstruction = { parts: [{ text: params.systemInstruction }] };
+      }
+      if (params.maxOutputTokens) {
+        body.generationConfig.maxOutputTokens = params.maxOutputTokens;
+      }
+      if (params.responseMimeType) {
+        body.generationConfig.responseMimeType = params.responseMimeType;
+      }
     }
 
     return body;
@@ -207,6 +233,7 @@ export const buildLlmRequestBody = (model: ModelConfig, params: LlmRequestParams
 
 export const extractLlmText = (model: ModelConfig, data: any): string => {
   const format = model.apiFormat || 'openai';
+  const isOfficialGemini = format === 'gemini' && (model.apiPath || '').includes(':generateContent');
 
   if (format === 'custom' && model.customResponsePath) {
     const result = resolveJsonPath(data, model.customResponsePath);
@@ -215,8 +242,10 @@ export const extractLlmText = (model: ModelConfig, data: any): string => {
     return '';
   }
 
-  if (format === 'openai') {
-    return data?.choices?.[0]?.message?.content || '';
+  if (format === 'openai' || (format === 'gemini' && !isOfficialGemini)) {
+    if (data?.choices?.[0]?.message?.content) return data.choices[0].message.content;
+    if (data?.candidates?.[0]?.content?.parts?.[0]?.text) return data.candidates[0].content.parts[0].text;
+    return '';
   }
 
   if (format === 'gemini') {
@@ -355,7 +384,7 @@ export const buildPollUrl = (provider: Provider, model: ModelConfig, taskId: str
   }
 
   if (format === 'openai-video') {
-    let pollPath = model.apiPath || '/v2/videos/generations';
+    let pollPath = model.apiPath || '/video/generations';
     const lastSegment = pollPath.split('/').pop();
     if (lastSegment && lastSegment.includes('{')) {
       pollPath = pollPath.replace(/\{[^}]*\}/g, taskId);
@@ -363,8 +392,8 @@ export const buildPollUrl = (provider: Provider, model: ModelConfig, taskId: str
       pollPath = `${pollPath}/${taskId}`;
     }
     const cleanBaseUrl = provider.baseUrl ? provider.baseUrl.trim().replace(/\/+$/, '') : '';
-    const isCustomBase = cleanBaseUrl.length > 0 && provider.type !== 'official';
-    const host = isCustomBase ? cleanBaseUrl : 'https://api.sora.com';
+    const isCustomBase = cleanBaseUrl.length > 0 && !cleanBaseUrl.includes('api.openai.com');
+    const host = isCustomBase ? cleanBaseUrl : 'https://api.sora.com/v1';
     return `${host}${pollPath}`;
   }
 
@@ -379,7 +408,9 @@ export const buildLlmStreamRequest = (provider: Provider, model: ModelConfig, pa
     systemInstruction: params.systemInstruction || ''
   });
 
-  if (format === 'gemini') {
+  const isOfficialGemini = format === 'gemini' && (model.apiPath || '').includes(':generateContent');
+
+  if (isOfficialGemini) {
     const keyParam = buildApiKeyQueryParam(provider, model);
     const separator = url.includes('?') ? '&' : '?';
     url = `${url}${separator}alt=sse`;
@@ -400,12 +431,24 @@ export const buildLlmStreamRequest = (provider: Provider, model: ModelConfig, pa
   if (format === 'openai') {
     body.stream = true;
   } else if (format === 'gemini') {
-    // Gemini streaming is triggered by alt=sse in URL, no body change needed
+    if (!isOfficialGemini) {
+      body.stream = true;
+    }
   } else if (format === 'custom') {
-    // For custom format, try adding stream flag if template supports it
     if (typeof body === 'object' && body !== null) {
       body.stream = true;
     }
+  }
+
+  if (format === 'gemini' && !isOfficialGemini && model.modelName) {
+    body.model = model.modelName;
+
+    const messages: any[] = [];
+    if (params.systemInstruction) {
+      messages.push({ role: 'system', content: params.systemInstruction });
+    }
+    messages.push({ role: 'user', content: params.prompt });
+    body.messages = messages;
   }
 
   return { url, headers, body };
@@ -413,6 +456,7 @@ export const buildLlmStreamRequest = (provider: Provider, model: ModelConfig, pa
 
 export const parseStreamChunk = (model: ModelConfig, chunk: string): string => {
   const format = model.apiFormat || 'openai';
+  const isOfficialGemini = format === 'gemini' && (model.apiPath || '').includes(':generateContent');
 
   if (format === 'custom' && model.customResponsePath) {
     try {
@@ -421,15 +465,20 @@ export const parseStreamChunk = (model: ModelConfig, chunk: string): string => {
       if (typeof result === 'string') return result;
       if (result) return JSON.stringify(result);
     } catch {
-      // not valid JSON, skip
     }
     return '';
   }
 
-  if (format === 'openai') {
+  if (format === 'openai' || (format === 'gemini' && !isOfficialGemini)) {
     try {
       const parsed = JSON.parse(chunk);
-      return parsed?.choices?.[0]?.delta?.content || '';
+      if (parsed?.choices?.[0]?.delta?.content !== undefined) {
+        return parsed.choices[0].delta.content;
+      }
+      if (parsed?.candidates?.[0]?.content?.parts?.[0]?.text) {
+        return parsed.candidates[0].content.parts[0].text;
+      }
+      return '';
     } catch {
       return '';
     }
@@ -494,9 +543,18 @@ export const consumeStream = async function* (
 
 export interface IncrementalScriptResult {
   analysis?: { corePlot: string; mood: string };
+  visualSignature?: any;
+  sequences?: any[];
+  soundDesign?: any;
+  rhythmAnalysis?: any;
   characters?: any[];
+  props?: any[];
+  sceneAssets?: any[];
   script?: any[];
   bigShots?: any[];
+  worldAnchors?: any[];
+  dialogueList?: any[];
+  vfxBudget?: any;
   _rawLength: number;
 }
 

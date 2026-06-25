@@ -8,6 +8,7 @@ class StorageService {
   private readonly STORAGE_KEY_TASKS = 'dramaforge_tasks';
   private readonly STORAGE_KEY_BACKUP = 'dramaforge_tasks_backup';
   private readonly STORAGE_KEY_AUTO_BACKUP = 'dramaforge_tasks_autobackup';
+  private readonly STORAGE_KEY_NODE_POSITIONS = 'dramaforge_node_positions';
   private readonly MAX_RETRIES = 3;
   private readonly STORAGE_QUOTA_WARNING = 0.8;
 
@@ -78,15 +79,9 @@ class StorageService {
         const json = JSON.stringify(data);
         const size = json.length;
         
-        console.log(`[StorageService] Saving tasks (${size} bytes, ${tasks.length} tasks)`);
-        
         localStorage.setItem(this.STORAGE_KEY_TASKS, json);
         
         this.saveBackup(data);
-        
-        const storageSize = this.getStorageSize();
-        const storageMB = (storageSize / 1024 / 1024).toFixed(2);
-        console.log(`[StorageService] Total storage used: ${storageMB} MB`);
         
         return true;
       } catch (e: any) {
@@ -207,7 +202,34 @@ class StorageService {
   clearAll(): void {
     localStorage.removeItem(this.STORAGE_KEY_TASKS);
     this.clearOldBackups();
-    console.log('[StorageService] Cleared all storage');
+  }
+
+  saveNodePositions(taskId: string, positions: Record<string, { x: number; y: number }>): void {
+    try {
+      const allPositions = this.loadAllNodePositions();
+      allPositions[taskId] = positions;
+      localStorage.setItem(this.STORAGE_KEY_NODE_POSITIONS, JSON.stringify(allPositions));
+    } catch (e) {
+      console.error('[StorageService] Failed to save node positions:', e);
+    }
+  }
+
+  loadNodePositions(taskId: string): Record<string, { x: number; y: number }> | null {
+    try {
+      const allPositions = this.loadAllNodePositions();
+      return allPositions[taskId] || null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  private loadAllNodePositions(): Record<string, Record<string, { x: number; y: number }>> {
+    try {
+      const data = localStorage.getItem(this.STORAGE_KEY_NODE_POSITIONS);
+      return data ? JSON.parse(data) : {};
+    } catch {
+      return {};
+    }
   }
 
   getStorageInfo(): { used: number; total: number; tasksCount: number } {
