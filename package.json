@@ -1,0 +1,33 @@
+{
+  "name": "dramaforge-ai",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@google/genai": "^1.38.0",
+    "@xyflow/react": "^12.10.2",
+    "axios": "1.7.9",
+    "framer-motion": "^12.40.0",
+    "lucide-react": "^0.563.0",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
+    "zustand": "^5.0.14"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.1.0",
+    "@types/node": "^22.14.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "happy-dom": "^15.11.0",
+    "typescript": "~5.8.2",
+    "vite": "^6.2.0",
+    "vitest": "^2.1.0"
+  }
+}

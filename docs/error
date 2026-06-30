@@ -1,0 +1,29 @@
+[TaskExecutor] Step: SCRIPT_GENERATION → stepKey: scriptGeneration {stepBinding: {…}, model: {…}, provider: {…}, allProviders: Array(3), allModels: Array(3)}allModels: Array(3)0: {id: 'gemini-3-pro', name: 'gemini-3-pro-preview', format: 'openai', path: '/v1/chat/completions', providerId: 'google-gemini'}1: {id: 'nano-banana', name: 'gpt-image-2', format: 'openai-image', path: '/v1/chat/completions', providerId: 'nanobanana'}2: {id: 'sora-2', name: 'sora-2', format: 'openai-video', path: '/v1/chat/completions', providerId: 'sora'}length: 3[[Prototype]]: Array(0)at: ƒ at()concat: ƒ concat()constructor: ƒ Array()copyWithin: ƒ copyWithin()entries: ƒ entries()every: ƒ every()fill: ƒ fill()filter: ƒ filter()find: ƒ find()findIndex: ƒ findIndex()findLast: ƒ findLast()findLastIndex: ƒ findLastIndex()flat: ƒ flat()flatMap: ƒ flatMap()forEach: ƒ forEach()includes: ƒ includes()indexOf: ƒ indexOf()join: ƒ join()keys: ƒ keys()lastIndexOf: ƒ lastIndexOf()length: 0map: ƒ map()pop: ƒ pop()push: ƒ push()reduce: ƒ reduce()reduceRight: ƒ reduceRight()reverse: ƒ reverse()shift: ƒ shift()slice: ƒ slice()some: ƒ some()sort: ƒ sort()splice: ƒ splice()toLocaleString: ƒ toLocaleString()toReversed: ƒ toReversed()toSorted: ƒ toSorted()toSpliced: ƒ toSpliced()toString: ƒ toString()unshift: ƒ unshift()values: ƒ values()with: ƒ with()Symbol(Symbol.iterator): ƒ values()Symbol(Symbol.unscopables): {at: true, copyWithin: true, entries: true, fill: true, find: true, …}[[Prototype]]: ObjectallProviders: Array(3)0: {id: 'google-gemini', name: 'ZZ', type: 'relay', baseUrl: 'https://ai.t8star.org', hasApiKey: true}1: {id: 'nanobanana', name: 'ZZ', type: 'relay', baseUrl: 'https://ai.t8star.org', hasApiKey: true}2: {id: 'sora', name: 'ZZ', type: 'relay', baseUrl: 'https://ai.t8star.org', hasApiKey: true}length: 3[[Prototype]]: Array(0)model: format: "openai"id: "gemini-3-pro"name: "gemini-3-pro-preview"path: "/v1/chat/completions"providerId: "google-gemini"[[Prototype]]: Objectprovider: baseUrl: "https://ai.t8star.org"hasApiKey: trueid: "google-gemini"name: "ZZ"type: "relay"[[Prototype]]: ObjectstepBinding: {step: 'scriptGeneration', modelId: 'gemini-3-pro'}[[Prototype]]: Object
+geminiService.ts:21 [LLM Request] {url: 'https://ai.t8star.org/v1/chat/completions', providerId: 'google-gemini', providerType: 'relay', providerBaseUrl: 'https://ai.t8star.org', modelId: 'gemini-3-pro', …}
+geminiService.ts:38 [LLM Request Body] {"model":"gemini-3-pro-preview","messages":[{"role":"system","content":"\nYou are a senior film industry professional with 20 years of experience, expert in high-conflict, fast-paced web drama scripts, and a top storyboard concept artist proficient in AI drawing logic.\n\nYour specialty is \"Full Process Visual Restoration\": translating scripts into visual language, ensuring all storyboards exist in a unified physical space and lighting atmosphere.\n\nYou follow the SKILL 7-step pipeline: Scrip
+storageService.ts:81 [StorageService] Saving tasks (442 bytes, 1 tasks)
+storageService.ts:89 [StorageService] Total storage used: 0.00 MB
+geminiService.ts:40  POST https://ai.t8star.org/v1/chat/completions 400 (Bad Request)
+(匿名) @ geminiService.ts:40
+(匿名) @ geminiService.ts:203
+(匿名) @ useTaskExecutor.ts:150
+$RefreshSig$ @ App.tsx:353
+executeDispatch @ react-dom-client.development.js:19116
+runWithFiberInDEV @ react-dom-client.development.js:871
+processDispatchQueue @ react-dom-client.development.js:19166
+(匿名) @ react-dom-client.development.js:19767
+batchedUpdates$1 @ react-dom-client.development.js:3255
+dispatchEventForPluginEventSystem @ react-dom-client.development.js:19320
+dispatchEvent @ react-dom-client.development.js:23585
+dispatchDiscreteEvent @ react-dom-client.development.js:23553
+geminiService.ts:49 [LLM] First attempt 400 error: {"error":{"message":"contents is required ","type":"new_api_error","param":"","code":"invalid_gemini_request"}}
+(匿名) @ geminiService.ts:49
+geminiService.ts:62 [LLM] API expects Gemini format, retrying with Gemini body...
+(匿名) @ geminiService.ts:62
+geminiService.ts:66 [LLM] Retry request: {url: 'https://ai.t8star.org/v1/chat/completions', bodyKeys: Array(5), bodyFormat: 'gemini'}bodyFormat: "gemini"bodyKeys: Array(5)0: "contents"1: "generationConfig"2: "systemInstruction"3: "stream"4: "model"length: 5[[Prototype]]: Array(0)at: ƒ at()concat: ƒ concat()constructor: ƒ Array()copyWithin: ƒ copyWithin()entries: ƒ entries()every: ƒ every()fill: ƒ fill()filter: ƒ filter()find: ƒ find()findIndex: ƒ findIndex()findLast: ƒ findLast()findLastIndex: ƒ findLastIndex()flat: ƒ flat()flatMap: ƒ flatMap()forEach: ƒ forEach()includes: ƒ includes()indexOf: ƒ indexOf()join: ƒ join()keys: ƒ keys()lastIndexOf: ƒ lastIndexOf()length: 0map: ƒ map()pop: ƒ pop()push: ƒ push()reduce: ƒ reduce()reduceRight: ƒ reduceRight()reverse: ƒ reverse()shift: ƒ shift()slice: ƒ slice()some: ƒ some()sort: ƒ sort()splice: ƒ splice()toLocaleString: ƒ toLocaleString()toReversed: ƒ toReversed()toSorted: ƒ toSorted()toSpliced: ƒ toSpliced()toString: ƒ toString()unshift: ƒ unshift()values: ƒ values()with: ƒ with()Symbol(Symbol.iterator): ƒ values()Symbol(Symbol.unscopables): {at: true, copyWithin: true, entries: true, fill: true, find: true, …}[[Prototype]]: Objecturl: "https://ai.t8star.org/v1/chat/completions"[[Prototype]]: Object
+geminiService.ts:67  POST https://ai.t8star.org/v1/chat/completions 500 (Internal Server Error)
+(匿名) @ geminiService.ts:67
+geminiService.ts:99 [LLM Error] 500 {"error":{"message":"field messages is required (request id: B202605311727588854001598268d9d6d9KgdwnUEMaster)","type":"new_api_error","param":"","code":"invalid_request"}}
+(匿名) @ geminiService.ts:99
+storageService.ts:81 [StorageService] Saving tasks (557 bytes, 1 tasks)
+storageService.ts:89 [StorageService] Total storage used: 0.00 MB

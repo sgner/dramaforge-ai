@@ -1,0 +1,90 @@
+"""媒体生成服务抽象（image / video / audio）。
+
+agent 工具不直接调外部 API，而是通过此服务。v1.0 用 stub 实现，v1.1 接真实 provider。
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any, Protocol
+
+
+@dataclass
+class MediaRequest:
+    """统一的媒体生成请求。"""
+    kind: str  # image | video | audio
+    prompt: str
+    negative_prompt: str = ""
+    model_id: str | None = None
+    provider_id: str | None = None
+    width: int = 1024
+    height: int = 1024
+    duration_sec: float = 5.0
+    voice: str | None = None  # audio 用
+    reference_urls: list[str] = field(default_factory=list)
+    extra: dict = field(default_factory=dict)
+
+
+@dataclass
+class MediaResult:
+    """统一的媒体生成结果。"""
+    url: str
+    kind: str
+    cost_usd: float = 0.0
+    elapsed_sec: float = 0.0
+    raw: dict = field(default_factory=dict)
+
+
+class MediaServiceError(Exception):
+    pass
+
+
+class MediaService(Protocol):
+    """媒体服务协议。后端实现可以是 stub / 真实 provider。"""
+
+    async def generate(self, request: MediaRequest) -> MediaResult: ...
+
+
+class StubMediaService:
+    """Stub 实现：把 prompt 编码成 data URL，不调真实 API。
+
+    用途：
+    - agent 端到端测试
+    - 无 API key 时的开发演示
+    """
+
+    def __init__(self, base_url: str = ""):
+        self.base_url = base_url
+
+    async def generate(self, request: MediaRequest) -> MediaResult:
+        import base64
+        import hashlib
+        import time
+
+        seed = f"{request.kind}|{request.prompt}|{request.model_id or ''}"
+        digest = hashlib.md5(seed.encode("utf-8")).hexdigest()[:8]
+        # 1x1 transparent PNG (or text marker)
+        marker = f"STUB-{request.kind}-{digest}"
+        b64 = base64.b64encode(marker.encode("utf-8")).decode("ascii")
+        url = f"data:text/plain;base64,{b64}"
+        return MediaResult(
+            url=url,
+            kind=request.kind,
+            cost_usd=0.0,
+            elapsed_sec=0.001,
+            raw={"stub": True, "prompt": request.prompt},
+        )
+
+
+_default_service: MediaService | None = None
+
+
+def get_default_media_service() -> MediaService:
+    global _default_service
+    if _default_service is None:
+        _default_service = StubMediaService()
+    return _default_service
+
+
+def set_default_media_service(svc: MediaService) -> None:
+    global _default_service
+    _default_service = svc

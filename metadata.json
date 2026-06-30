@@ -1,0 +1,5 @@
+{
+  "name": "DramaForge AI",
+  "description": "One-stop AI Short Drama Platform integrating Gemini, Nanobanana, and Sora 2 for automated script-to-video generation.",
+  "requestFramePermissions": []
+}

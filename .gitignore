@@ -1,0 +1,61 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+*.egg-info/
+.venv/
+venv/
+backend/.venv/
+backend/dramaforge.db
+
+# OS
+Thumbs.db
+
+# Build artifacts
+dist/
+build/
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# Bulky reference repos inside docs
+docs/Infinite-Canvas/
+docs/infinite-canvas-main/
+docs/error/
+
+# Recovery / temp dirs
+.superpowers/sdd/recovery/
+.superpowers/sdd/canvas-store-current-diff.txt
