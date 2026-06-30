@@ -169,17 +169,30 @@ async def stream_events(task_id: str):
 
 @router.post("/tasks/{task_id}/respond")
 async def user_respond(task_id: str, body: schemas.AgentUserResponse, db: Session = Depends(get_db)):
-    """接收用户对 ask_user / plan 审核的响应。"""
+    """接收用户对 ask_user / plan 审核 / 工具失败恢复的响应。
+
+    Spec B: 支持 recovery_action / new_model_id 字段。
+    """
     task = db.query(AgentTask).filter_by(id=task_id).first()
     if not task:
         raise HTTPException(404, f"Task {task_id} not found")
     task.pending_response = {"response": body.response, "approved": body.approved}
+    if body.recovery_action:
+        task.pending_response["recovery_action"] = body.recovery_action
+    if body.new_model_id:
+        task.pending_response["new_model_id"] = body.new_model_id
     if body.approved is False and task.status == "paused":
         task.status = "failed"  # 用户拒绝
     db.commit()
     # 推送 USER_INPUT_RECEIVED 事件
     await event_bus.publish(AgentEvent(
-        task_id=task_id, type=EventType.USER_INPUT_RECEIVED, payload={"response": body.response, "approved": body.approved},
+        task_id=task_id, type=EventType.USER_INPUT_RECEIVED,
+        payload={
+            "response": body.response,
+            "approved": body.approved,
+            "recovery_action": body.recovery_action,
+            "new_model_id": body.new_model_id,
+        },
     ))
     return {"ok": True}
 

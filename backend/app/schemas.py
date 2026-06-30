@@ -1,6 +1,6 @@
 """Pydantic schema"""
 from pydantic import BaseModel, ConfigDict, Field
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Literal
 from datetime import datetime
 
 
@@ -151,9 +151,14 @@ class AgentUserResponse(BaseModel):
 
     response 允许任意可 JSON 序列化的值（字符串 / 字典 / 列表），
     由后端 runtime 决定如何解读。
+
+    Spec B: 新增 recovery_action / new_model_id 支持工具失败恢复。
     """
     response: Optional[Any] = None
     approved: bool = True
+    # Spec B: 失败恢复决策
+    recovery_action: Optional[Literal["retry", "change_model", "skip"]] = None
+    new_model_id: Optional[str] = None
 
     class Config:
         from_attributes = True

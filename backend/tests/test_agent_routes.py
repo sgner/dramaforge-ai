@@ -3,12 +3,23 @@ from fastapi.testclient import TestClient
 
 from app import app
 from app.agent.events import event_bus, AgentEvent, EventType
+from app.database import SessionLocal
 from app.models import AgentTask
 
 
 @pytest.fixture
 def client():
     return TestClient(app)
+
+
+@pytest.fixture
+def db_session():
+    """与 app 共享同一 engine 的 session，确保 client 写入对 db_session 可见。"""
+    session = SessionLocal()
+    try:
+        yield session
+    finally:
+        session.close()
 
 
 def test_create_agent_task(client):
@@ -80,3 +91,87 @@ def test_post_user_response(client):
     assert resp.status_code == 200
     data = resp.json()
     assert data["ok"] is True
+
+
+class TestUserRespondRecovery:
+    """Spec B: user_respond 支持 recovery_action / new_model_id。"""
+
+    def test_respond_with_recovery_action_retry(self, client, db_session):
+        """POST /respond 带 recovery_action=retry → pending_response 含 recovery_action。"""
+        task = AgentTask(
+            id="t-rec-1",
+            project_id="p1",
+            user_goal="x",
+            status="paused",
+            plan=[],
+            artifacts={},
+            total_cost_usd=0.0,
+            total_tokens=0,
+            max_steps=30,
+            skip_confirm=False,
+        )
+        db_session.add(task)
+        db_session.commit()
+
+        resp = client.post(f"/api/agent/tasks/t-rec-1/respond", json={
+            "response": "retry",
+            "approved": True,
+            "recovery_action": "retry",
+        })
+        assert resp.status_code == 200
+        db_session.refresh(task)
+        assert task.pending_response["recovery_action"] == "retry"
+
+    def test_respond_with_recovery_action_change_model(self, client, db_session):
+        """POST /respond 带 recovery_action=change_model + new_model_id。"""
+        task = AgentTask(
+            id="t-rec-2",
+            project_id="p1",
+            user_goal="x",
+            status="paused",
+            plan=[],
+            artifacts={},
+            total_cost_usd=0.0,
+            total_tokens=0,
+            max_steps=30,
+            skip_confirm=False,
+        )
+        db_session.add(task)
+        db_session.commit()
+
+        resp = client.post(f"/api/agent/tasks/t-rec-2/respond", json={
+            "response": "change_model",
+            "approved": True,
+            "recovery_action": "change_model",
+            "new_model_id": "dall-e-2",
+        })
+        assert resp.status_code == 200
+        db_session.refresh(task)
+        assert task.pending_response["recovery_action"] == "change_model"
+        assert task.pending_response["new_model_id"] == "dall-e-2"
+
+    def test_respond_without_recovery_action_still_works(self, client, db_session):
+        """不传 recovery_action 时原有逻辑不变（向后兼容）。"""
+        task = AgentTask(
+            id="t-rec-3",
+            project_id="p1",
+            user_goal="x",
+            status="paused",
+            plan=[],
+            artifacts={},
+            total_cost_usd=0.0,
+            total_tokens=0,
+            max_steps=30,
+            skip_confirm=False,
+        )
+        db_session.add(task)
+        db_session.commit()
+
+        resp = client.post(f"/api/agent/tasks/t-rec-3/respond", json={
+            "response": "ok",
+            "approved": True,
+        })
+        assert resp.status_code == 200
+        db_session.refresh(task)
+        assert "recovery_action" not in task.pending_response
+        assert task.pending_response["response"] == "ok"
