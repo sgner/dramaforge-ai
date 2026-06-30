@@ -144,4 +144,85 @@ describe('useAgentStore', () => {
     expect(after.taskId).toBeNull();
     expect(after.thoughts).toEqual([]);
   });
+
+  it('applyEvent tool_error sets pendingErrorRecovery and status=paused', () => {
+    const s = useAgentStore.getState();
+    s.setTask('t-1', 'running');
+    s.applyEvent({
+      type: 'tool_error',
+      payload: {
+        step_id: '3',
+        tool: 'generate_image',
+        error: 'network timeout',
+        params: { model_id: 'dall-e-3' },
+        fallback_model_id: 'dall-e-2',
+        available_models: [{ id: 'dall-e-2', label: 'DALL-E 2' }],
+      },
+      timestamp: 1,
+    });
+    const after = useAgentStore.getState();
+    expect(after.status).toBe('paused');
+    expect(after.pendingErrorRecovery).toEqual({
+      stepId: '3',
+      tool: 'generate_image',
+      error: 'network timeout',
+      params: { model_id: 'dall-e-3' },
+      fallbackModelId: 'dall-e-2',
+      availableModels: [{ id: 'dall-e-2', label: 'DALL-E 2' }],
+    });
+  });
+
+  it('applyEvent tool_resumed clears pendingErrorRecovery and sets status=running', () => {
+    const s = useAgentStore.getState();
+    s.setTask('t-1', 'running');
+    // 先触发 tool_error
+    s.applyEvent({
+      type: 'tool_error',
+      payload: { step_id: '1', tool: 'x', error: 'e', params: {}, fallback_model_id: null, available_models: [] },
+      timestamp: 1,
+    });
+    expect(useAgentStore.getState().pendingErrorRecovery).not.toBeNull();
+    // 再触发 tool_resumed
+    s.applyEvent({ type: 'tool_resumed', payload: { step_id: '1', action: 'retry' }, timestamp: 2 });
+    const after = useAgentStore.getState();
+    expect(after.pendingErrorRecovery).toBeNull();
+    expect(after.status).toBe('running');
+  });
+
+  it('applyEvent tool_retrying appends to thoughts', () => {
+    const s = useAgentStore.getState();
+    s.setTask('t-1', 'running');
+    s.applyEvent({
+      type: 'tool_retrying',
+      payload: { tool: 'generate_image', attempt: 1, max_retries: 2, delay_sec: 1.0, error: 'timeout' },
+      timestamp: 1,
+    });
+    expect(useAgentStore.getState().thoughts).toHaveLength(1);
+    expect(useAgentStore.getState().thoughts[0].type).toBe('tool_retrying');
+  });
+
+  it('applyEvent tool_fallback_model appends to thoughts', () => {
+    const s = useAgentStore.getState();
+    s.setTask('t-1', 'running');
+    s.applyEvent({
+      type: 'tool_fallback_model',
+      payload: { tool: 'generate_image', from_model: 'dall-e-3', to_model: 'dall-e-2' },
+      timestamp: 1,
+    });
+    expect(useAgentStore.getState().thoughts).toHaveLength(1);
+    expect(useAgentStore.getState().thoughts[0].type).toBe('tool_fallback_model');
+  });
+
+  it('clearErrorRecovery clears pendingErrorRecovery', () => {
+    const s = useAgentStore.getState();
+    s.setTask('t-1', 'running');
+    s.applyEvent({
+      type: 'tool_error',
+      payload: { step_id: '1', tool: 'x', error: 'e', params: {}, fallback_model_id: null, available_models: [] },
+      timestamp: 1,
+    });
+    expect(useAgentStore.getState().pendingErrorRecovery).not.toBeNull();
+    useAgentStore.getState().clearErrorRecovery();
+    expect(useAgentStore.getState().pendingErrorRecovery).toBeNull();
+  });
 });

@@ -38,6 +38,15 @@ export interface PendingQuestion {
   [k: string]: any;
 }
 
+export interface PendingErrorRecovery {
+  stepId: string;
+  tool: string;
+  error: string;
+  params: Record<string, any>;
+  fallbackModelId: string | null;
+  availableModels: { id: string; label: string }[];
+}
+
 export interface AgentState {
   // 任务标识
   taskId: string | null;
@@ -56,6 +65,7 @@ export interface AgentState {
   // 用户交互
   pendingQuestion: PendingQuestion | null;
   pendingPlan: any[] | null;
+  pendingErrorRecovery: PendingErrorRecovery | null;
 
   // 成本
   totalCostUsd: number;
@@ -69,6 +79,7 @@ export interface AgentState {
   setStatus: (status: AgentStatus) => void;
   applyEvent: (event: AgentEventLike) => void;
   clearPendingQuestion: () => void;
+  clearErrorRecovery: () => void;
   reset: () => void;
 }
 
@@ -84,6 +95,7 @@ const INITIAL: Pick<
   | 'artifacts'
   | 'pendingQuestion'
   | 'pendingPlan'
+  | 'pendingErrorRecovery'
   | 'totalCostUsd'
   | 'totalTokens'
   | 'error'
@@ -98,6 +110,7 @@ const INITIAL: Pick<
   artifacts: {},
   pendingQuestion: null,
   pendingPlan: null,
+  pendingErrorRecovery: null,
   totalCostUsd: 0,
   totalTokens: 0,
   error: null,
@@ -164,6 +177,24 @@ export const useAgentStore = create<AgentState>((set) => ({
           };
         case 'user_input_received':
           return { pendingQuestion: null, status: 'running' };
+        case 'tool_retrying':
+          return { thoughts: [...state.thoughts, event] };
+        case 'tool_fallback_model':
+          return { thoughts: [...state.thoughts, event] };
+        case 'tool_error':
+          return {
+            pendingErrorRecovery: {
+              stepId: p.step_id,
+              tool: p.tool,
+              error: p.error,
+              params: p.params,
+              fallbackModelId: p.fallback_model_id,
+              availableModels: p.available_models || [],
+            },
+            status: 'paused',
+          };
+        case 'tool_resumed':
+          return { pendingErrorRecovery: null, status: 'running' };
         case 'task_paused':
           return { status: 'paused' };
         case 'task_resumed':
@@ -183,6 +214,8 @@ export const useAgentStore = create<AgentState>((set) => ({
     }),
 
   clearPendingQuestion: () => set({ pendingQuestion: null }),
+
+  clearErrorRecovery: () => set({ pendingErrorRecovery: null }),
 
   reset: () => set({ ...INITIAL }),
 }));
