@@ -3,6 +3,10 @@
  *
  * 设计：3 个分区按时间顺序堆叠，最新的 thought 顶部高亮；
  * 通过 data-testid 暴露给测试。
+ *
+ * 支持两种模式：
+ * 1. 默认（侧栏）：直接渲染 ThoughtStreamBody
+ * 2. floating 模式：右上角浮层，open 控制显隐，onClose 处理关闭
  */
 import React from 'react';
 import { useAgentStore, AgentEventLike } from './use-agent-store';
@@ -24,7 +28,13 @@ function fmtPayload(ev: AgentEventLike): string {
   return JSON.stringify(p).slice(0, 200);
 }
 
-export const ThoughtStream: React.FC = () => {
+export interface ThoughtStreamProps {
+  floating?: boolean;
+  open?: boolean;
+  onClose?: () => void;
+}
+
+const ThoughtStreamBody: React.FC = () => {
   const thoughts = useAgentStore((s) => s.thoughts);
   const actions = useAgentStore((s) => s.actions);
   const observations = useAgentStore((s) => s.observations);
@@ -125,6 +135,62 @@ export const ThoughtStream: React.FC = () => {
       )}
     </div>
   );
+};
+
+export const ThoughtStream: React.FC<ThoughtStreamProps> = ({ floating, open, onClose }) => {
+  if (floating) {
+    if (!open) return null;
+    return (
+      <div
+        data-testid="thought-stream-floating"
+        style={{
+          position: 'fixed',
+          top: 16,
+          right: 16,
+          width: 320,
+          maxHeight: '60vh',
+          background: 'white',
+          border: '1px solid #e2e8f0',
+          borderRadius: 10,
+          boxShadow: '0 4px 16px rgba(0,0,0,0.08)',
+          zIndex: 50,
+          display: 'flex',
+          flexDirection: 'column',
+          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+          fontSize: 12,
+          overflow: 'hidden',
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '6px 10px',
+            borderBottom: '1px solid #e2e8f0',
+            background: 'rgba(99,102,241,0.06)',
+            fontWeight: 600,
+          }}
+        >
+          <span>💭 ThoughtStream</span>
+          <button
+            data-testid="thought-stream-floating-close"
+            type="button"
+            aria-label="close"
+            onClick={onClose}
+            style={{ background: 'none', border: 0, cursor: 'pointer', fontSize: 14, lineHeight: 1 }}
+          >
+            ✕
+          </button>
+        </div>
+        <div style={{ overflowY: 'auto', flex: 1 }}>
+          {/* 复用原 render 内容 */}
+          <ThoughtStreamBody />
+        </div>
+      </div>
+    );
+  }
+  return <ThoughtStreamBody />;
 };
 
 const Section: React.FC<{
