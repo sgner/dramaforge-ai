@@ -436,8 +436,16 @@ export const InfiniteCanvas: React.FC<{ onBack?: () => void; projectId?: string 
 
       if (dragRef.current) {
         // 仅在拖拽移动过时才处理，选中逻辑已在mousedown中完成
+        const draggedId = dragRef.current.id;
         dragRef.current = null;
         setDragging(false);
+        // 记录 agent_node 拖动偏移，供后续 addAgentNodes 使用
+        // 使用 getState() 读取最新 nodes，避免 useEffect 闭包内可能存在的 stale nodes 风险
+        const liveNodes = useCanvasStore.getState().nodes;
+        const draggedNode = liveNodes.find((n) => n.id === draggedId);
+        if (draggedNode && draggedNode.type === 'agent_node') {
+          useCanvasStore.getState().recordAgentNodeDrag(draggedId, draggedNode.x, draggedNode.y);
+        }
       }
 
       if (resizeRef.current) {
