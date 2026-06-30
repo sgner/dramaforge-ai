@@ -119,6 +119,10 @@ class BaseTool:
     estimated_cost_usd: float = 0.0
     estimated_time_sec: float = 0.0
     idempotent: bool = False
+    # 失败恢复配置（Spec B）
+    max_retries: int = 2
+    retry_backoff_base: float = 1.0
+    fallback_model_id: str | None = None
 
     async def validate(self, ctx: ToolContext, params: dict) -> str | None:
         """子类可重写。返回 None 表示 OK。"""
@@ -210,3 +214,76 @@ def _json_type_to_openai(t: str) -> str:
         "object": "object",
     }
     return mapping.get(t, "string")
+
+
+# ========================
+# RetryableTool 包装器
+# ========================
+
+class RetryableTool:
+    """包装 Tool，实现自动重试 + fallback_model 降级。
+
+    流程：
+    1. 尝试原始 params 调用
+    2. RetryableError → 指数退避重试 max_retries 次
+    3. 仍失败 → 若 tool.fallback_model_id 存在，换模型重试 1 次
+    4. 仍失败 → 抛 RetryableError 让 runtime 进入 PAUSED
+
+    属性透传：通过 __getattr__ 委托给 self.tool，
+    使 RetryableTool 可像 BaseTool 一样被 registry 使用。
+    """
+
+    def __init__(
+        self,
+        tool: BaseTool,
+        max_retries: int | None = None,
+        backoff_base: float | None = None,
+    ):
+        self.tool = tool
+        self.max_retries = max_retries if max_retries is not None else getattr(tool, "max_retries", 2)
+        self.backoff_base = backoff_base if backoff_base is not None else getattr(tool, "retry_backoff_base", 1.0)
+
+    async def call(self, ctx: ToolContext, params: dict) -> dict:
+        """执行工具，带自动重试 + fallback_model 降级。"""
+        last_error: Exception | None = None
+        original_model_id = params.get("model_id")
+
+        for attempt in range(self.max_retries + 1):
+            try:
+                return await self.tool.call(ctx, params)
+            except RetryableError as e:
+                last_error = e
+                if attempt < self.max_retries:
+                    delay = self.backoff_base * (2 ** attempt)
+                    ctx.emit_event("tool_retrying", {
+                        "tool": self.tool.name,
+                        "attempt": attempt + 1,
+                        "max_retries": self.max_retries,
+                        "delay_sec": delay,
+                        "error": str(e),
+                    })
+                    await asyncio.sleep(delay)
+                    continue
+                # 重试耗尽 → 尝试 fallback_model
+                fb = getattr(self.tool, "fallback_model_id", None)
+                if fb and params.get("model_id") != fb:
+                    new_params = {**params, "model_id": fb}
+                    ctx.emit_event("tool_fallback_model", {
+                        "tool": self.tool.name,
+                        "from_model": original_model_id,
+                        "to_model": fb,
+                    })
+                    try:
+                        return await self.tool.call(ctx, new_params)
+                    except RetryableError as e2:
+                        last_error = e2
+                # fallback 也失败或无 fallback → 抛出让 runtime 挂起
+                break
+            except NonRetryableError:
+                raise  # 不可重试直接抛出
+        raise last_error  # type: ignore[misc]
+
+    def __getattr__(self, name: str):
+        """委托未定义属性给 self.tool。"""
+        return getattr(self.tool, name)
+
