@@ -1,6 +1,6 @@
 import React, { useCallback, useRef, useState } from 'react';
 import { Loader2, Play, Check, X, Square, RotateCcw, BookOpen, FileText, Sparkles, Wand2, Save, Edit3, Eye, User, Mountain, Clapperboard, Theater } from 'lucide-react';
-import { CanvasNode, NodeType } from './types';
+import { CanvasNode, NodeType, TaskType, AGENT_TYPE_META } from './types';
 import { useCanvasStore } from './use-canvas-store';
 import { estimatedNodeRect } from './engine';
 import { useI18n } from '../../i18n';
@@ -214,6 +214,7 @@ const NodeBody: React.FC<{
   onOpenTemplate?: (nodeId: string) => void;
 }> = React.memo(({ node, onOpenTemplate }) => {
   if (node.type === 'group') return <GroupNodeBody node={node} />;
+  if (node.type === 'agent_node') return <AgentNodeBody node={node} />;
   if (node.type === 'prompt') return <PromptNodeBody node={node} onOpenTemplate={onOpenTemplate} />;
   if (node.type === 'loop') return <LoopNodeBody node={node} />;
   if (node.type === 'video') return <VideoNodeBody node={node} />;
@@ -1636,3 +1637,156 @@ const ScriptNodeBody: React.FC<{ node: CanvasNode }> = React.memo(({ node }) => 
 });
 
 ScriptNodeBody.displayName = 'ScriptNodeBody';
+
+/* ===== Agent Node (agent 事件节点) ===== */
+const STATUS_LABEL_AGENT: Record<string, string> = {
+  pending: '○ 等待',
+  running: '◐ 执行中',
+  success: '● 成功',
+  failed: '✕ 失败',
+};
+
+const AgentNodeBody: React.FC<{ node: CanvasNode }> = React.memo(({ node }) => {
+  const taskType = (node._agentTaskType as TaskType) || 'goal';
+  const status = (node._agentStatus as string) || 'pending';
+  const label = (node._agentLabel as string) || '';
+  const payload = (node._agentPayload as Record<string, any>) || {};
+  const meta = AGENT_TYPE_META[taskType] || AGENT_TYPE_META.goal;
+  const isArtifact = taskType === 'artifact';
+  const isPlan = taskType === 'plan';
+  const isQuestion = taskType === 'question';
+  const isImage = isArtifact && payload.kind === 'image' && typeof payload.url === 'string';
+  const isText = isArtifact && payload.kind === 'text' && typeof payload.snippet === 'string';
+
+  return (
+    <div
+      data-testid="agent-node-body"
+      style={{
+        minWidth: 0,
+        background: '#ffffff',
+        border: `2px solid ${meta.color}`,
+        borderRadius: 10,
+        padding: 10,
+        fontFamily: 'ui-sans-serif, system-ui, sans-serif',
+        fontSize: 12,
+        boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          marginBottom: 6,
+        }}
+      >
+        <span
+          data-testid={`task-graph-node-badge-${taskType}`}
+          style={{
+            fontSize: 10,
+            padding: '2px 6px',
+            background: meta.color,
+            color: 'white',
+            borderRadius: 4,
+            fontWeight: 600,
+            letterSpacing: 0.3,
+          }}
+        >
+          {meta.icon} {meta.label}
+        </span>
+        <AgentStatusBadge status={status} color={meta.color} />
+      </div>
+      <div
+        data-testid="task-graph-node-label"
+        style={{
+          fontWeight: 600,
+          color: '#0f172a',
+          marginBottom: 6,
+          wordBreak: 'break-word',
+        }}
+      >
+        {label || '—'}
+      </div>
+      {isImage && (
+        <img
+          src={payload.url}
+          alt={label}
+          style={{ width: '100%', height: 'auto', borderRadius: 6, marginTop: 4, display: 'block' }}
+        />
+      )}
+      {isText && (
+        <div
+          data-testid="task-graph-node-text-snippet"
+          style={{
+            fontSize: 11,
+            color: '#475569',
+            background: 'rgba(0,0,0,0.03)',
+            padding: 6,
+            borderRadius: 4,
+            maxHeight: 80,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          }}
+        >
+          {String(payload.snippet).slice(0, 200)}
+        </div>
+      )}
+      {isPlan && Array.isArray(payload.plan) && (
+        <ol style={{ margin: 0, paddingLeft: 18, fontSize: 11, color: '#334155' }}>
+          {payload.plan.slice(0, 8).map((step: any, i: number) => (
+            <li key={i} data-testid={`task-graph-node-plan-step-${i}`} style={{ marginBottom: 2 }}>
+              <code style={{ fontSize: 10 }}>{step.tool || step.name || `step ${i + 1}`}</code>
+            </li>
+          ))}
+        </ol>
+      )}
+      {isQuestion && (
+        <div
+          data-testid="task-graph-node-question"
+          style={{
+            fontSize: 11,
+            color: '#b45309',
+            background: 'rgba(245,158,11,0.08)',
+            padding: 6,
+            borderRadius: 4,
+            border: '1px dashed rgba(245,158,11,0.4)',
+            marginTop: 4,
+          }}
+        >
+          ⚠ 等待用户回答
+        </div>
+      )}
+    </div>
+  );
+});
+AgentNodeBody.displayName = 'AgentNodeBody';
+
+const AgentStatusBadge: React.FC<{ status: string; color: string }> = ({ status }) => {
+  const testId = `task-graph-node-status-${status}`;
+  const bg =
+    status === 'running' ? 'rgba(14,165,233,0.15)' :
+    status === 'success' ? 'rgba(16,185,129,0.15)' :
+    status === 'failed' ? 'rgba(239,68,68,0.15)' :
+    'rgba(148,163,184,0.15)';
+  const fg =
+    status === 'running' ? '#0369a1' :
+    status === 'success' ? '#047857' :
+    status === 'failed' ? '#b91c1c' :
+    '#475569';
+  return (
+    <span
+      data-testid={testId}
+      style={{
+        fontSize: 9,
+        padding: '2px 6px',
+        background: bg,
+        color: fg,
+        borderRadius: 4,
+        fontFamily: 'ui-monospace, monospace',
+      }}
+    >
+      {STATUS_LABEL_AGENT[status] || status}
+    </span>
+  );
+};
+AgentStatusBadge.displayName = 'AgentStatusBadge';
