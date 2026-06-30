@@ -19,7 +19,10 @@ from .events import AgentEvent, EventType, event_bus
 from .llm import build_react_prompt
 from .memory import AgentMemory
 from .tools.base import (
+    BaseTool,
+    NonRetryableError,
     RetryableError,
+    RetryableTool,
     ToolContext,
     ToolRegistry,
     ToolValidationError,
@@ -184,11 +187,20 @@ class AgentRuntime:
         return False
 
     async def resume(self, user_response: Any) -> bool:
-        """从 PAUSED 恢复，继续执行。"""
+        """从 PAUSED 恢复，继续执行。
+
+        Spec B: 支持 tool_error 恢复（retry/change_model/skip）和原有 ask_user。
+        """
         if self.state != AgentState.PAUSED:
             return False
 
-        # 把用户响应作为 observation 注入最近 step
+        req = self.pending_request or {}
+        req_type = req.get("type", "ask_user")
+
+        if req_type == "tool_error":
+            return await self._resume_from_tool_error(user_response)
+
+        # 原有 ask_user 逻辑：把用户响应作为 observation 注入最近 step
         if self.memory.short_term and self.memory.short_term[-1].status == "pending":
             last = self.memory.short_term[-1]
             last.observation = {"success": True, "user_response": user_response}
@@ -241,7 +253,11 @@ class AgentRuntime:
         return getattr(tool, "requires_approval", False)
 
     async def _execute_tool(self, tool_name: str, params: dict) -> tuple[dict, str]:
-        """执行工具，返回 (observation, status)。"""
+        """执行工具，返回 (observation, status)。
+
+        Spec B: 用 RetryableTool 包装 BaseTool，实现自动重试 + fallback 降级。
+        RetryableError 耗尽后挂起任务（PAUSED）等待用户决策。
+        """
         tool = self.registry.get(tool_name)
         if not tool:
             return {"error": f"Unknown tool: {tool_name}"}, "failed"
@@ -256,15 +272,111 @@ class AgentRuntime:
             skip_confirm=self.skip_confirm,
             emit=lambda t, p: self._emit_sync(t, p),
         )
+        # 用 RetryableTool 包装 BaseTool（自动重试 + fallback）
+        wrapped = RetryableTool(tool) if isinstance(tool, BaseTool) else tool
         try:
-            result = await tool.call(ctx, params)
+            result = await wrapped.call(ctx, params)
             return {"success": True, "result": result}, "success"
         except ToolValidationError as e:
             return {"error": str(e)}, "failed"
         except RetryableError as e:
-            return {"error": str(e), "retryable": True}, "failed"
+            # 挂起等待用户决策
+            self.pending_request = {
+                "type": "tool_error",
+                "step_id": str(self._step_count),
+                "tool": tool_name,
+                "error": str(e),
+                "params": params,
+                "fallback_model_id": getattr(tool, "fallback_model_id", None),
+                "available_models": self._list_available_models(tool),
+            }
+            await self._emit(EventType.TOOL_ERROR, self.pending_request)
+            self.state = AgentState.PAUSED
+            return {"error": str(e), "pending": "awaiting_user_recovery"}, "paused"
+        except NonRetryableError as e:
+            return {"error": str(e), "non_retryable": True}, "failed"
         except Exception as e:
             return {"error": str(e), "type": type(e).__name__}, "failed"
+
+    async def _resume_from_tool_error(self, user_response: Any) -> bool:
+        """用户对 tool_error 的响应：retry / change_model / skip。
+
+        Spec B: 用户决策后恢复执行。
+        - retry: 用原 params 重新执行
+        - change_model: 更新 params.model_id 后重新执行
+        - skip: 注入 user_skip observation，agent 继续 think
+        """
+        # 兼容 dict 和裸值
+        if isinstance(user_response, dict):
+            action = user_response.get("recovery_action", "retry")
+            new_model_id = user_response.get("new_model_id")
+        else:
+            action = "retry"
+            new_model_id = None
+
+        step_id = self.pending_request["step_id"]
+        tool_name = self.pending_request["tool"]
+        params = self.pending_request["params"]
+        error_msg = self.pending_request["error"]
+
+        await self._emit(EventType.TOOL_RESUMED, {"step_id": step_id, "action": action})
+
+        if action == "skip":
+            # 注入 user_skip observation，step 标 skipped，agent 继续 think
+            self.memory.add_step(
+                step_number=self._step_count,
+                thought="(user skipped)",
+                action={"tool": tool_name, "params": params},
+                observation={"success": False, "user_skip": True, "error": error_msg},
+                status="skipped",
+            )
+            self.pending_request = None
+            self.state = AgentState.RUNNING
+            # 与 retry/change_model 一致：仅记录 step 并返回 False，
+            # 由调用方决定何时再次推进 step()
+            return False
+
+        # retry / change_model → 重新执行该 step
+        if action == "change_model" and new_model_id:
+            params = {**params, "model_id": new_model_id}
+
+        self.pending_request = None
+        self.state = AgentState.RUNNING
+        # 重新执行同一步（_step_count 不变）
+        observation, status = await self._execute_tool(tool_name, params)
+        # 记录 step + emit observation
+        self.memory.add_step(
+            step_number=self._step_count,
+            thought="(retry after user recovery)",
+            action={"tool": tool_name, "params": params},
+            observation=observation,
+            status=status,
+        )
+        await self._emit(EventType.OBSERVATION, {
+            "step": self._step_count,
+            "success": status == "success",
+            "result": observation.get("result") if status == "success" else None,
+            "error": observation.get("error"),
+        })
+        # 无论成功失败，都返回 False 让主循环继续 think 下一步
+        return False
+
+    def _list_available_models(self, tool) -> list[dict]:
+        """查询同 category 的可用模型列表（供前端下拉）。
+
+        Spec B: api_config 提供 list_models(category) 方法时返回模型列表，
+        否则返回空列表（用户仍可手动输入 model_id）。
+        """
+        if not self.api_config:
+            return []
+        category = getattr(tool, "category", "")
+        if not hasattr(self.api_config, "list_models"):
+            return []
+        models = self.api_config.list_models(category)
+        return [
+            {"id": m.get("id"), "label": m.get("label", m.get("id"))}
+            for m in models
+        ]
 
     async def _add_failed_step(self, error: str, action: dict) -> None:
         self.memory.add_step(

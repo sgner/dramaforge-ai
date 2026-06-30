@@ -5,7 +5,15 @@ from unittest.mock import AsyncMock, MagicMock
 
 from app.agent.runtime import AgentRuntime, AgentState, parse_decision
 from app.agent.events import EventType
-from app.agent.tools.base import BaseTool, ToolContext, ToolParameter
+from app.agent.tools.base import (
+    BaseTool,
+    ToolContext,
+    ToolParameter,
+    RetryableError,
+    NonRetryableError,
+    ToolValidationError,
+    RetryableTool,
+)
 from app.agent.memory import AgentMemory
 
 
@@ -185,3 +193,209 @@ async def test_runtime_max_steps_protection():
     is_done = await runtime.step()
     assert is_done is True
     assert runtime.state == AgentState.DONE
+
+
+class TestRuntimeToolErrorRecovery:
+    """Spec B: Runtime 工具失败恢复路径测试。"""
+
+    @pytest.mark.asyncio
+    async def test_execute_tool_retryable_error_sets_pending_and_paused(self):
+        """RetryableError → pending_request 填充 + state=PAUSED。"""
+        class _RetryableFailTool(BaseTool):
+            name = "retryable_fail"
+            description = "always fails with RetryableError"
+            category = "test"
+            parameters = []
+            max_retries = 0  # 不重试，直接进入 PAUSED
+            async def execute(self, ctx, params):
+                raise RetryableError("network timeout")
+
+        from app.agent.tools.base import RetryableTool
+        llm = _StubLLM([
+            {"tool_name": "retryable_fail", "tool_args": {}, "content": None},
+        ])
+        memory = AgentMemory(user_goal="x", plan=[])
+        runtime = AgentRuntime(task_id="t1", llm=llm, memory=memory)
+        runtime.registry.register(_RetryableFailTool())
+
+        await runtime.step()
+
+        assert runtime.state == AgentState.PAUSED
+        assert runtime.pending_request is not None
+        assert runtime.pending_request["type"] == "tool_error"
+        assert runtime.pending_request["tool"] == "retryable_fail"
+        assert "network timeout" in runtime.pending_request["error"]
+
+    @pytest.mark.asyncio
+    async def test_execute_tool_retryable_error_emits_tool_error_event(self):
+        """RetryableError → emit TOOL_ERROR 事件。"""
+        from app.agent.events import event_bus
+        from app.agent.tools.base import RetryableError
+
+        class _FailTool(BaseTool):
+            name = "fail_tool"
+            description = "fails"
+            category = "test"
+            parameters = []
+            max_retries = 0
+            async def execute(self, ctx, params):
+                raise RetryableError("boom")
+
+        llm = _StubLLM([
+            {"tool_name": "fail_tool", "tool_args": {}, "content": None},
+        ])
+        memory = AgentMemory(user_goal="x", plan=[])
+        runtime = AgentRuntime(task_id="t1", llm=llm, memory=memory)
+        runtime.registry.register(_FailTool())
+
+        events_received = []
+        queue = event_bus.subscribe("t1")
+
+        async def collect():
+            try:
+                for _ in range(10):
+                    ev = await asyncio.wait_for(queue.get(), timeout=1.0)
+                    events_received.append(ev)
+                    if ev.type == "tool_error":
+                        break
+            except asyncio.TimeoutError:
+                pass
+
+        await asyncio.gather(runtime.step(), collect())
+
+        tool_error_events = [e for e in events_received if e.type == "tool_error"]
+        assert len(tool_error_events) == 1
+        assert tool_error_events[0].payload["tool"] == "fail_tool"
+
+        event_bus.unsubscribe("t1", queue)
+
+    @pytest.mark.asyncio
+    async def test_resume_from_tool_error_skip_injects_user_skip_observation(self):
+        """skip → step 状态 skipped + observation 注入 user_skip。"""
+        class _FailTool(BaseTool):
+            name = "fail_tool"
+            description = "fails"
+            category = "test"
+            parameters = []
+            max_retries = 0
+            async def execute(self, ctx, params):
+                raise RetryableError("boom")
+
+        # 第 1 步：失败 → PAUSED
+        llm = _StubLLM([
+            {"tool_name": "fail_tool", "tool_args": {}, "content": None},
+        ])
+        memory = AgentMemory(user_goal="x", plan=[])
+        runtime = AgentRuntime(task_id="t1", llm=llm, memory=memory)
+        runtime.registry.register(_FailTool())
+
+        await runtime.step()
+        assert runtime.state == AgentState.PAUSED
+
+        # resume with skip
+        await runtime.resume({"recovery_action": "skip"})
+
+        # step 应标记 skipped，observation 含 user_skip
+        last_step = memory.short_term[-1]
+        assert last_step.status == "skipped"
+        assert last_step.observation.get("user_skip") is True
+
+    @pytest.mark.asyncio
+    async def test_resume_from_tool_error_change_model_retries_with_new_model(self):
+        """change_model → params.model_id 更新后重新执行。"""
+        class _ModelAwareTool(BaseTool):
+            name = "model_aware"
+            description = "fails on primary, succeeds on fallback"
+            category = "image"
+            parameters = [ToolParameter(name="model_id", type="string", description="model", required=False)]
+            max_retries = 0
+            async def execute(self, ctx, params):
+                if params.get("model_id") == "new-model":
+                    return {"ok": True}
+                raise RetryableError("primary model down")
+
+        # 第 1 步：失败 → PAUSED
+        llm = _StubLLM([
+            {"tool_name": "model_aware", "tool_args": {"model_id": "primary"}, "content": None},
+        ])
+        memory = AgentMemory(user_goal="x", plan=[])
+        runtime = AgentRuntime(task_id="t1", llm=llm, memory=memory)
+        runtime.registry.register(_ModelAwareTool())
+
+        await runtime.step()
+        assert runtime.state == AgentState.PAUSED
+
+        # resume with change_model
+        await runtime.resume({
+            "recovery_action": "change_model",
+            "new_model_id": "new-model",
+        })
+
+        # 第 2 次 step 应成功
+        last_step = memory.short_term[-1]
+        assert last_step.status == "success"
+
+    @pytest.mark.asyncio
+    async def test_resume_from_tool_error_retry_retries_same_params(self):
+        """retry → 用原 params 重新执行。"""
+        class _FailOnceTool(BaseTool):
+            name = "fail_once"
+            description = "fails once then succeeds"
+            category = "test"
+            parameters = []
+            max_retries = 0
+            def __init__(self):
+                super().__init__()
+                self.call_count = 0
+            async def execute(self, ctx, params):
+                self.call_count += 1
+                if self.call_count == 1:
+                    raise RetryableError("first attempt fails")
+                return {"ok": True}
+
+        # 第 1 步：失败 → PAUSED
+        llm = _StubLLM([
+            {"tool_name": "fail_once", "tool_args": {}, "content": None},
+        ])
+        memory = AgentMemory(user_goal="x", plan=[])
+        runtime = AgentRuntime(task_id="t1", llm=llm, memory=memory)
+        tool = _FailOnceTool()
+        runtime.registry.register(tool)
+
+        await runtime.step()
+        assert runtime.state == AgentState.PAUSED
+
+        # resume with retry
+        await runtime.resume({"recovery_action": "retry"})
+
+        # 第 2 次 step 应成功
+        last_step = memory.short_term[-1]
+        assert last_step.status == "success"
+
+    @pytest.mark.asyncio
+    async def test_list_available_models_returns_empty_when_no_api_config(self):
+        """api_config 为 None → available_models 空列表。"""
+        llm = _StubLLM([])
+        memory = AgentMemory(user_goal="x", plan=[])
+        runtime = AgentRuntime(task_id="t1", llm=llm, memory=memory, api_config=None)
+        tool = _EchoTool()
+        models = runtime._list_available_models(tool)
+        assert models == []
+
+    @pytest.mark.asyncio
+    async def test_list_available_models_queries_api_config(self):
+        """api_config 有 list_models 方法 → 返回模型列表。"""
+        class _MockApiConfig:
+            def list_models(self, category: str):
+                if category == "image":
+                    return [{"id": "dall-e-3", "label": "DALL-E 3"}, {"id": "dall-e-2", "label": "DALL-E 2"}]
+                return []
+
+        llm = _StubLLM([])
+        memory = AgentMemory(user_goal="x", plan=[])
+        runtime = AgentRuntime(task_id="t1", llm=llm, memory=memory, api_config=_MockApiConfig())
+        tool = _EchoTool()
+        tool.category = "image"
+        models = runtime._list_available_models(tool)
+        assert len(models) == 2
+        assert models[0] == {"id": "dall-e-3", "label": "DALL-E 3"}
