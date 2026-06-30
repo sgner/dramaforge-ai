@@ -8,7 +8,7 @@
  *   - 切 projectId → useCanvasStore.clearAgentNodes
  *   - ThoughtStream 浮层右上，ToolPalette 抽屉右侧（默认关闭）
  */
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useAgentStore } from './use-agent-store';
 import { useAgentStream } from './use-agent-stream';
 import { useAgentTools } from './use-agent-tools';
@@ -42,11 +42,38 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
   const { tools, isLoading: toolsLoading } = useAgentTools();
   useAgentStream(taskId);
 
+  // 跟踪上一次投影到画布的相关切片引用（thoughts/actions/observations/plan/artifacts/pendingQuestion）。
+  // 只有这 6 个 slice 的引用变化才需要重跑 project()。
+  // 其他 slice（totalCostUsd/totalTokens/error/pendingPlan/taskId/status）变化不触发，避免无意义的
+  // addAgentNodes → 内部 setState → saveNodes debounced POST 抖动。
+  const lastProjectedRef = useRef<{
+    thoughts: unknown;
+    actions: unknown;
+    observations: unknown;
+    plan: unknown;
+    artifacts: unknown;
+    pendingQuestion: unknown;
+  } | null>(null);
+
   // 投影：useAgentStore 状态变化 → useCanvasStore.addAgentNodes
-  // 用 zustand subscribe（同步回调），确保 setState 后立即投影到画布
+  // 用 zustand subscribe（同步回调），确保 setState 后立即投影到画布。
+  // 切 projectId 时的清理通过本 effect 的 cleanup 处理（unbind + clearAgentNodes）。
   useEffect(() => {
     const project = () => {
       const state = useAgentStore.getState();
+      const last = lastProjectedRef.current;
+      if (
+        last &&
+        last.thoughts === state.thoughts &&
+        last.actions === state.actions &&
+        last.observations === state.observations &&
+        last.plan === state.plan &&
+        last.artifacts === state.artifacts &&
+        last.pendingQuestion === state.pendingQuestion
+      ) {
+        // 相关 slice 引用未变，跳过 addAgentNodes（节省 setState + debounced save）。
+        return;
+      }
       const userGoal = state.status === 'running' || state.status === 'paused' || state.status === 'done'
         ? (state.thoughts[0]?.payload?.text as string) || ''
         : '';
@@ -58,21 +85,24 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
         artifacts: state.artifacts,
         pendingQuestion: state.pendingQuestion,
       });
+      lastProjectedRef.current = {
+        thoughts: state.thoughts,
+        actions: state.actions,
+        observations: state.observations,
+        plan: state.plan,
+        artifacts: state.artifacts,
+        pendingQuestion: state.pendingQuestion,
+      };
     };
+    // 重置 ref：projectId 切换后应当把"上一次投影"视为未定义，确保新 project 下的初始状态
+    // 一定会被投影（即使它恰巧与上一次引用相同，也属于不同 project 的画布）。
+    lastProjectedRef.current = null;
     // 立即投影一次初始状态
     project();
     // 订阅后续变化（同步触发）
     const unsubscribe = useAgentStore.subscribe(project);
     return () => {
       unsubscribe();
-      useCanvasStore.getState().clearAgentNodes();
-    };
-  }, [projectId]);
-
-  // 切换 projectId 时清理 agent_node
-  useEffect(() => {
-    useCanvasStore.getState().clearAgentNodes();
-    return () => {
       useCanvasStore.getState().clearAgentNodes();
     };
   }, [projectId]);
