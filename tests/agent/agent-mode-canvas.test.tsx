@@ -75,4 +75,23 @@ describe('<AgentMode /> canvas integration', () => {
       expect(useCanvasStore.getState().nodes.some((n) => n.type === 'agent_node')).toBe(false);
     });
   });
+
+  it('renders ErrorRecoveryCard when pendingErrorRecovery is set', async () => {
+    const { useAgentStore } = await import('@/agent/use-agent-store');
+    render(<AgentMode projectId="p1" />);
+    // 初始不显示
+    expect(screen.queryByTestId('error-recovery-card')).toBeNull();
+    // 触发 tool_error
+    useAgentStore.getState().applyEvent({
+      type: 'tool_error',
+      payload: {
+        step_id: '1', tool: 'x', error: 'e', params: {},
+        fallback_model_id: null, available_models: [],
+      },
+      timestamp: 1,
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('error-recovery-card')).toBeInTheDocument();
+    });
+  });
 });

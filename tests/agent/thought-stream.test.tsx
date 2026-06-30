@@ -87,4 +87,24 @@ describe('<ThoughtStream />', () => {
     render(<ThoughtStream />);
     expect(screen.getByTestId('thought-stream-failed')).toBeInTheDocument();
   });
+
+  it('renders tool_retrying event with retry icon and attempt count', () => {
+    useAgentStore.getState().applyEvent({
+      type: 'tool_retrying',
+      payload: { tool: 'generate_image', attempt: 1, max_retries: 2, delay_sec: 1.0, error: 'timeout' },
+      timestamp: 1,
+    });
+    render(<ThoughtStream />);
+    expect(screen.getAllByText(/重试中.*1.*2/)[0]).toBeInTheDocument();
+  });
+
+  it('renders tool_fallback_model event with switch icon and model name', () => {
+    useAgentStore.getState().applyEvent({
+      type: 'tool_fallback_model',
+      payload: { tool: 'generate_image', from_model: 'dall-e-3', to_model: 'dall-e-2' },
+      timestamp: 1,
+    });
+    render(<ThoughtStream />);
+    expect(screen.getAllByText(/已切换到备选模型.*dall-e-2/)[0]).toBeInTheDocument();
+  });
 });

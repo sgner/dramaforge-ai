@@ -13,6 +13,9 @@ import { useAgentStore, AgentEventLike } from './use-agent-store';
 
 function fmtPayload(ev: AgentEventLike): string {
   const p = ev.payload || {};
+  // Spec B: 工具失败恢复事件格式化
+  if (ev.type === 'tool_retrying') return `🔄 重试中 (第 ${p.attempt}/${p.max_retries} 次): ${p.error}`;
+  if (ev.type === 'tool_fallback_model') return `↩ 已切换到备选模型: ${p.to_model}`;
   if (typeof p.text === 'string') return p.text;
   if (typeof p.tool === 'string') {
     const params = p.params ? JSON.stringify(p.params) : '';

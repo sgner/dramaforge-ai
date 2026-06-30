@@ -15,6 +15,7 @@ import { useAgentTools } from './use-agent-tools';
 import { ThoughtStream } from './thought-stream';
 import { ToolPalette } from './tool-palette';
 import { TaskList } from './task-list';
+import { ErrorRecoveryCard } from './error-recovery-card';
 import { api } from '@/services/apiClient';
 import { InfiniteCanvas } from '@/components/infinite-canvas/InfiniteCanvas';
 import { useCanvasStore } from '@/components/infinite-canvas/use-canvas-store';
@@ -202,6 +203,7 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
         )}
         <div data-testid="agent-mode-canvas-container" style={{ position: 'absolute', inset: 0 }}>
           <InfiniteCanvas projectId={projectId} />
+          <ErrorRecoveryCard />
         </div>
 
         {/* 浮层 ThoughtStream */}
