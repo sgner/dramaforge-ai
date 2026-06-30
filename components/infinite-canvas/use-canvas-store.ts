@@ -11,6 +11,11 @@ import {
   DEFAULT_NODE_SIZES,
   TaskAssetRef,
   TaskAssetKind,
+  TaskType,
+  AGENT_COL_X,
+  AGENT_NODE_W,
+  AGENT_NODE_H,
+  AGENT_ROW_GAP,
 } from './types';
 import {
   ApiConfig,
@@ -27,6 +32,11 @@ import { generateSoraVideo, generateCharacterDesign, generateStoryboardImage, ge
 import { expandIdeaToStory, generateScriptFromNovel, optimizeSoraPrompt } from '../../services/llmClient';
 import { getT } from '../../i18n';
 import { api, type NodeOut, type ConnectionOut, type AssetOut } from '../../services/apiClient';
+
+// 本地轻量类型别名 — 避免与 agent/use-agent-store.ts 形成循环导入
+type AgentEventLite = { type: string; payload?: Record<string, any>; timestamp?: number };
+type ArtifactLite = { id: string; kind?: string; asset_kind?: string; name?: string; url?: string; [k: string]: any };
+type QuestionLite = { question: string; options?: string[]; [k: string]: any };
 
 export type NodeRenderer = (node: CanvasNode) => React.ReactNode;
 
@@ -370,6 +380,19 @@ interface CanvasStore {
   setConnections: (connections: Connection[]) => void;
   reset: () => void;
   loadProject: (projectId: string) => void;
+
+  // AgentMode × Canvas 集成：把 agent 事件投影到 7 列画布节点
+  nodeOverrides: Record<string, { dx: number; dy: number }>;
+  addAgentNodes: (input: {
+    userGoal: string;
+    plan: any[];
+    actions: AgentEventLite[];
+    observations: AgentEventLite[];
+    artifacts: Record<string, ArtifactLite[]>;
+    pendingQuestion: QuestionLite | null;
+  }) => void;
+  clearAgentNodes: () => void;
+  recordAgentNodeDrag: (nodeId: string, x: number, y: number) => void;
 }
 
 export const useCanvasStore = create<CanvasStore>((set, get) => ({
@@ -388,6 +411,7 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
   cascadeRunning: false,
   cascadeRunPath: [],
   cascadeNodeStatus: new Map(),
+  nodeOverrides: {},
 
   addNode: (node) =>
     set((s) => ({ nodes: [...s.nodes, node] })),
@@ -1437,6 +1461,87 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
 
   setNodes: (nodes) => set({ nodes }),
   setConnections: (connections) => set({ connections }),
+
+  // AgentMode × Canvas 集成：把 agent 事件投影到 7 列画布节点
+  addAgentNodes: (input) => {
+    const state = get();
+    const { userGoal, plan, actions, observations, artifacts, pendingQuestion } = input;
+    const projectId = state.projectId || 'global';
+
+    const upsert = (id: string, taskType: TaskType, label: string, payload: Record<string, any>, status: 'pending' | 'running' | 'success' | 'failed' = 'pending') => {
+      const colX = AGENT_COL_X[taskType];
+      // 使用 get() 获取最新状态，确保同一 addAgentNodes 调用内的多次 upsert 能正确累加 colIndex
+      const live = get();
+      const existing = live.nodes.find((n) => n.id === id);
+      const override = live.nodeOverrides[id] || { dx: 0, dy: 0 };
+      const colIndex = live.nodes.filter(
+        (n) => n.type === 'agent_node' && (n as any)._agentTaskType === taskType && n.id !== id,
+      ).length;
+      const x = colX + override.dx;
+      const y = 0 + override.dy + colIndex * (AGENT_NODE_H + AGENT_ROW_GAP);
+      if (existing) {
+        set((s) => ({
+          nodes: s.nodes.map((n) =>
+            n.id === id
+              ? { ...n, _agentStatus: status, _agentPayload: payload, _agentLabel: label, _agentTaskType: taskType }
+              : n,
+          ),
+        }));
+      } else {
+        const node: CanvasNode = {
+          id,
+          type: 'agent_node',
+          x,
+          y,
+          w: AGENT_NODE_W,
+          h: AGENT_NODE_H,
+          _agentTaskType: taskType,
+          _agentStatus: status,
+          _agentPayload: payload,
+          _agentLabel: label,
+        } as any;
+        set((s) => ({ nodes: [...s.nodes, node] }));
+      }
+    };
+
+    if (userGoal) {
+      upsert(`agent-goal-${projectId}`, 'goal', userGoal.slice(0, 60), { text: userGoal });
+    }
+    if (plan && plan.length) {
+      upsert(`agent-plan-${projectId}`, 'plan', `计划 (${plan.length} 步)`, { plan });
+    }
+    actions.forEach((evt, i) => {
+      const id = `agent-action-${i}-${evt.timestamp || i}`;
+      upsert(id, 'action', (evt.payload as any)?.tool || `action ${i + 1}`, evt.payload || {}, 'success');
+    });
+    observations.forEach((evt, i) => {
+      const id = `agent-obs-${i}-${evt.timestamp || i}`;
+      upsert(id, 'observation', (evt.payload as any)?.tool || `obs ${i + 1}`, evt.payload || {}, 'success');
+    });
+    const flatArtifacts = Object.values(artifacts).flat() as ArtifactLite[];
+    flatArtifacts.forEach((item, i) => {
+      const id = `agent-artifact-${item.id || i}`;
+      upsert(id, 'artifact', (item.name as string) || (item.asset_kind as string) || '资产', item, 'success');
+    });
+    if (pendingQuestion) {
+      upsert(`agent-question-${projectId}`, 'question', '等待用户回答', pendingQuestion, 'running');
+    }
+  },
+
+  clearAgentNodes: () =>
+    set((s) => ({ nodes: s.nodes.filter((n) => n.type !== 'agent_node') })),
+
+  recordAgentNodeDrag: (nodeId, x, y) =>
+    set((s) => {
+      const node = s.nodes.find((n) => n.id === nodeId);
+      if (!node || node.type !== 'agent_node') return s;
+      const taskType = (node as any)._agentTaskType as TaskType;
+      const colX = AGENT_COL_X[taskType];
+      return {
+        nodeOverrides: { ...s.nodeOverrides, [nodeId]: { dx: x - colX, dy: y } },
+      };
+    }),
+
   reset: () =>
     set({
       nodes: [],
@@ -1449,6 +1554,7 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
       cascadeRunning: false,
       cascadeRunPath: [],
       cascadeNodeStatus: new Map(),
+      nodeOverrides: {},
     }),
 
   loadProject: (projectId: string) => {
