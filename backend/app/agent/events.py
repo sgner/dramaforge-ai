@@ -30,6 +30,11 @@ class EventType(str, Enum):
     TASK_DONE = "task_done"
     TASK_FAILED = "task_failed"
     STEP_RETRYING = "step_retrying"
+    # Spec B: 工具失败恢复
+    TOOL_RETRYING = "tool_retrying"
+    TOOL_FALLBACK_MODEL = "tool_fallback_model"
+    TOOL_ERROR = "tool_error"
+    TOOL_RESUMED = "tool_resumed"
 
 
 class AgentEvent:

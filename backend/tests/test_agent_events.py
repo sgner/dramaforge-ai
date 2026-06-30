@@ -109,3 +109,45 @@ def test_eventbus_unsubscribe_stops_delivery():
     e = AgentEvent(task_id="task_1", type=EventType.THOUGHT, payload={}, timestamp=1.0)
     asyncio.run(bus.publish(e))
     assert q.empty()
+
+
+class TestToolFailureRecoveryEvents:
+    """Spec B: 工具失败恢复相关事件类型。"""
+
+    def test_tool_retrying_event_type_exists(self):
+        """TOOL_RETRYING 事件类型存在。"""
+        assert EventType.TOOL_RETRYING.value == "tool_retrying"
+
+    def test_tool_fallback_model_event_type_exists(self):
+        """TOOL_FALLBACK_MODEL 事件类型存在。"""
+        assert EventType.TOOL_FALLBACK_MODEL.value == "tool_fallback_model"
+
+    def test_tool_error_event_type_exists(self):
+        """TOOL_ERROR 事件类型存在。"""
+        assert EventType.TOOL_ERROR.value == "tool_error"
+
+    def test_tool_resumed_event_type_exists(self):
+        """TOOL_RESUMED 事件类型存在。"""
+        assert EventType.TOOL_RESUMED.value == "tool_resumed"
+
+    def test_tool_error_event_sse_format(self):
+        """tool_error 事件转 SSE 格式正确。"""
+        event = AgentEvent(
+            task_id="t1",
+            type=EventType.TOOL_ERROR,
+            payload={"tool": "generate_image", "error": "timeout", "step_id": "3"},
+        )
+        sse = event.to_sse()
+        assert "event: tool_error" in sse
+        assert '"tool": "generate_image"' in sse
+
+    def test_tool_resumed_event_sse_format(self):
+        """tool_resumed 事件转 SSE 格式正确。"""
+        event = AgentEvent(
+            task_id="t1",
+            type=EventType.TOOL_RESUMED,
+            payload={"step_id": "3", "action": "retry"},
+        )
+        sse = event.to_sse()
+        assert "event: tool_resumed" in sse
+        assert '"action": "retry"' in sse
