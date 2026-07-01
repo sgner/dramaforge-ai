@@ -11,14 +11,12 @@ describe('<ThoughtStream floating />', () => {
     useAgentStore.getState().reset();
   });
 
-  it('renders as fixed positioned panel when floating=true', () => {
+  it('renders as a positioned panel when floating=true', () => {
     render(<ThoughtStream floating open={true} onClose={vi.fn()} />);
     const panel = screen.getByTestId('thought-stream-floating');
     expect(panel).toBeInTheDocument();
-    const style = (panel as HTMLElement).style;
-    expect(style.position).toBe('fixed');
-    expect(style.top).toBeTruthy();
-    expect(style.right).toBeTruthy();
+    // 位置由 CSS class .thought-stream-floating 控制（absolute, top: 64px, right: 14px）
+    expect(panel.className).toContain('thought-stream-floating');
   });
 
   it('hides panel when open=false', () => {

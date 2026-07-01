@@ -1,10 +1,11 @@
 /**
- * ToolPalette — 展示 agent 可用的 18 个工具（按 6 类分组）。
+ * ToolPalette — 展示 agent 可用的工具（按 6 类分组）。
  *
  * 数据源：硬编码（与 backend/app/agent/tools/__init__.py:ALL_TOOLS 一一对应）。
  * 后续可改为拉取 /api/agent/tools。
  */
 import React from 'react';
+import './agent.css';
 
 export interface PaletteTool {
   name: string;
@@ -43,21 +44,12 @@ export const PALETTE_TOOLS: PaletteTool[] = [
 const CATEGORIES: PaletteTool['category'][] = ['planning', 'llm', 'image', 'video', 'audio', 'asset'];
 
 const CATEGORY_LABELS: Record<PaletteTool['category'], string> = {
-  planning: '📋 规划',
-  llm: '🧠 文本生成',
-  image: '🎨 图像',
-  video: '🎬 视频',
-  audio: '🔊 音频',
-  asset: '💾 资产',
-};
-
-const CATEGORY_COLORS: Record<PaletteTool['category'], string> = {
-  planning: '#6366f1',
-  llm: '#8b5cf6',
-  image: '#ec4899',
-  video: '#f43f5e',
-  audio: '#f59e0b',
-  asset: '#10b981',
+  planning: '规划',
+  llm: '文本生成',
+  image: '图像',
+  video: '视频',
+  audio: '音频',
+  asset: '资产',
 };
 
 export const ToolPalette: React.FC<{ tools?: PaletteTool[] }> = ({ tools }) => {
@@ -68,78 +60,36 @@ export const ToolPalette: React.FC<{ tools?: PaletteTool[] }> = ({ tools }) => {
   }));
 
   return (
-    <div
-      data-testid="tool-palette"
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 12,
-        padding: 12,
-        fontSize: 12,
-        height: '100%',
-        overflowY: 'auto',
-      }}
-    >
+    <div className="tool-palette" data-testid="tool-palette">
       {byCat.map(({ category, tools }) => (
         <div
           key={category}
           data-testid={`tool-palette-category-${category}`}
-          style={{
-            border: '1px solid rgba(0,0,0,0.08)',
-            borderRadius: 8,
-            padding: 8,
-          }}
+          className="tool-palette-category"
         >
-          <div
-            style={{
-              fontSize: 11,
-              fontWeight: 600,
-              color: CATEGORY_COLORS[category],
-              marginBottom: 6,
-              textTransform: 'uppercase',
-              letterSpacing: 0.5,
-            }}
-          >
-            {CATEGORY_LABELS[category]} ({tools.length})
+          <div className="tool-palette-category-head">
+            <span>{CATEGORY_LABELS[category]}</span>
+            <span className="tool-palette-category-count">{tools.length}</span>
           </div>
-          {tools.map((t) => (
-            <div
-              key={t.name}
-              data-testid="tool-palette-item"
-              style={{
-                padding: '6px 8px',
-                marginBottom: 4,
-                background: 'rgba(0,0,0,0.02)',
-                borderRadius: 4,
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: 6,
-              }}
-            >
-              <code style={{ fontSize: 10, color: '#475569', flex: 1 }}>
-                <strong style={{ color: '#0f172a' }}>{t.name}</strong>
-                <div style={{ fontSize: 10, color: '#64748b', marginTop: 2, fontFamily: 'inherit' }}>
-                  {t.description}
+          <div className="tool-palette-list">
+            {tools.map((t) => (
+              <div key={t.name} className="tool-palette-item" data-testid="tool-palette-item">
+                <div className="tool-palette-item-body">
+                  <div className="tool-palette-item-name">{t.name}</div>
+                  <div className="tool-palette-item-desc">{t.description}</div>
                 </div>
-              </code>
-              {t.requiresApproval && (
-                <span
-                  data-testid="tool-palette-requires-approval"
-                  title="需用户审核"
-                  style={{
-                    fontSize: 9,
-                    padding: '2px 4px',
-                    background: 'rgba(245,158,11,0.15)',
-                    color: '#b45309',
-                    borderRadius: 3,
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  需审核
-                </span>
-              )}
-            </div>
-          ))}
+                {t.requiresApproval && (
+                  <span
+                    data-testid="tool-palette-requires-approval"
+                    className="tool-palette-badge requires"
+                    title="需用户审核"
+                  >
+                    需审核
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
       ))}
     </div>

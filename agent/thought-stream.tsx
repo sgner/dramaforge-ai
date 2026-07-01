@@ -9,7 +9,9 @@
  * 2. floating 模式：右上角浮层，open 控制显隐，onClose 处理关闭
  */
 import React from 'react';
+import { X } from 'lucide-react';
 import { useAgentStore, AgentEventLike } from './use-agent-store';
+import './agent.css';
 
 function fmtPayload(ev: AgentEventLike): string {
   const p = ev.payload || {};
@@ -49,54 +51,26 @@ const ThoughtStreamBody: React.FC = () => {
   return (
     <div
       data-testid="thought-stream"
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 12,
-        padding: 12,
-        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-        fontSize: 12,
-        height: '100%',
-        overflowY: 'auto',
-      }}
+      className="thought-stream-body"
+      style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}
     >
       {/* 状态指示器 */}
       {status === 'running' && (
         <div
           data-testid="thought-stream-running"
-          style={{
-            padding: '6px 10px',
-            borderRadius: 6,
-            background: 'rgba(59,130,246,0.1)',
-            color: '#2563eb',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-          }}
+          className="thought-stream-status"
         >
-          <span
-            style={{
-              width: 8,
-              height: 8,
-              borderRadius: '50%',
-              background: '#2563eb',
-              animation: 'pulse 1.5s ease-in-out infinite',
-            }}
-          />
+          <span className="thought-stream-dot" />
           agent 正在工作…
         </div>
       )}
       {status === 'failed' && (
         <div
           data-testid="thought-stream-failed"
-          style={{
-            padding: '6px 10px',
-            borderRadius: 6,
-            background: 'rgba(239,68,68,0.1)',
-            color: '#dc2626',
-          }}
+          className="thought-stream-status failed"
         >
-          ✗ 任务失败
+          <span className="thought-stream-dot" style={{ background: 'var(--danger)', animation: 'none' }} />
+          任务失败
         </div>
       )}
 
@@ -104,7 +78,7 @@ const ThoughtStreamBody: React.FC = () => {
       {isEmpty && (
         <div
           data-testid="thought-stream-empty"
-          style={{ color: '#94a3b8', textAlign: 'center', padding: 24 }}
+          className="thought-stream-empty"
         >
           等待 agent 开始工作…
         </div>
@@ -114,26 +88,19 @@ const ThoughtStreamBody: React.FC = () => {
       {latestThought && (
         <div
           data-testid="thought-stream-latest"
-          style={{
-            padding: 10,
-            borderRadius: 8,
-            background: 'rgba(99,102,241,0.08)',
-            border: '1px solid rgba(99,102,241,0.2)',
-          }}
+          className="thought-stream-latest"
         >
-          <div style={{ fontSize: 10, color: '#6366f1', marginBottom: 4, textTransform: 'uppercase' }}>
-            💭 最近的思考
-          </div>
-          <div>{fmtPayload(latestThought)}</div>
+          <div className="thought-stream-latest-label">最近的思考</div>
+          <div className="thought-stream-latest-text">{fmtPayload(latestThought)}</div>
         </div>
       )}
 
       {/* 完整 stream（按时间倒序展开） */}
       {!isEmpty && (
         <>
-          <Section title="🤔 思考" testId="thought-stream-thoughts" items={thoughts} />
-          <Section title="⚡ 动作" testId="thought-stream-actions" items={actions} />
-          <Section title="👁 观察" testId="thought-stream-observations" items={observations} />
+          <Section title="思考" testId="thought-stream-thoughts" items={thoughts} />
+          <Section title="动作" testId="thought-stream-actions" items={actions} />
+          <Section title="观察" testId="thought-stream-observations" items={observations} />
         </>
       )}
     </div>
@@ -146,48 +113,22 @@ export const ThoughtStream: React.FC<ThoughtStreamProps> = ({ floating, open, on
     return (
       <div
         data-testid="thought-stream-floating"
-        style={{
-          position: 'fixed',
-          top: 16,
-          right: 16,
-          width: 320,
-          maxHeight: '60vh',
-          background: 'white',
-          border: '1px solid #e2e8f0',
-          borderRadius: 10,
-          boxShadow: '0 4px 16px rgba(0,0,0,0.08)',
-          zIndex: 50,
-          display: 'flex',
-          flexDirection: 'column',
-          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-          fontSize: 12,
-          overflow: 'hidden',
-        }}
+        className="thought-stream-floating"
       >
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '6px 10px',
-            borderBottom: '1px solid #e2e8f0',
-            background: 'rgba(99,102,241,0.06)',
-            fontWeight: 600,
-          }}
-        >
-          <span>💭 ThoughtStream</span>
+        <div className="thought-stream-head">
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            💭 ThoughtStream
+          </span>
           <button
             data-testid="thought-stream-floating-close"
             type="button"
             aria-label="close"
             onClick={onClose}
-            style={{ background: 'none', border: 0, cursor: 'pointer', fontSize: 14, lineHeight: 1 }}
           >
-            ✕
+            <X size={14} />
           </button>
         </div>
-        <div style={{ overflowY: 'auto', flex: 1 }}>
-          {/* 复用原 render 内容 */}
+        <div className="thought-stream-body-wrap" style={{ overflowY: 'auto', flex: 1, minHeight: 0 }}>
           <ThoughtStreamBody />
         </div>
       </div>
@@ -203,36 +144,17 @@ const Section: React.FC<{
 }> = ({ title, testId, items }) => {
   if (items.length === 0) {
     return (
-      <div data-testid={testId} style={{ color: '#94a3b8', fontSize: 11 }}>
-        {title} <em>(empty)</em>
+      <div data-testid={testId} className="thought-stream-section">
+        <div className="thought-stream-section-head">{title} <span style={{ color: 'var(--faint)', textTransform: 'none', fontWeight: 700 }}>(empty)</span></div>
       </div>
     );
   }
   return (
-    <div data-testid={testId}>
-      <div
-        style={{
-          fontSize: 10,
-          color: '#94a3b8',
-          textTransform: 'uppercase',
-          marginBottom: 6,
-          letterSpacing: 0.5,
-        }}
-      >
-        {title} ({items.length})
-      </div>
+    <div data-testid={testId} className="thought-stream-section">
+      <div className="thought-stream-section-head">{title} ({items.length})</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         {items.map((ev, i) => (
-          <div
-            key={i}
-            style={{
-              padding: '4px 8px',
-              background: 'rgba(0,0,0,0.03)',
-              borderRadius: 4,
-              fontSize: 11,
-              color: '#334155',
-            }}
-          >
+          <div key={i} className="thought-stream-item">
             {fmtPayload(ev)}
           </div>
         ))}

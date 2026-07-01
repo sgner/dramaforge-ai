@@ -9,6 +9,7 @@
  *   - ThoughtStream 浮层右上，ToolPalette 抽屉右侧（默认关闭）
  */
 import React, { useEffect, useRef, useState } from 'react';
+import { X } from 'lucide-react';
 import { useAgentStore } from './use-agent-store';
 import { useAgentStream } from './use-agent-stream';
 import { useAgentTools } from './use-agent-tools';
@@ -19,6 +20,7 @@ import { ErrorRecoveryCard } from './error-recovery-card';
 import { api } from '@/services/apiClient';
 import { InfiniteCanvas } from '@/components/infinite-canvas/InfiniteCanvas';
 import { useCanvasStore } from '@/components/infinite-canvas/use-canvas-store';
+import './agent.css';
 
 export interface AgentModeProps {
   projectId: string;
@@ -42,7 +44,6 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
 
   const { tools, isLoading: toolsLoading } = useAgentTools();
   useAgentStream(taskId);
-
   // 跟踪上一次投影到画布的相关切片引用（thoughts/actions/observations/plan/artifacts/pendingQuestion）。
   // 只有这 6 个 slice 的引用变化才需要重跑 project()。
   // 其他 slice（totalCostUsd/totalTokens/error/pendingPlan/taskId/status）变化不触发，避免无意义的
@@ -131,12 +132,16 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
     >
       <aside
         data-testid="agent-mode-left-aside"
-        style={{ borderRight: '1px solid var(--line)', background: 'var(--panel)', overflowY: 'auto' }}
+        className="agent-aside"
       >
-        <div style={{ padding: 8 }}>
-          <h3 style={{ margin: '6px 4px 10px', fontSize: 13, fontWeight: 700, color: 'var(--strong)' }}>任务</h3>
-          <TaskList projectId={projectId} onSelect={(id) => setTask(id, 'running')} />
+        <div className="agent-aside-head">
+          <span className="agent-aside-title">任务</span>
         </div>
+        <TaskList
+          projectId={projectId}
+          onSelect={(id) => setTask(id, 'running')}
+          selectedId={taskId}
+        />
       </aside>
       <main style={{ position: 'relative', overflow: 'hidden', background: 'var(--canvas-bg)' }}>
         <div
@@ -205,25 +210,19 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
         {error && (
           <div
             data-testid="agent-mode-error"
-            style={{
-              position: 'absolute',
-              top: 64,
-              left: 14,
-              color: '#ef4444',
-              background: 'var(--panel)',
-              border: '1px solid #ef4444',
-              padding: '6px 10px',
-              borderRadius: 999,
-              zIndex: 20,
-              fontSize: 12,
-              boxShadow: '0 8px 24px var(--shadow)',
-            }}
+            className="agent-mode-error"
           >
             {error}
           </div>
         )}
-        <div data-testid="agent-mode-canvas-container" style={{ position: 'absolute', inset: 0 }}>
-          <InfiniteCanvas projectId={projectId} />
+        <div data-testid="agent-mode-canvas-container" style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}>
+          <style>{`
+            [data-testid="agent-mode-canvas-container"] .canvas-root {
+              width: 100% !important;
+              height: 100% !important;
+            }
+          `}</style>
+          <InfiniteCanvas projectId={projectId} hideToolbar />
           <ErrorRecoveryCard />
         </div>
 
@@ -233,24 +232,29 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
         {/* 抽屉 ToolPalette — 始终在 DOM（保持老测试兼容），但通过 data-testid 和位置控制可见性 */}
         <aside
           data-testid={toolDrawerOpen ? 'agent-mode-tool-drawer-open' : undefined}
-          className="canvas-panel"
-          style={{
-            position: 'absolute',
-            top: 64,
-            right: toolDrawerOpen ? 14 : -10000,
-            width: 280,
-            maxHeight: 'calc(100vh - 88px)',
-            borderRadius: 14,
-            zIndex: 30,
-            overflowY: 'auto',
-            padding: 10,
-            pointerEvents: toolDrawerOpen ? 'auto' : 'none',
-            background: 'var(--panel)',
-            boxShadow: '0 8px 24px var(--shadow)',
-          }}
+          className={`agent-tool-drawer ${toolDrawerOpen ? '' : 'closed'}`}
           aria-hidden={!toolDrawerOpen}
         >
-          {toolsLoading ? <div style={{ color: 'var(--muted)', fontSize: 12 }}>loading tools…</div> : <ToolPalette tools={tools} />}
+          <div className="agent-tool-drawer-head">
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              🔧 工具面板
+            </span>
+            <button
+              data-testid="agent-mode-tool-drawer-close"
+              type="button"
+              aria-label="close"
+              onClick={() => setToolDrawerOpen(false)}
+            >
+              <X size={14} />
+            </button>
+          </div>
+          <div className="agent-tool-drawer-body">
+            {toolsLoading ? (
+              <div className="agent-tool-drawer-loading">loading tools…</div>
+            ) : (
+              <ToolPalette tools={tools} />
+            )}
+          </div>
         </aside>
       </main>
     </div>

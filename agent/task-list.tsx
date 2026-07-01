@@ -1,17 +1,15 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { RotateCw } from 'lucide-react';
 import { api, type AgentTaskOut } from '@/services/apiClient';
-
-const STATUS_COLORS: Record<string, string> = {
-  idle: '#94a3b8', pending: '#f59e0b', running: '#2563eb',
-  paused: '#a855f7', done: '#10b981', failed: '#ef4444',
-};
+import './agent.css';
 
 export interface TaskListProps {
   projectId: string;
   onSelect: (taskId: string) => void;
+  selectedId?: string | null;
 }
 
-export const TaskList: React.FC<TaskListProps> = ({ projectId, onSelect }) => {
+export const TaskList: React.FC<TaskListProps> = ({ projectId, onSelect, selectedId }) => {
   const [tasks, setTasks] = useState<AgentTaskOut[] | null>(null);
 
   const load = useCallback(async () => {
@@ -24,36 +22,52 @@ export const TaskList: React.FC<TaskListProps> = ({ projectId, onSelect }) => {
   }, [load]);
 
   if (tasks === null) {
-    return <div data-testid="task-list-loading">loading…</div>;
+    return (
+      <div data-testid="task-list-loading" className="task-list-loading">
+        loading…
+      </div>
+    );
   }
   if (tasks.length === 0) {
     return (
-      <div data-testid="task-list">
-        <button data-testid="task-list-refresh" onClick={load}>刷新</button>
-        <div data-testid="task-list-empty">还没有任务</div>
+      <div className="task-list" data-testid="task-list">
+        <div className="task-list-empty" data-testid="task-list-empty">
+          还没有任务
+        </div>
+        <button
+          data-testid="task-list-refresh"
+          className="task-list-refresh"
+          onClick={load}
+          style={{ alignSelf: 'flex-start' }}
+        >
+          <RotateCw size={11} /> 刷新
+        </button>
       </div>
     );
   }
   return (
-    <div data-testid="task-list">
-      <button data-testid="task-list-refresh" onClick={load}>刷新</button>
+    <div className="task-list" data-testid="task-list">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '2px 4px 6px' }}>
+        <span style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 700, letterSpacing: 0.3, textTransform: 'uppercase' }}>
+          {tasks.length} 个任务
+        </span>
+        <button data-testid="task-list-refresh" className="task-list-refresh" onClick={load}>
+          <RotateCw size={11} /> 刷新
+        </button>
+      </div>
       {tasks.map((t) => (
         <div
           key={t.id}
           data-testid={`task-list-row-${t.id}`}
           onClick={() => onSelect(t.id)}
-          style={{ padding: 6, borderBottom: '1px solid #e2e8f0', cursor: 'pointer' }}
+          className={`task-list-row ${selectedId === t.id ? 'active' : ''}`}
         >
           <span
             data-testid={`task-list-status-${t.status}`}
-            style={{
-              background: STATUS_COLORS[t.status] || '#94a3b8',
-              color: 'white', padding: '1px 6px', borderRadius: 3, fontSize: 10, marginRight: 6,
-            }}
-          >
-            {t.status}
-          </span>
-          {t.user_goal}
+            className={`task-list-status ${t.status}`}
+            title={t.status}
+          />
+          <span className="task-list-goal">{t.user_goal || '(空目标)'}</span>
         </div>
       ))}
     </div>
