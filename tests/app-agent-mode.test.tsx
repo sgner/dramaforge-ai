@@ -1,17 +1,34 @@
 /**
- * TDD: App.tsx — Agent Mode 切换功能。
- * - 验证 "Agent Mode" 按钮在 header 中存在
+ * TDD: App.tsx — Agent Mode 入口现在在 InfiniteCanvas 工具栏内。
+ * - 验证 CanvasToolbar 渲染时显示 "Agent" 入口按钮
  * - 验证点击后切换到 AgentMode 视图
- * - 验证 "退出 Agent Mode" 按钮可返回
+ * - 验证 AgentMode 内 "退出" 按钮可返回
+ * - 验证 URL ?agent=1 时自动进入
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, cleanup, act } from '@testing-library/react';
 import App from '@/App';
 
-// mock 掉 storageService / 持久化，避免 localStorage 副作用
+const MOCK_PROJECT = {
+  id: 'proj-1',
+  name: 'Test Project',
+  style: 'cinematic-realistic',
+  language: 'zh',
+  mode: 'auto',
+  sourceType: 'idea',
+  createdAt: Date.now(),
+  status: 'idle',
+  stepStatus: 'idle',
+  progress: 0,
+  rawNovelText: '',
+  characters: [],
+  bigShots: [],
+};
+
+// mock 掉 storageService / 持久化，预置一个项目让 InfiniteCanvas 可以打开
 vi.mock('@/services/storageService', () => ({
   storageService: {
-    loadTasks: () => [],
+    loadTasks: () => [MOCK_PROJECT],
     loadFromBackup: () => [],
     saveTasks: () => undefined,
   },
@@ -29,35 +46,47 @@ vi.mock('@/services/apiClient', () => ({
   },
 }));
 
-describe('<App /> — Agent Mode 入口', () => {
+async function openCanvas() {
+  // 找到项目卡片并点击
+  const projectCard = screen.getByText('Test Project');
+  await act(async () => {
+    projectCard.click();
+  });
+}
+
+describe('<App /> — Agent Mode 入口（位于 Canvas 工具栏）', () => {
   beforeEach(() => {
     cleanup();
     localStorage.clear();
   });
 
-  it('在 header 中显示 "Agent Mode" 按钮', () => {
+  it('在项目列表页不应有 "Agent" 按钮（不在首页 header）', () => {
     render(<App />);
-    const btn = screen.getByTestId('enter-agent-mode');
-    expect(btn).toBeInTheDocument();
-    expect(btn.textContent).toContain('Agent Mode');
+    expect(screen.queryByTestId('enter-agent-mode')).toBeNull();
   });
 
-  it('点击 Agent Mode 按钮后渲染 AgentMode 画布（data-testid="agent-mode"）', async () => {
+  it('打开画布后，Canvas 工具栏显示 "Agent" 入口按钮', async () => {
     render(<App />);
-    // 初始不应有 agent-mode
+    await openCanvas();
+    const btn = screen.getByTestId('enter-agent-mode');
+    expect(btn).toBeInTheDocument();
+    expect(btn.textContent).toContain('Agent');
+  });
+
+  it('点击 Agent 按钮后渲染 AgentMode 画布（data-testid="agent-mode"）', async () => {
+    render(<App />);
+    await openCanvas();
     expect(screen.queryByTestId('agent-mode')).toBeNull();
-    // 点击
     await act(async () => {
       fireEvent.click(screen.getByTestId('enter-agent-mode'));
     });
-    // AgentMode 渲染
     expect(screen.getByTestId('agent-mode')).toBeInTheDocument();
-    // 退出按钮出现
     expect(screen.getByTestId('exit-agent-mode')).toBeInTheDocument();
   });
 
-  it('点击 "退出 Agent Mode" 后返回项目列表', async () => {
+  it('点击 AgentMode 内 "退出" 按钮后返回画布', async () => {
     render(<App />);
+    await openCanvas();
     await act(async () => {
       fireEvent.click(screen.getByTestId('enter-agent-mode'));
     });
@@ -66,17 +95,16 @@ describe('<App /> — Agent Mode 入口', () => {
       fireEvent.click(screen.getByTestId('exit-agent-mode'));
     });
     expect(screen.queryByTestId('agent-mode')).toBeNull();
-    // 重新出现 "Agent Mode" 入口按钮
+    // 重新出现 "Agent" 入口按钮（画布已恢复）
     expect(screen.getByTestId('enter-agent-mode')).toBeInTheDocument();
   });
 
   it('URL ?agent=1 时自动进入 Agent Mode（自动选/建一个任务）', async () => {
-    // 修改 URL（happy-dom 支持）
     window.history.pushState({}, '', '?agent=1');
     render(<App />);
-    // 等 useEffect 跑完
+    // 等待 useEffect 跑完 + storageService 加载 + state 流转
     await act(async () => {
-      await Promise.resolve();
+      await new Promise((r) => setTimeout(r, 200));
     });
     expect(screen.getByTestId('agent-mode')).toBeInTheDocument();
   });

@@ -42,7 +42,13 @@ import { createNode } from './use-canvas-store';
 import { useI18n } from '../../i18n';
 import './canvas.css';
 
-export const InfiniteCanvas: React.FC<{ onBack?: () => void; projectId?: string }> = React.memo(({ onBack, projectId }) => {
+export const InfiniteCanvas: React.FC<{
+  onBack?: () => void;
+  projectId?: string;
+  onAgentMode?: () => void;
+  agentModeActive?: boolean;
+  [key: string]: any;
+}> = React.memo(({ onBack, projectId, onAgentMode, agentModeActive, ...rest }) => {
   const boardRef = useRef<HTMLDivElement>(null);
   const worldRef = useRef<HTMLDivElement>(null);
   const { t } = useI18n();
@@ -793,6 +799,8 @@ export const InfiniteCanvas: React.FC<{ onBack?: () => void; projectId?: string 
           onToggleKnife={handleToggleKnife}
           onOpenApiSettings={() => setApiSettings({ open: true })}
           onBack={onBack}
+          onAgentMode={onAgentMode}
+          agentModeActive={agentModeActive}
         />
 
       <div ref={worldRef} className="canvas-world" style={worldStyle}>

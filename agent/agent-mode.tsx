@@ -126,76 +126,97 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
   return (
     <div
       data-testid="agent-mode"
+      className="canvas-board"
       style={{ display: 'grid', gridTemplateColumns: '300px 1fr', height: '100vh', position: 'relative' }}
     >
       <aside
         data-testid="agent-mode-left-aside"
-        style={{ borderRight: '1px solid #e2e8f0', overflowY: 'auto' }}
+        style={{ borderRight: '1px solid var(--line)', background: 'var(--panel)', overflowY: 'auto' }}
       >
         <div style={{ padding: 8 }}>
-          <h3>任务</h3>
+          <h3 style={{ margin: '6px 4px 10px', fontSize: 13, fontWeight: 700, color: 'var(--strong)' }}>任务</h3>
           <TaskList projectId={projectId} onSelect={(id) => setTask(id, 'running')} />
         </div>
       </aside>
-      <main style={{ position: 'relative', overflow: 'hidden' }}>
+      <main style={{ position: 'relative', overflow: 'hidden', background: 'var(--canvas-bg)' }}>
         <div
           data-testid="agent-mode-input-bar"
-          style={{
-            position: 'absolute',
-            top: 16,
-            left: 16,
-            right: 16,
-            display: 'flex',
-            gap: 8,
-            zIndex: 20,
-          }}
+          className="canvas-topbar"
+          style={{ padding: '10px 14px', zIndex: 40 }}
         >
-          <input
-            data-testid="agent-mode-input"
-            value={goal}
-            onChange={(e) => setGoal(e.target.value)}
-            placeholder="描述目标，例如：做一个 30 秒的雨夜短片"
-            style={{ flex: 1, padding: 8, borderRadius: 6, border: '1px solid #cbd5e1' }}
-          />
-          <button
-            data-testid="agent-mode-submit"
-            onClick={onSubmit}
-            disabled={submitting || !goal.trim()}
-            style={{ padding: '8px 16px', borderRadius: 6, border: 0, background: '#6366f1', color: 'white', cursor: 'pointer' }}
-          >
-            {submitting ? '创建中…' : '创建任务'}
-          </button>
-          <button
-            data-testid="agent-mode-thought-toggle"
-            type="button"
-            onClick={() => setThoughtOpen((v) => !v)}
-            style={{ padding: '8px 12px', borderRadius: 6, border: '1px solid #cbd5e1', background: 'white', cursor: 'pointer' }}
-            title="ThoughtStream"
-          >
-            💭
-          </button>
-          <button
-            data-testid="agent-mode-tool-drawer-toggle"
-            type="button"
-            onClick={() => setToolDrawerOpen((v) => !v)}
-            style={{ padding: '8px 12px', borderRadius: 6, border: '1px solid #cbd5e1', background: 'white', cursor: 'pointer' }}
-            title="ToolPalette"
-          >
-            🔧
-          </button>
+          <div className="canvas-panel" style={{ flex: 1, borderRadius: 999, padding: '4px 6px 4px 14px', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <input
+              data-testid="agent-mode-input"
+              value={goal}
+              onChange={(e) => setGoal(e.target.value)}
+              placeholder="描述目标，例如：做一个 30 秒的雨夜短片"
+              style={{ flex: 1, border: 0, outline: 'none', background: 'transparent', color: 'var(--text)', fontSize: 13 }}
+            />
+            <button
+              data-testid="agent-mode-submit"
+              onClick={onSubmit}
+              disabled={submitting || !goal.trim()}
+              className="tool-btn"
+              style={{
+                height: 28,
+                padding: '0 12px',
+                background: submitting || !goal.trim() ? 'var(--soft)' : 'var(--text)',
+                color: submitting || !goal.trim() ? 'var(--muted)' : 'var(--panel)',
+                borderColor: 'var(--text)',
+                fontWeight: 700,
+              }}
+            >
+              {submitting ? '创建中…' : '创建任务'}
+            </button>
+          </div>
+          <div className="canvas-panel" style={{ padding: 4, display: 'flex', gap: 4 }}>
+            <button
+              data-testid="agent-mode-thought-toggle"
+              type="button"
+              onClick={() => setThoughtOpen((v) => !v)}
+              className={`tool-btn ${thoughtOpen ? 'active' : ''}`}
+              title="ThoughtStream"
+            >
+              💭
+            </button>
+            <button
+              data-testid="agent-mode-tool-drawer-toggle"
+              type="button"
+              onClick={() => setToolDrawerOpen((v) => !v)}
+              className={`tool-btn ${toolDrawerOpen ? 'active' : ''}`}
+              title="ToolPalette"
+            >
+              🔧
+            </button>
+            <button
+              data-testid="exit-agent-mode"
+              type="button"
+              onClick={() => {
+                // 通知 App 层退出：在 window 上派发自定义事件，App 监听
+                window.dispatchEvent(new CustomEvent('agent-mode-exit'));
+              }}
+              className="tool-btn"
+              title="退出 Agent Mode"
+            >
+              ← 退出
+            </button>
+          </div>
         </div>
         {error && (
           <div
             data-testid="agent-mode-error"
             style={{
               position: 'absolute',
-              top: 72,
-              left: 16,
-              color: 'red',
-              background: 'rgba(254,226,226,0.95)',
+              top: 64,
+              left: 14,
+              color: '#ef4444',
+              background: 'var(--panel)',
+              border: '1px solid #ef4444',
               padding: '6px 10px',
-              borderRadius: 6,
+              borderRadius: 999,
               zIndex: 20,
+              fontSize: 12,
+              boxShadow: '0 8px 24px var(--shadow)',
             }}
           >
             {error}
@@ -212,24 +233,24 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
         {/* 抽屉 ToolPalette — 始终在 DOM（保持老测试兼容），但通过 data-testid 和位置控制可见性 */}
         <aside
           data-testid={toolDrawerOpen ? 'agent-mode-tool-drawer-open' : undefined}
+          className="canvas-panel"
           style={{
             position: 'absolute',
-            top: 72,
-            right: toolDrawerOpen ? 16 : -10000,
+            top: 64,
+            right: toolDrawerOpen ? 14 : -10000,
             width: 280,
-            maxHeight: 'calc(100vh - 96px)',
-            background: 'white',
-            border: '1px solid #e2e8f0',
-            borderRadius: 10,
-            boxShadow: toolDrawerOpen ? '0 4px 16px rgba(0,0,0,0.08)' : 'none',
+            maxHeight: 'calc(100vh - 88px)',
+            borderRadius: 14,
             zIndex: 30,
             overflowY: 'auto',
-            padding: 8,
+            padding: 10,
             pointerEvents: toolDrawerOpen ? 'auto' : 'none',
+            background: 'var(--panel)',
+            boxShadow: '0 8px 24px var(--shadow)',
           }}
           aria-hidden={!toolDrawerOpen}
         >
-          {toolsLoading ? <div>loading tools…</div> : <ToolPalette tools={tools} />}
+          {toolsLoading ? <div style={{ color: 'var(--muted)', fontSize: 12 }}>loading tools…</div> : <ToolPalette tools={tools} />}
         </aside>
       </main>
     </div>

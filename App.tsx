@@ -91,10 +91,9 @@ function AppContent() {
     }, 3000);
   }, []);
 
-  // Agent Mode 入口需要 activeTask：URL ?agent=1 时若没有活动任务，自动选/建一个。
-  useEffect(() => {
-    if (!agentMode) return;
-    if (activeTaskId) return;
+  // 点击 Canvas 工具栏的 Agent 按钮时：先确保有 activeTask，再进入 AgentMode。
+  const handleEnterAgentMode = useCallback(() => {
+    if (activeTaskId) { setAgentMode(true); return; }
     let targetId: string;
     if (tasks.length > 0) {
       targetId = tasks[0].id;
@@ -119,7 +118,32 @@ function AppContent() {
       targetId = newTask.id;
     }
     setActiveTaskId(targetId);
-  }, [agentMode, activeTaskId, tasks]);
+    setAgentMode(true);
+  }, [activeTaskId, tasks]);
+
+  // URL ?agent=1 启动时自动进入（等待 tasks 加载完，再决定用现有任务还是新建）
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (new URLSearchParams(window.location.search).get('agent') === '1') {
+      // 等 storageService 异步加载 tasks（首屏 useEffect）跑完，再触发
+      const timer = setTimeout(() => {
+        handleEnterAgentMode();
+      }, 50);
+      return () => clearTimeout(timer);
+    }
+    return undefined;
+  }, [handleEnterAgentMode]);
+
+  // 监听 AgentMode 派发的退出事件
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onExit = () => {
+      setAgentMode(false);
+      // 不清 activeTask：用户应当返回原来的画布继续工作
+    };
+    window.addEventListener('agent-mode-exit', onExit as EventListener);
+    return () => window.removeEventListener('agent-mode-exit', onExit as EventListener);
+  }, []);
 
   const triggerCelebration = useCallback((x: number, y: number) => {
     const id = Date.now();
@@ -315,18 +339,6 @@ function AppContent() {
     <div className="min-h-screen bg-[#f8fafc] text-[#111827] font-sans selection:bg-brand-600/20 overflow-x-hidden">
       <input type="file" accept="image/*" ref={charFileInputRef} onChange={handleRefFileChange} className="hidden" />
 
-      {agentMode && (
-        <div style={{ position: 'fixed', top: 12, right: 16, zIndex: 100, display: 'flex', gap: 8 }}>
-          <button
-            data-testid="exit-agent-mode"
-            onClick={() => { setAgentMode(false); setActiveTaskId(null); }}
-            style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid #cbd5e1', background: 'white', cursor: 'pointer', fontSize: 13, boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}
-          >
-            ← 退出 Agent Mode
-          </button>
-        </div>
-      )}
-
       {agentMode && activeTask ? (
         <AgentMode projectId={activeTask.id} />
       ) : (
@@ -347,42 +359,6 @@ function AppContent() {
             </h1>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              data-testid="enter-agent-mode"
-              onClick={() => {
-                let targetId = activeTaskId;
-                if (!targetId) {
-                  if (tasks.length > 0) {
-                    targetId = tasks[0].id;
-                  } else {
-                    const newTask: DramaTask = {
-                      id: genId(),
-                      name: 'Agent Demo',
-                      style: ArtStyle.REALISTIC,
-                      language: 'zh',
-                      mode: 'auto',
-                      sourceType: 'idea',
-                      createdAt: Date.now(),
-                      status: TaskStatus.IDLE,
-                      stepStatus: 'idle',
-                      progress: 0,
-                      rawNovelText: '',
-                      originalIdea: undefined,
-                      characters: [],
-                      bigShots: [],
-                    };
-                    setTasks(prev => [newTask, ...prev]);
-                    targetId = newTask.id;
-                  }
-                  setActiveTaskId(targetId);
-                }
-                setAgentMode(true);
-              }}
-              className="px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 bg-gradient-to-r from-indigo-500 to-purple-500 text-white hover:opacity-90 transition-all"
-            >
-              <Sparkles className="w-4 h-4" />
-              Agent Mode
-            </button>
             <button onClick={() => setIsSettingsOpen(true)} className="p-2 hover:bg-black/5 rounded-lg text-[#64748b] hover:text-[#111827] transition-all">
               <Settings className="w-5 h-5" />
             </button>
@@ -430,6 +406,8 @@ function AppContent() {
           <InfiniteCanvas
             projectId={activeTask.id}
             onBack={() => setActiveTaskId(null)}
+            onAgentMode={handleEnterAgentMode}
+            agentModeActive={agentMode}
             onStart={() => executeTaskStep(activeTask.id)}
             onRetry={() => executeTaskStep(activeTask.id, activeTask.failedStep)}
             onNext={() => proceedToNextStep(activeTask.id)}

@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react';
-import { Menu, X, Undo2, Scissors, Maximize, Frame, Library, Settings, Moon, Sun } from 'lucide-react';
+import { Menu, X, Undo2, Scissors, Maximize, Frame, Library, Settings, Moon, Sun, Sparkles } from 'lucide-react';
 import { useCanvasStore } from './use-canvas-store';
 import { CanvasTheme } from './types';
 import { useI18n } from '../../i18n';
@@ -11,10 +11,12 @@ interface ToolbarProps {
   onToggleKnife: () => void;
   onOpenApiSettings?: () => void;
   onBack?: () => void;
+  onAgentMode?: () => void;
+  agentModeActive?: boolean;
 }
 
 export const CanvasToolbar: React.FC<ToolbarProps> = React.memo(
-  ({ onUndo, onFitView, knifeMode, onToggleKnife, onOpenApiSettings, onBack }) => {
+  ({ onUndo, onFitView, knifeMode, onToggleKnife, onOpenApiSettings, onBack, onAgentMode, agentModeActive }) => {
     const { t } = useI18n();
     const theme = useCanvasStore((s) => s.theme);
     const setTheme = useCanvasStore((s) => s.setTheme);
@@ -105,6 +107,16 @@ export const CanvasToolbar: React.FC<ToolbarProps> = React.memo(
                 title={t('canvasToolbarApiSettings')}
               >
                 <Settings size={14} /> API
+              </button>
+            )}
+            {onAgentMode && (
+              <button
+                className={`tool-btn ${agentModeActive ? 'active' : ''}`}
+                onClick={onAgentMode}
+                title="Agent Mode"
+                data-testid="enter-agent-mode"
+              >
+                <Sparkles size={14} /> Agent
               </button>
             )}
             <button
