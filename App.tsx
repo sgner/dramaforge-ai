@@ -20,6 +20,7 @@ import { storageService } from './services/storageService';
 import { useTaskExecutor } from './hooks/useTaskExecutor';
 import { useTaskActions } from './hooks/useTaskActions';
 import { I18nProvider, useI18n } from './i18n';
+import { AgentMode } from './agent/agent-mode';
 
 const STORAGE_KEY_TASKS = 'dramaforge_tasks';
 const STORAGE_KEY_LANG = 'dramaforge_language';
@@ -72,6 +73,10 @@ function AppContent() {
   const [pageKey, setPageKey] = useState(0);
   const [newProjectName, setNewProjectName] = useState('');
   const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false);
+  const [agentMode, setAgentMode] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return new URLSearchParams(window.location.search).get('agent') === '1';
+  });
   const toastIdRef = useRef(0);
   const prevTaskStatuses = useRef<Record<string, TaskStatus>>({});
 
@@ -85,6 +90,36 @@ function AppContent() {
       }, 300);
     }, 3000);
   }, []);
+
+  // Agent Mode 入口需要 activeTask：URL ?agent=1 时若没有活动任务，自动选/建一个。
+  useEffect(() => {
+    if (!agentMode) return;
+    if (activeTaskId) return;
+    let targetId: string;
+    if (tasks.length > 0) {
+      targetId = tasks[0].id;
+    } else {
+      const newTask: DramaTask = {
+        id: genId(),
+        name: 'Agent Demo',
+        style: ArtStyle.REALISTIC,
+        language: 'zh',
+        mode: 'auto',
+        sourceType: 'idea',
+        createdAt: Date.now(),
+        status: TaskStatus.IDLE,
+        stepStatus: 'idle',
+        progress: 0,
+        rawNovelText: '',
+        originalIdea: undefined,
+        characters: [],
+        bigShots: [],
+      };
+      setTasks(prev => [newTask, ...prev]);
+      targetId = newTask.id;
+    }
+    setActiveTaskId(targetId);
+  }, [agentMode, activeTaskId, tasks]);
 
   const triggerCelebration = useCallback((x: number, y: number) => {
     const id = Date.now();
@@ -280,7 +315,22 @@ function AppContent() {
     <div className="min-h-screen bg-[#f8fafc] text-[#111827] font-sans selection:bg-brand-600/20 overflow-x-hidden">
       <input type="file" accept="image/*" ref={charFileInputRef} onChange={handleRefFileChange} className="hidden" />
 
-      {/* Subtle ambient background */}
+      {agentMode && (
+        <div style={{ position: 'fixed', top: 12, right: 16, zIndex: 100, display: 'flex', gap: 8 }}>
+          <button
+            data-testid="exit-agent-mode"
+            onClick={() => { setAgentMode(false); setActiveTaskId(null); }}
+            style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid #cbd5e1', background: 'white', cursor: 'pointer', fontSize: 13, boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}
+          >
+            ← 退出 Agent Mode
+          </button>
+        </div>
+      )}
+
+      {agentMode && activeTask ? (
+        <AgentMode projectId={activeTask.id} />
+      ) : (
+        <>
       <div className="fixed inset-0 z-0 pointer-events-none">
         <div className="absolute inset-0" style={{ background: 'radial-gradient(ellipse 80% 50% at 50% -20%, rgba(17,24,39,0.03), transparent)' }} />
       </div>
@@ -297,6 +347,42 @@ function AppContent() {
             </h1>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              data-testid="enter-agent-mode"
+              onClick={() => {
+                let targetId = activeTaskId;
+                if (!targetId) {
+                  if (tasks.length > 0) {
+                    targetId = tasks[0].id;
+                  } else {
+                    const newTask: DramaTask = {
+                      id: genId(),
+                      name: 'Agent Demo',
+                      style: ArtStyle.REALISTIC,
+                      language: 'zh',
+                      mode: 'auto',
+                      sourceType: 'idea',
+                      createdAt: Date.now(),
+                      status: TaskStatus.IDLE,
+                      stepStatus: 'idle',
+                      progress: 0,
+                      rawNovelText: '',
+                      originalIdea: undefined,
+                      characters: [],
+                      bigShots: [],
+                    };
+                    setTasks(prev => [newTask, ...prev]);
+                    targetId = newTask.id;
+                  }
+                  setActiveTaskId(targetId);
+                }
+                setAgentMode(true);
+              }}
+              className="px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 bg-gradient-to-r from-indigo-500 to-purple-500 text-white hover:opacity-90 transition-all"
+            >
+              <Sparkles className="w-4 h-4" />
+              Agent Mode
+            </button>
             <button onClick={() => setIsSettingsOpen(true)} className="p-2 hover:bg-black/5 rounded-lg text-[#64748b] hover:text-[#111827] transition-all">
               <Settings className="w-5 h-5" />
             </button>
@@ -650,9 +736,11 @@ function AppContent() {
                   height: 4 + Math.random() * 4,
                 }}
               />
-            );
-          })}
+          );
+        })}
         </div>
+      )}
+        </>
       )}
     </div>
   );
