@@ -1,19 +1,31 @@
-"""Tests for app.agent.llm_factory — env-based LLMProviderConfig loader.
+"""Tests for app.agent.llm_factory — env-based LLMProviderConfig loader
++ select_llm_for_task factory with stub fallback.
 
 Covers:
 - Short env mode (LLM_API_KEY + LLM_BASE_URL + LLM_MODEL) → single provider
 - Long env mode (LLM_PROVIDERS_JSON) → multiple providers
 - Missing env → empty list (no exception)
 - Partial short env → empty list (must not guess fields)
+- Malformed JSON → empty list (no exception)
+
+select_llm_for_task:
+- env 命中 provider_id → 返回 OpenAICompatibleLLMClient (mode=real)
+- env 没命中 → 回 DevScriptedLLM (mode=stub, reason 非 None)
+- env 完全没配 → 回 DevScriptedLLM (mode=stub, reason 非 None)
+- task_provider_id=None → 静默回 DevScriptedLLM (mode=stub, reason=None)
+- task_model_id 覆盖 config.default_model
 """
 import json
 
 import pytest
 
+from app.agent.dev_scripted_llm import DevScriptedLLM
 from app.agent.llm_factory import (
     LLMProviderConfig,
     load_llm_configs_from_env,
+    select_llm_for_task,
 )
+from app.agent.openai_llm_client import OpenAICompatibleLLMClient
 
 
 def test_load_single_provider_from_short_env(monkeypatch):
@@ -85,3 +97,53 @@ def test_malformed_json_returns_empty(monkeypatch):
     configs = load_llm_configs_from_env()
 
     assert configs == []
+
+
+# ========================
+# select_llm_for_task
+# ========================
+
+
+def test_select_returns_real_llm_when_provider_match():
+    """env 配了 openai，task_provider_id='openai' → 返回 OpenAICompatibleLLMClient。"""
+    configs = [LLMProviderConfig("openai", "https://api.openai.com", "sk-1", "gpt-4o-mini")]
+    llm, mode, reason = select_llm_for_task("openai", configs)
+    assert mode == "real"
+    assert reason is None
+    assert isinstance(llm, OpenAICompatibleLLMClient)
+    assert llm.model == "gpt-4o-mini"
+
+
+def test_select_falls_back_to_stub_when_provider_not_in_env():
+    """task_provider_id 不在 env configs 里 → 退回 stub，reason 不为 None。"""
+    configs = [LLMProviderConfig("openai", "https://api.openai.com", "sk-1", "gpt-4o-mini")]
+    llm, mode, reason = select_llm_for_task("deepseek", configs)
+    assert mode == "stub"
+    assert reason is not None
+    assert "deepseek" in reason.lower() or "not found" in reason.lower()
+    assert isinstance(llm, DevScriptedLLM)
+
+
+def test_select_falls_back_to_stub_when_no_env_at_all():
+    """configs 为空且 task_provider_id 不为 None → 退回 stub，reason 提示未配置。"""
+    llm, mode, reason = select_llm_for_task("openai", [])
+    assert mode == "stub"
+    assert reason is not None
+    assert isinstance(llm, DevScriptedLLM)
+
+
+def test_select_returns_stub_silently_when_task_provider_id_is_none():
+    """task_provider_id 为 None（用户没选）→ 直接 stub，reason 为 None。"""
+    llm, mode, reason = select_llm_for_task(None, [])
+    assert mode == "stub"
+    assert reason is None
+    assert isinstance(llm, DevScriptedLLM)
+
+
+def test_select_uses_task_model_id_override():
+    """如果 task 显式指定 model_id，应覆盖 config 的 default_model。"""
+    configs = [LLMProviderConfig("openai", "https://api.openai.com", "sk-1", "gpt-4o-mini")]
+    llm, mode, _ = select_llm_for_task("openai", configs, task_model_id="gpt-4o")
+    assert mode == "real"
+    assert isinstance(llm, OpenAICompatibleLLMClient)
+    assert llm.model == "gpt-4o"
