@@ -151,34 +151,30 @@ def test_select_uses_task_model_id_override():
 
 
 # ========================
-# load_llm_configs(db) — DB-first, env-fallback
+# load_llm_configs(db) — DB 唯一数据源（env fallback 已移除）
 # ========================
 
 
-def test_load_llm_configs_db_empty_falls_back_to_env(monkeypatch):
-    """DB 为空 → 用 env 短模式。"""
+def test_load_llm_configs_db_empty_returns_empty(monkeypatch):
+    """DB 为空 → 返回 []（env fallback 已移除，统一 DB 唯一数据源）。"""
+    # 故意设 env：但因 DB 空，env 不应被读
     monkeypatch.setenv("LLM_API_KEY", "sk-env-1")
     monkeypatch.setenv("LLM_BASE_URL", "https://api.openai.com")
     monkeypatch.setenv("LLM_MODEL", "gpt-4o-mini")
 
-    # 用一个真实但空 DB session
     from app.database import Base, engine, SessionLocal
     from app.models import LLMProviderConfig as Orm
     Base.metadata.create_all(bind=engine)
     with SessionLocal() as s:
         s.query(Orm).delete()
         s.commit()
-        s.add_all([])  # 留空
-        s.commit()
         configs = load_llm_configs(s)
 
-    assert len(configs) == 1
-    assert configs[0].provider_id == "openai"
-    assert configs[0].api_key == "sk-env-1"
+    assert configs == []
 
 
 def test_load_llm_configs_db_rows_override_env(monkeypatch):
-    """DB 有行 → 优先用 DB，env 完全被忽略。"""
+    """DB 有行 → 用 DB，env 完全被忽略。"""
     monkeypatch.setenv("LLM_API_KEY", "sk-env-1")
     monkeypatch.setenv("LLM_BASE_URL", "https://api.openai.com")
     monkeypatch.setenv("LLM_MODEL", "gpt-4o-mini")
@@ -203,12 +199,11 @@ def test_load_llm_configs_db_rows_override_env(monkeypatch):
     assert configs[0].default_model == "deepseek-chat"
 
 
-def test_load_llm_configs_no_db_falls_back_to_env(monkeypatch):
-    """db=None 时直接用 env。"""
+def test_load_llm_configs_no_db_returns_empty(monkeypatch):
+    """db=None → 直接返回 []，不读 env。"""
     monkeypatch.setenv("LLM_API_KEY", "sk-env-only")
     monkeypatch.setenv("LLM_BASE_URL", "https://api.openai.com")
     monkeypatch.setenv("LLM_MODEL", "gpt-4o-mini")
 
     configs = load_llm_configs(None)
-    assert len(configs) == 1
-    assert configs[0].api_key == "sk-env-only"
+    assert configs == []
