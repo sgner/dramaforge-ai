@@ -20,6 +20,7 @@ from ..agent.memory import AgentMemory
 from ..agent.runtime import AgentRuntime
 from ..agent.tools import build_default_registry
 from ..agent.media_service import StubMediaService
+from ..agent.llm_factory import load_llm_configs_from_env, select_llm_for_task
 from ..agent.dev_scripted_llm import DevScriptedLLM
 from ..agent.tools import list_tool_metadata
 
@@ -261,8 +262,13 @@ async def _spawn_runtime(task_dict: dict) -> None:
     """
     task_id = task_dict["id"]
     try:
-        # 1. 构造 LLM（dev 模式用 ScriptedLLM，无需 API key）
-        llm = DevScriptedLLM(user_goal=task_dict.get("user_goal") or "")
+        # 1. 选 LLM：按 env + task.llm_provider_id 选真实 or stub
+        configs = load_llm_configs_from_env()
+        llm, llm_mode, llm_fallback_reason = select_llm_for_task(
+            task_provider_id=task_dict.get("llm_provider_id"),
+            configs=configs,
+            task_model_id=task_dict.get("llm_model_id"),
+        )
 
         # 2. 构造 memory
         memory = AgentMemory(user_goal=task_dict.get("user_goal") or "")
@@ -297,10 +303,15 @@ async def _spawn_runtime(task_dict: dict) -> None:
                 return
             _RUNNING_RUNTIMES[task_id] = runtime
 
-        # 7. 发 TASK_STARTED 事件
+        # 7. 发 TASK_STARTED 事件（上报 llm_mode / reason）
         await event_bus.publish(AgentEvent(
             task_id=task_id, type=EventType.TASK_STARTED,
-            payload={"task_id": task_id, "user_goal": task_dict.get("user_goal")},
+            payload={
+                "task_id": task_id,
+                "user_goal": task_dict.get("user_goal"),
+                "llm_mode": llm_mode,
+                "llm_fallback_reason": llm_fallback_reason,
+            },
         ))
 
         # 8. 更新 task 状态到 running
