@@ -85,6 +85,33 @@ def load_llm_configs_from_env() -> list[LLMProviderConfig]:
     return _load_json_env() or _load_short_env()
 
 
+def load_llm_configs(db=None) -> list[LLMProviderConfig]:
+    """从 DB 读所有 LLMProviderConfig；DB 为空时回退到 env。
+
+    优先级：DB 行 > env。前端 ApiSettingsModal 写入的 key 优先于服务器 env。
+
+    若 db=None：仅用 env（向后兼容）。
+    若 db 有行：直接用 DB，env 不参与（避免冲突）。
+    """
+    if db is None:
+        return load_llm_configs_from_env()
+
+    # 延迟导入避免 agent 模块被循环导入到 app.__init__
+    from ..models import LLMProviderConfig as OrmConfig
+    rows = db.query(OrmConfig).all()
+    if not rows:
+        return load_llm_configs_from_env()
+    return [
+        LLMProviderConfig(
+            provider_id=r.provider_id,
+            base_url=r.base_url,
+            api_key=r.api_key,
+            default_model=r.default_model,
+        )
+        for r in rows
+    ]
+
+
 def select_llm_for_task(
     task_provider_id: str | None,
     configs: list[LLMProviderConfig],

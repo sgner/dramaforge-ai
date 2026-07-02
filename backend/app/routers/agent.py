@@ -20,7 +20,7 @@ from ..agent.memory import AgentMemory
 from ..agent.runtime import AgentRuntime
 from ..agent.tools import build_default_registry
 from ..agent.media_service import StubMediaService
-from ..agent.llm_factory import load_llm_configs_from_env, select_llm_for_task
+from ..agent.llm_factory import load_llm_configs, select_llm_for_task
 from ..agent.dev_scripted_llm import DevScriptedLLM
 from ..agent.tools import list_tool_metadata
 
@@ -262,8 +262,11 @@ async def _spawn_runtime(task_dict: dict) -> None:
     """
     task_id = task_dict["id"]
     try:
-        # 1. 选 LLM：按 env + task.llm_provider_id 选真实 or stub
-        configs = load_llm_configs_from_env()
+        # 1. 选 LLM：DB 行（前端 ApiSettingsModal 配置）优先，env fallback
+        # 任务在新的 DB 会话里跑，避免 asyncio.create_task 里持有 request-scoped session
+        from ..database import SessionLocal
+        with SessionLocal() as db:
+            configs = load_llm_configs(db)
         llm, llm_mode, llm_fallback_reason = select_llm_for_task(
             task_provider_id=task_dict.get("llm_provider_id"),
             configs=configs,

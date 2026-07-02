@@ -22,6 +22,7 @@ import pytest
 from app.agent.dev_scripted_llm import DevScriptedLLM
 from app.agent.llm_factory import (
     LLMProviderConfig,
+    load_llm_configs,
     load_llm_configs_from_env,
     select_llm_for_task,
 )
@@ -147,3 +148,67 @@ def test_select_uses_task_model_id_override():
     assert mode == "real"
     assert isinstance(llm, OpenAICompatibleLLMClient)
     assert llm.model == "gpt-4o"
+
+
+# ========================
+# load_llm_configs(db) — DB-first, env-fallback
+# ========================
+
+
+def test_load_llm_configs_db_empty_falls_back_to_env(monkeypatch):
+    """DB 为空 → 用 env 短模式。"""
+    monkeypatch.setenv("LLM_API_KEY", "sk-env-1")
+    monkeypatch.setenv("LLM_BASE_URL", "https://api.openai.com")
+    monkeypatch.setenv("LLM_MODEL", "gpt-4o-mini")
+
+    # 用一个真实但空 DB session
+    from app.database import Base, engine, SessionLocal
+    from app.models import LLMProviderConfig as Orm
+    Base.metadata.create_all(bind=engine)
+    with SessionLocal() as s:
+        s.query(Orm).delete()
+        s.commit()
+        s.add_all([])  # 留空
+        s.commit()
+        configs = load_llm_configs(s)
+
+    assert len(configs) == 1
+    assert configs[0].provider_id == "openai"
+    assert configs[0].api_key == "sk-env-1"
+
+
+def test_load_llm_configs_db_rows_override_env(monkeypatch):
+    """DB 有行 → 优先用 DB，env 完全被忽略。"""
+    monkeypatch.setenv("LLM_API_KEY", "sk-env-1")
+    monkeypatch.setenv("LLM_BASE_URL", "https://api.openai.com")
+    monkeypatch.setenv("LLM_MODEL", "gpt-4o-mini")
+
+    from app.database import Base, engine, SessionLocal
+    from app.models import LLMProviderConfig as Orm
+    Base.metadata.create_all(bind=engine)
+    with SessionLocal() as s:
+        s.query(Orm).delete()
+        s.add(Orm(
+            provider_id="deepseek",
+            base_url="https://api.deepseek.com",
+            api_key="sk-db-2",
+            default_model="deepseek-chat",
+        ))
+        s.commit()
+        configs = load_llm_configs(s)
+
+    assert len(configs) == 1
+    assert configs[0].provider_id == "deepseek"
+    assert configs[0].api_key == "sk-db-2"  # DB 的 key，不是 env
+    assert configs[0].default_model == "deepseek-chat"
+
+
+def test_load_llm_configs_no_db_falls_back_to_env(monkeypatch):
+    """db=None 时直接用 env。"""
+    monkeypatch.setenv("LLM_API_KEY", "sk-env-only")
+    monkeypatch.setenv("LLM_BASE_URL", "https://api.openai.com")
+    monkeypatch.setenv("LLM_MODEL", "gpt-4o-mini")
+
+    configs = load_llm_configs(None)
+    assert len(configs) == 1
+    assert configs[0].api_key == "sk-env-only"
