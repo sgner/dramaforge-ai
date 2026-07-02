@@ -3752,6 +3752,11 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity: 0 !imp
 }
 
 /* ===== API Settings Modal (完全匹配参考项目 api-settings.css) ===== */
+.api-settings-panel {
+  /* 把灰色背景统一为白色，去除灰色色差（文字、边框保持原样） */
+  --soft: #ffffff;
+  --soft-2: #ffffff;
+}
 .api-settings-modal {
   position: fixed;
   inset: 0;
@@ -3772,7 +3777,7 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity: 0 !imp
   min-height: 540px;
   display: flex;
   flex-direction: column;
-  background: var(--panel);
+  background: #ffffff;
   border: 1px solid var(--line);
   border-radius: 20px;
   box-shadow: 0 28px 64px rgba(15,23,42,.25);
@@ -3802,6 +3807,31 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity: 0 !imp
   font-size: 12.5px;
   line-height: 1.55;
   font-weight: 600;
+}
+
+/* Task 7: Agent env hint banner（让用户知道 Agent 用后端 env key） */
+.api-env-hint {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 14px;
+  margin: 0 28px 12px;
+  border-radius: 10px;
+  background: var(--soft);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.api-env-hint-title {
+  font-weight: 700;
+  margin-bottom: 2px;
+  color: var(--text);
+}
+.api-env-hint-body {
+  color: var(--muted);
+}
+.api-page-sub {
   max-width: 520px;
 }
 .api-page-status {
@@ -3880,7 +3910,7 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity: 0 !imp
 .api-provider-card.active:hover { border-color: var(--text); }
 .api-provider-card.active .api-provider-name { color: var(--text); }
 .api-provider-card.active .api-provider-meta { color: var(--muted); }
-.api-provider-card.has-key .api-provider-status-dot { background: #10b981; }
+.api-provider-card.has-key .api-provider-status-dot { background: var(--text); }
 .api-provider-card.missing-key .api-provider-status-dot { background: var(--faint); }
 
 .api-provider-mark {
@@ -3932,7 +3962,7 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity: 0 !imp
   border-radius: 50%;
   background: var(--faint);
 }
-.api-provider-status-dot.on { background: #10b981; }
+.api-provider-status-dot.on { background: var(--text); }
 .api-provider-protocol-pill {
   font-size: 9px;
   font-weight: 850;
@@ -3955,7 +3985,7 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity: 0 !imp
   font-weight: 800;
   transition: all .15s ease;
   cursor: pointer;
-  background: transparent;
+  background: #ffffff;
   font-family: inherit;
 }
 .api-add-btn:hover {
@@ -4195,14 +4225,14 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity: 0 !imp
 .theme-dark .api-key-btn { background: var(--soft); border-color: var(--line-strong); }
 .theme-dark .api-key-btn:hover { background: #323540; border-color: #f5f6f8; }
 .api-key-btn--clear:hover {
-  color: #dc2626;
-  border-color: #fca5a5;
-  background: #fff5f5;
+  color: var(--text);
+  border-color: var(--text);
+  background: var(--soft-2);
 }
 .theme-dark .api-key-btn--clear:hover {
-  background: rgba(127,29,29,.18);
-  border-color: rgba(248,113,113,.3);
-  color: #fca5a5;
+  background: var(--soft-2);
+  border-color: var(--text);
+  color: var(--text);
 }
 
 /* RunningHub Key Stack */
@@ -4432,8 +4462,8 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity: 0 !imp
   font-size: 14px;
   font-family: inherit;
 }
-.api-icon-btn:hover { color: #dc2626; background: #fff5f5; }
-.theme-dark .api-icon-btn:hover { background: rgba(127,29,29,.18); color: #fca5a5; }
+.api-icon-btn:hover { color: var(--text); background: var(--soft); }
+.theme-dark .api-icon-btn:hover { background: var(--soft); color: var(--text); }
 
 /* Ghost Button */
 .api-ghost-btn {
@@ -4476,56 +4506,55 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity: 0 !imp
 .api-action-btn:hover { color: var(--text); border-color: var(--text); }
 
 .api-danger-btn {
-  color: #dc2626;
-  border-color: #fecaca;
-  background: transparent;
+  color: var(--text);
+  border-color: var(--line);
+  background: var(--panel);
 }
 .api-danger-btn:hover {
-  background: #fff5f5;
-  color: #dc2626;
-  border-color: #fca5a5;
+  background: var(--soft);
+  color: var(--text);
+  border-color: var(--text);
 }
 .theme-dark .api-danger-btn {
-  color: #fecaca;
-  border-color: rgba(248,113,113,.55);
-  background: rgba(127,29,29,.28);
+  color: var(--text);
+  border-color: var(--line);
+  background: var(--panel);
 }
 .theme-dark .api-danger-btn:hover {
-  background: #7f1d1d;
-  color: #fff;
-  border-color: #f87171;
-  box-shadow: 0 8px 18px rgba(127,29,29,.28);
+  background: var(--soft);
+  color: var(--text);
+  border-color: var(--text);
 }
 
 .api-save-btn {
-  background: var(--accent);
+  background: var(--text);
   color: var(--bg);
-  border-color: var(--accent);
+  border-color: var(--text);
 }
 .api-save-btn:hover {
   transform: translateY(-1px);
-  box-shadow: 0 6px 16px rgba(15,23,42,.15);
-  background: var(--accent);
+  box-shadow: 0 6px 16px var(--shadow);
+  background: var(--text);
   color: var(--bg);
-  border-color: var(--accent);
+  border-color: var(--text);
 }
 .api-save-btn.is-saved {
-  background: #16a34a;
-  color: #fff;
-  border-color: #16a34a;
-  box-shadow: 0 8px 18px rgba(22,163,74,.22);
+  background: var(--text);
+  color: var(--bg);
+  border-color: var(--text);
+  box-shadow: 0 8px 18px var(--shadow);
 }
 .theme-dark .api-save-btn {
-  background: #f5f6f8;
-  color: #0e1014;
-  border-color: #f5f6f8;
-  box-shadow: 0 8px 18px rgba(0,0,0,.22);
+  background: var(--text);
+  color: var(--bg);
+  border-color: var(--text);
+  box-shadow: 0 8px 18px var(--shadow);
 }
 .theme-dark .api-save-btn:hover {
-  background: #fff;
-  color: #05070b;
-  border-color: #fff;
-  box-shadow: 0 10px 22px rgba(0,0,0,.3);
+  background: var(--text);
+  color: var(--bg);
+  border-color: var(--text);
+  box-shadow: 0 10px 22px var(--shadow);
 }
 
 /* Step Grid */
@@ -4661,8 +4690,9 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity: 0 !imp
   background: var(--soft);
 }
 .api-searchable-select-option.is-selected {
-  background: var(--brand-soft, rgba(99,102,241,.08));
-  color: var(--brand, #6366f1);
+  background: var(--soft-2);
+  color: var(--text);
+  font-weight: 800;
 }
 .api-searchable-select-empty {
   padding: 12px 9px;
@@ -4839,8 +4869,8 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity: 0 !imp
   height: 34px;
   padding: 0 14px;
   border-radius: 9px;
-  border: 1px solid var(--line);
-  background: var(--accent);
+  border: 1px solid var(--text);
+  background: var(--text);
   color: var(--bg);
   font-size: 12px;
   font-weight: 800;
@@ -4852,6 +4882,8 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity: 0 !imp
 .api-recommend-save-btn:hover {
   transform: translateY(-1px);
   box-shadow: 0 6px 16px rgba(15,23,42,.15);
+  background: var(--bg);
+  color: var(--text);
 }
 .api-recommend-note {
   margin: 8px 20px 18px;
@@ -4970,11 +5002,11 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity: 0 !imp
   line-height: 1.5;
   border: 1px solid var(--line);
 }
-.api-verify-result--ok { background: rgba(22,163,74,.08); color: #15803d; border-color: rgba(22,163,74,.3); }
-.api-verify-result--warn { background: rgba(245,158,11,.08); color: #b45309; border-color: rgba(245,158,11,.3); }
-.api-verify-result--info { background: var(--accent-soft); color: var(--text); border-color: var(--line-strong); }
-.theme-dark .api-verify-result--ok { background: rgba(22,163,74,.18); color: #86efac; border-color: rgba(22,163,74,.35); }
-.theme-dark .api-verify-result--warn { background: rgba(245,158,11,.18); color: #fcd34d; border-color: rgba(245,158,11,.35); }
+.api-verify-result--ok { background: var(--soft); color: var(--text); border-color: var(--line-2); }
+.api-verify-result--warn { background: var(--soft); color: var(--text); border-color: var(--line-2); }
+.api-verify-result--info { background: var(--soft); color: var(--text); border-color: var(--line-strong); }
+.theme-dark .api-verify-result--ok { background: var(--soft); color: var(--text); border-color: var(--line); }
+.theme-dark .api-verify-result--warn { background: var(--soft); color: var(--text); border-color: var(--line); }
 
 /* ===== Models Toolbar ===== */
 .api-models-toolbar {
@@ -5042,7 +5074,7 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity: 0 !imp
   cursor: pointer;
   user-select: none;
 }
-.api-lora-row .api-toggle input { accent-color: var(--accent); }
+.api-lora-row .api-toggle input { accent-color: var(--text); }
 
 /* ===== Jimeng CLI Panel ===== */
 .api-jimeng-panel {
@@ -5082,12 +5114,12 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity: 0 !imp
   border-radius: 50%;
   background: var(--faint);
 }
-.api-jimeng-status-pill.is-logged { color: var(--success); border-color: rgba(22,163,74,.3); }
-.api-jimeng-status-pill.is-logged::before { background: var(--success); }
-.api-jimeng-status-pill.is-login { color: var(--warning); border-color: rgba(245,158,11,.3); }
-.api-jimeng-status-pill.is-login::before { background: var(--warning); }
-.api-jimeng-status-pill.is-error { color: var(--danger); border-color: rgba(220,38,38,.3); }
-.api-jimeng-status-pill.is-error::before { background: var(--danger); }
+.api-jimeng-status-pill.is-logged { color: var(--text); border-color: var(--line-2); }
+.api-jimeng-status-pill.is-logged::before { background: var(--text); }
+.api-jimeng-status-pill.is-login { color: var(--muted); border-color: var(--line); }
+.api-jimeng-status-pill.is-login::before { background: var(--muted); }
+.api-jimeng-status-pill.is-error { color: var(--text); border-color: var(--text); }
+.api-jimeng-status-pill.is-error::before { background: var(--text); }
 .api-jimeng-actions {
   display: flex;
   gap: 8px;
@@ -5277,18 +5309,19 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity: 0 !imp
   font-size: 12.5px;
   font-weight: 700;
 }
-.theme-dark .api-rh-editor-error { background: rgba(245,158,11,.18); color: #fbbf24; }
+.theme-dark .api-rh-editor-error { background: var(--soft-2); color: var(--text); border: 1px solid var(--line-strong); }
 
 .api-rh-editor-loading {
   margin: 16px 24px 0;
   padding: 10px 12px;
-  background: rgba(59,130,246,.12);
-  color: #1d4ed8;
+  background: var(--soft);
+  color: var(--text);
+  border: 1px solid var(--line);
   border-radius: 10px;
   font-size: 12.5px;
   font-weight: 700;
 }
-.theme-dark .api-rh-editor-loading { background: rgba(59,130,246,.18); color: #93c5fd; }
+.theme-dark .api-rh-editor-loading { background: var(--soft-2); color: var(--text); border: 1px solid var(--line-strong); }
 
 .api-rh-editor-body {
   flex: 1 1 0;
@@ -5352,7 +5385,7 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity: 0 !imp
   gap: 8px;
 }
 .api-rh-editor-field.is-disabled { opacity: .55; }
-.api-rh-editor-field.is-required { border-color: rgba(245,158,11,.5); }
+.api-rh-editor-field.is-required { border-color: var(--text); }
 
 .api-rh-editor-field-head {
   display: flex;
@@ -5362,7 +5395,7 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity: 0 !imp
   flex-wrap: wrap;
 }
 .api-rh-editor-field-name { font-weight: 800; font-size: 13px; }
-.api-rh-editor-required { color: #ef4444; margin-left: 4px; }
+.api-rh-editor-required { color: var(--text); margin-left: 4px; font-weight: 900; }
 
 /* === 文本资产卡（小说/脚本流式生成中） === */
 .canvas-asset-item-text {
@@ -6071,8 +6104,8 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity: 0 !imp
   height: 22px;
   padding: 0 9px;
   border-radius: 999px;
-  background: var(--accent-soft);
-  color: var(--accent);
+  background: var(--text);
+  color: var(--bg);
   font-size: 10.5px;
   font-weight: 900;
   display: inline-flex;
@@ -6309,7 +6342,7 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity: 0 !imp
   font-size: 10px;
   font-weight: 800;
 }
-.api-picker-cat-tab.active .cat-count { background: var(--accent-soft); color: var(--accent); }
+.api-picker-cat-tab.active .cat-count { background: var(--text); color: var(--bg); }
 
 .api-picker-body {
   flex: 1;
@@ -6332,9 +6365,9 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity: 0 !imp
   transition: border-color .15s ease;
 }
 .api-picker-row:hover { border-color: var(--line-strong); }
-.api-picker-row.is-selected { border-color: var(--accent); background: var(--accent-soft); }
-.theme-dark .api-picker-row.is-selected { background: rgba(245,246,248,.08); border-color: var(--accent); }
-.api-picker-row input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; }
+.api-picker-row.is-selected { border-color: var(--text); background: var(--soft-2); }
+.theme-dark .api-picker-row.is-selected { background: var(--soft-2); border-color: var(--text); }
+.api-picker-row input[type=checkbox] { accent-color: var(--text); width: 16px; height: 16px; }
 .api-picker-row-name {
   font-family: ui-monospace, Menlo, monospace;
   font-size: 12px;
@@ -6387,7 +6420,7 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity: 0 !imp
   align-items: center;
   background: var(--panel);
 }
-.api-picker-sum-chip.is-active { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.api-picker-sum-chip.is-active { background: var(--text); color: var(--bg); border-color: var(--text); }
 .api-picker-summary-title {
   color: var(--faint);
   font-size: 10px;
@@ -6411,8 +6444,8 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity: 0 !imp
   min-height: 0;
   margin: 0;
   padding: 16px 22px;
-  background: #0d1119;
-  color: #e5e9f0;
+  background: var(--soft-2);
+  color: var(--text);
   font-family: ui-monospace, Menlo, monospace;
   font-size: 11.5px;
   line-height: 1.55;

@@ -24,6 +24,7 @@ import {
   ChevronDown,
   ChevronRight,
   Target,
+  Info,
 } from 'lucide-react';
 import {
   ApiConfig,
@@ -67,9 +68,9 @@ interface RhAppEntry {
 }
 
 const MODEL_KIND_META: Record<ModelKind, { key: keyof Provider; label: string; color: string }> = {
-  image: { key: 'imageModels', label: 'canvasApiSettingsImageGenModel', color: '#10b981' },
-  chat: { key: 'chatModels', label: 'canvasApiSettingsLlmModel', color: '#3b82f6' },
-  video: { key: 'videoModels', label: 'canvasApiSettingsVideoModelLabel', color: '#f59e0b' },
+  image: { key: 'imageModels', label: 'canvasApiSettingsImageGenModel', color: 'var(--text)' },
+  chat: { key: 'chatModels', label: 'canvasApiSettingsLlmModel', color: 'var(--text)' },
+  video: { key: 'videoModels', label: 'canvasApiSettingsVideoModelLabel', color: 'var(--text)' },
 };
 
 const STEP_DEFAULT_MODEL_KIND: Record<StepType, ModelKind> = {
@@ -2154,6 +2155,15 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
           </div>
           <div className="api-page-status">{status}</div>
         </header>
+
+        {/* Agent env hint banner — Task 7 */}
+        <div className="api-env-hint" role="note">
+          <Info size={14} />
+          <div>
+            <div className="api-env-hint-title">{t('canvasApiSettingsEnvHintTitle')}</div>
+            <div className="api-env-hint-body">{t('canvasApiSettingsEnvHintBody')}</div>
+          </div>
+        </div>
 
         {/* Layout */}
         <div className="api-layout">
