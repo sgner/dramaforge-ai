@@ -225,4 +225,42 @@ export const api = {
     const q = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
     return request<AgentTaskOut[]>(`/agent/tasks${q}`);
   },
+
+  // ---------- LLM Providers (Agent 用, key 写到后端 DB) ----------
+  listLLMProviders: () =>
+    request<LLMProviderOut[]>('/llm-providers'),
+
+  getLLMProvider: (providerId: string) =>
+    request<LLMProviderOut>(`/llm-providers/${encodeURIComponent(providerId)}`),
+
+  upsertLLMProvider: (
+    providerId: string,
+    payload: {
+      base_url: string;
+      api_key: string;
+      default_model: string;
+      chat_models?: string[];
+    }
+  ) =>
+    request<LLMProviderOut>(`/llm-providers/${encodeURIComponent(providerId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+
+  deleteLLMProvider: (providerId: string) =>
+    request<{ deleted: string }>(`/llm-providers/${encodeURIComponent(providerId)}`, {
+      method: 'DELETE',
+    }),
 };
+
+// ============ LLM Provider ============
+export interface LLMProviderOut {
+  id: number;
+  provider_id: string;
+  base_url: string;
+  api_key: string;       // 后端已脱敏（仅前 4 + 后 4）
+  default_model: string;
+  chat_models: string[];
+  created_at?: string;
+  updated_at?: string;
+}
