@@ -193,7 +193,16 @@ export const api = {
    * 启动 agent task：创建任务 → 返回 taskId。
    * 实际运行由前端调用 useAgentStream(taskId) 接收 SSE 事件。
    */
-  startAgent: (projectId: string, userGoal: string, opts: { skip_confirm?: boolean; max_steps?: number } = {}) =>
+  startAgent: (
+    projectId: string,
+    userGoal: string,
+    opts: {
+      skip_confirm?: boolean;
+      max_steps?: number;
+      providerId?: string;
+      modelId?: string;
+    } = {}
+  ) =>
     request<AgentTaskOut>('/agent/tasks', {
       method: 'POST',
       body: JSON.stringify({
@@ -201,6 +210,9 @@ export const api = {
         user_goal: userGoal,
         max_steps: opts.max_steps ?? 50,
         skip_confirm: opts.skip_confirm ?? false,
+        // 仅传 provider_id / model_id；API key 走后端 env
+        llm_provider_id: opts.providerId ?? null,
+        llm_model_id: opts.modelId ?? null,
       }),
     }),
 
