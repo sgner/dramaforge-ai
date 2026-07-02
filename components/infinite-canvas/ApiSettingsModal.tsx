@@ -34,6 +34,7 @@ import {
   StepType,
 } from '../../types';
 import { useI18n } from '../../i18n';
+import { api, LLMProviderOut } from '../../services/apiClient';
 
 /* ====== Constants ====== */
 const FIXED_IDS = new Set<string>([]);
@@ -327,6 +328,238 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
   const [rhEditorError, setRhEditorError] = useState<string>('');
   const [rhEditorActiveNodeId, setRhEditorActiveNodeId] = useState<string>('');
   const [rhEditorExpanded, setRhEditorExpanded] = useState<Record<string, boolean>>({});
+
+  // ---- Agent LLM providers (saved to backend DB) ----
+  const [llmProviders, setLlmProviders] = useState<LLMProviderOut[]>([]);
+  const [llmProvidersLoading, setLlmProvidersLoading] = useState(false);
+  // 新增/编辑表单（每次只编辑一个 provider）
+  const [llmEditForm, setLlmEditForm] = useState<{
+    provider_id: string;
+    base_url: string;
+    api_key: string;
+    default_model: string;
+    chat_models_text: string;
+  } | null>(null);
+  const [llmEditSaving, setLlmEditSaving] = useState(false);
+  const [llmEditError, setLlmEditError] = useState<string | null>(null);
+
+  const loadLlmProviders = useCallback(async () => {
+    setLlmProvidersLoading(true);
+    try {
+      const list = await api.listLLMProviders();
+      setLlmProviders(list || []);
+    } catch (e) {
+      // 静默失败：列表留空，UI 提示
+      setLlmProviders([]);
+    } finally {
+      setLlmProvidersLoading(false);
+    }
+  }, []);
+
+  // 进入页面时拉取
+  useEffect(() => {
+    if (open) loadLlmProviders();
+  }, [open, loadLlmProviders]);
+
+  const openNewLlmForm = () => {
+    setLlmEditForm({
+      provider_id: '',
+      base_url: 'https://api.openai.com',
+      api_key: '',
+      default_model: '',
+      chat_models_text: '',
+    });
+    setLlmEditError(null);
+  };
+
+  const openEditLlmForm = (p: LLMProviderOut) => {
+    setLlmEditForm({
+      provider_id: p.provider_id,
+      base_url: p.base_url,
+      api_key: '',  // 不回填明文 key（后端已脱敏）
+      default_model: p.default_model,
+      chat_models_text: (p.chat_models || []).join('\n'),
+    });
+    setLlmEditError(null);
+  };
+
+  const submitLlmForm = async () => {
+    if (!llmEditForm) return;
+    const f = llmEditForm;
+    if (!f.provider_id.trim() || !f.base_url.trim() || !f.default_model.trim()) {
+      setLlmEditError('fill provider_id / base_url / default_model');
+      return;
+    }
+    if (!f.api_key.trim()) {
+      setLlmEditError('API Key is required (write-only)');
+      return;
+    }
+    setLlmEditSaving(true);
+    setLlmEditError(null);
+    try {
+      await api.upsertLLMProvider(f.provider_id.trim(), {
+        base_url: f.base_url.trim(),
+        api_key: f.api_key,
+        default_model: f.default_model.trim(),
+        chat_models: f.chat_models_text
+          .split('\n')
+          .map((s) => s.trim())
+          .filter(Boolean),
+      });
+      setLlmEditForm(null);
+      setStatus(t('canvasApiSettingsAgentLLMSaved'));
+      await loadLlmProviders();
+    } catch (e: any) {
+      setLlmEditError(e?.message || 'save failed');
+    } finally {
+      setLlmEditSaving(false);
+    }
+  };
+
+  const deleteLlmProvider = async (pid: string) => {
+    try {
+      await api.deleteLLMProvider(pid);
+      setStatus(t('canvasApiSettingsAgentLLMDeleted'));
+      await loadLlmProviders();
+    } catch (e: any) {
+      setStatus(`delete failed: ${e?.message || ''}`);
+    }
+  };
+
+  const renderAgentLLMSection = () => (
+    <div className="api-agent-llm-section">
+      <div className="api-section-head">
+        <div>
+          <div className="api-section-title">{t('canvasApiSettingsAgentLLMSection')}</div>
+          <div className="api-section-sub">{t('canvasApiSettingsAgentLLMSub')}</div>
+        </div>
+        {!llmEditForm && (
+          <button className="api-action-btn" onClick={openNewLlmForm}>
+            {t('canvasApiSettingsAgentLLMNewProvider')}
+          </button>
+        )}
+      </div>
+
+      {/* 编辑表单（新建 / 编辑共用） */}
+      {llmEditForm && (
+        <div className="api-agent-llm-form">
+          <div className="api-form-row">
+            <label>{t('canvasApiSettingsAgentLLMProviderId')}</label>
+            <input
+              type="text"
+              value={llmEditForm.provider_id}
+              onChange={(e) =>
+                setLlmEditForm({ ...llmEditForm, provider_id: e.target.value })
+              }
+              placeholder="openai / deepseek / kimi / qwen ..."
+              autoFocus
+            />
+          </div>
+          <div className="api-form-row">
+            <label>{t('canvasApiSettingsAgentLLMBaseUrl')}</label>
+            <input
+              type="text"
+              value={llmEditForm.base_url}
+              onChange={(e) =>
+                setLlmEditForm({ ...llmEditForm, base_url: e.target.value })
+              }
+              placeholder="https://api.openai.com"
+            />
+          </div>
+          <div className="api-form-row">
+            <label>{t('canvasApiSettingsAgentLLMKeyNew')}</label>
+            <input
+              type="password"
+              value={llmEditForm.api_key}
+              onChange={(e) =>
+                setLlmEditForm({ ...llmEditForm, api_key: e.target.value })
+              }
+              placeholder="sk-..."
+            />
+          </div>
+          <div className="api-form-row">
+            <label>{t('canvasApiSettingsAgentLLMDefaultModel')}</label>
+            <input
+              type="text"
+              value={llmEditForm.default_model}
+              onChange={(e) =>
+                setLlmEditForm({ ...llmEditForm, default_model: e.target.value })
+              }
+              placeholder="gpt-4o-mini"
+            />
+          </div>
+          <div className="api-form-row">
+            <label>{t('canvasApiSettingsAgentLLMChatModels')}</label>
+            <textarea
+              rows={3}
+              value={llmEditForm.chat_models_text}
+              onChange={(e) =>
+                setLlmEditForm({ ...llmEditForm, chat_models_text: e.target.value })
+              }
+              placeholder={'gpt-4o-mini\ngpt-4o'}
+            />
+          </div>
+          {llmEditError && <div className="api-form-error">{llmEditError}</div>}
+          <div className="api-form-actions">
+            <button
+              className="api-action-btn"
+              onClick={() => setLlmEditForm(null)}
+              disabled={llmEditSaving}
+            >
+              {t('canvasApiSettingsClose')}
+            </button>
+            <button
+              className="api-action-btn api-save-btn"
+              onClick={submitLlmForm}
+              disabled={llmEditSaving}
+            >
+              {llmEditSaving ? '…' : t('canvasApiSettingsAgentLLMSave')}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 已配置的 provider 列表 */}
+      {llmProvidersLoading ? (
+        <div className="api-agent-llm-loading">…</div>
+      ) : llmProviders.length === 0 ? (
+        <div className="api-agent-llm-empty">{t('canvasApiSettingsAgentLLMNoProviders')}</div>
+      ) : (
+        <div className="api-agent-llm-list">
+          {llmProviders.map((p) => (
+            <div key={p.provider_id} className="api-agent-llm-item">
+              <div className="api-agent-llm-item-main">
+                <div className="api-agent-llm-item-title">{p.provider_id}</div>
+                <div className="api-agent-llm-item-sub">
+                  {p.base_url} · default: <b>{p.default_model}</b> · key: <code>{p.api_key}</code>
+                </div>
+                {p.chat_models && p.chat_models.length > 0 && (
+                  <div className="api-agent-llm-item-models">
+                    {p.chat_models.join(', ')}
+                  </div>
+                )}
+              </div>
+              <div className="api-agent-llm-item-actions">
+                <button
+                  className="api-action-btn"
+                  onClick={() => openEditLlmForm(p)}
+                  title="Update base_url / models (key is write-only)"
+                >
+                  {t('canvasApiSettingsEdit') || 'Edit'}
+                </button>
+                <button
+                  className="api-action-btn api-del-btn"
+                  onClick={() => deleteLlmProvider(p.provider_id)}
+                >
+                  {t('canvasApiSettingsAgentLLMDelete')}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 
   // Sync config from parent
   useEffect(() => {
@@ -2164,6 +2397,9 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
             <div className="api-env-hint-body">{t('canvasApiSettingsEnvHintBody')}</div>
           </div>
         </div>
+
+        {/* Agent LLM providers (saved to backend DB) */}
+        {renderAgentLLMSection()}
 
         {/* Layout */}
         <div className="api-layout">
