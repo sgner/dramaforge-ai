@@ -8,7 +8,7 @@ from pathlib import Path
 import logging
 
 from .database import init_db
-from .routers import projects, assets, uploads, agent
+from .routers import projects, assets, uploads, agent, llm_providers
 
 BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / "uploads"
@@ -50,6 +50,7 @@ app.include_router(projects.router, prefix="/api/projects", tags=["projects"])
 app.include_router(assets.router, prefix="/api/assets", tags=["assets"])
 app.include_router(uploads.router, prefix="/api/uploads", tags=["uploads"])
 app.include_router(agent.router, prefix="/api/agent", tags=["agent"])
+app.include_router(llm_providers.router, prefix="/api/llm-providers", tags=["llm-providers"])
 
 
 @app.get("/api/health")

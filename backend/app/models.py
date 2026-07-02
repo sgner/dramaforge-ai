@@ -177,3 +177,58 @@ class AgentStep(Base):
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "finished_at": self.finished_at.isoformat() if self.finished_at else None,
         }
+
+
+class LLMProviderConfig(Base):
+    """Agent LLM provider 配置（前端 ApiSettingsModal 写入，后端实际用）。
+
+    与 env 的关系：DB 行优先于 env，env 是 fallback。
+    api_key 字段为明文（dev 工具暂不加密；生产应改为加密存储）。
+    """
+    __tablename__ = "llm_provider_configs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    provider_id = Column(String(64), nullable=False, unique=True)  # 如 "openai" / "deepseek"
+    base_url = Column(String(512), nullable=False)
+    api_key = Column(Text, nullable=False)
+    default_model = Column(String(128), nullable=False)
+    # 模型列表 JSON (e.g. ["gpt-4o-mini", "gpt-4o"])，供 UI 展示
+    chat_models_json = Column(Text, default="[]")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self, mask_key: bool = True) -> dict:
+        """默认脱敏 api_key（GET 列表时不暴露明文 key，只回显最后 4 位）。"""
+        key = self.api_key or ""
+        masked = (key[:4] + "***" + key[-4:]) if (len(key) > 8 and mask_key) else key
+        return {
+            "id": self.id,
+            "provider_id": self.provider_id,
+            "base_url": self.base_url,
+            "api_key": masked,
+            "default_model": self.default_model,
+            "chat_models": _parse_json_list(self.chat_models_json),
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+    def to_internal_dict(self) -> dict:
+        """内部使用：含明文 api_key，供 LLMFactory 用。"""
+        return {
+            "id": self.id,
+            "provider_id": self.provider_id,
+            "base_url": self.base_url,
+            "api_key": self.api_key,
+            "default_model": self.default_model,
+        }
+
+
+def _parse_json_list(raw: str | None) -> list:
+    if not raw:
+        return []
+    try:
+        import json
+        v = json.loads(raw)
+        return v if isinstance(v, list) else []
+    except Exception:
+        return []
