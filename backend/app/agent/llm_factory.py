@@ -48,7 +48,11 @@ def _load_json_env() -> list[LLMProviderConfig]:
     raw = os.environ.get("LLM_PROVIDERS_JSON", "").strip()
     if not raw:
         return []
-    data = json.loads(raw)
+    # 容错：malformed JSON 不应向上抛，符合模块"env 缺 → 返回空 list"的承诺
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return []
     if not isinstance(data, dict):
         return []
     out: list[LLMProviderConfig] = []

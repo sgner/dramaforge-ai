@@ -73,3 +73,15 @@ def test_short_env_requires_all_three_or_returns_empty(monkeypatch):
     configs = load_llm_configs_from_env()
 
     assert configs == []
+
+
+def test_malformed_json_returns_empty(monkeypatch):
+    """malformed LLM_PROVIDERS_JSON → 返回空 list（不向上抛 JSONDecodeError）。"""
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_BASE_URL", raising=False)
+    monkeypatch.delenv("LLM_MODEL", raising=False)
+    monkeypatch.setenv("LLM_PROVIDERS_JSON", "not-json")
+
+    configs = load_llm_configs_from_env()
+
+    assert configs == []
