@@ -99,6 +99,9 @@ class AgentTask(Base):
     total_tokens = Column(Integer, default=0)
     max_steps = Column(Integer, default=30)
     skip_confirm = Column(Boolean, default=False)  # 本任务是否已勾选免审
+    # LLM 选择（仅 provider_id / model_id；key 不入库）
+    llm_provider_id = Column(String(64), nullable=True, default=None)
+    llm_model_id = Column(String(128), nullable=True, default=None)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -117,6 +120,8 @@ class AgentTask(Base):
             "total_tokens": self.total_tokens or 0,
             "max_steps": self.max_steps or 30,
             "skip_confirm": bool(self.skip_confirm),
+            "llm_provider_id": self.llm_provider_id,
+            "llm_model_id": self.llm_model_id,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -135,6 +140,8 @@ class AgentTask(Base):
             total_tokens=d.get("total_tokens", 0),
             max_steps=d.get("max_steps", 30),
             skip_confirm=bool(d.get("skip_confirm", False)),
+            llm_provider_id=d.get("llm_provider_id"),
+            llm_model_id=d.get("llm_model_id"),
         )
 
 

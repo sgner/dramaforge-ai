@@ -35,6 +35,38 @@ def test_create_agent_task(client):
     assert data["status"] == "pending"
 
 
+def test_create_task_with_llm_provider_fields(client):
+    """POST /api/agent/tasks 带 llm_provider_id / llm_model_id 应被存进 task 行。"""
+    resp = client.post("/api/agent/tasks", json={
+        "user_goal": "test goal with llm",
+        "project_id": None,
+        "llm_provider_id": "openai",
+        "llm_model_id": "gpt-4o-mini",
+    })
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["llm_provider_id"] == "openai"
+    assert body["llm_model_id"] == "gpt-4o-mini"
+
+    # 二次 GET 确认持久化
+    again = client.get(f"/api/agent/tasks/{body['id']}")
+    assert again.status_code == 200
+    again_body = again.json()
+    assert again_body["llm_provider_id"] == "openai"
+    assert again_body["llm_model_id"] == "gpt-4o-mini"
+
+
+def test_create_task_without_llm_fields_defaults_to_null(client):
+    """不传 llm_* 字段时，新字段为 None（向后兼容）。"""
+    resp = client.post("/api/agent/tasks", json={
+        "user_goal": "no llm fields",
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["llm_provider_id"] is None
+    assert body["llm_model_id"] is None
+
+
 def test_list_agent_tasks(client):
     """GET /api/agent/tasks 列出任务。"""
     client.post("/api/agent/tasks", json={"user_goal": "x"})

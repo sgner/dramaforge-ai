@@ -98,6 +98,9 @@ class AgentTaskCreate(BaseModel):
     project_id: Optional[str] = None
     max_steps: int = 30
     skip_confirm: bool = False
+    # LLM 选择（仅 provider_id / model_id；API key 走后端 env）
+    llm_provider_id: Optional[str] = None
+    llm_model_id: Optional[str] = None
 
 
 class AgentTaskUpdate(BaseModel):
@@ -122,6 +125,8 @@ class AgentTaskOut(BaseModel):
     total_tokens: int = 0
     max_steps: int = 30
     skip_confirm: bool = False
+    llm_provider_id: Optional[str] = None
+    llm_model_id: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
