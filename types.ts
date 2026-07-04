@@ -84,6 +84,8 @@ export interface Provider {
   apiKey: string;
   /** Image model IDs */
   imageModels: string[];
+  /** Default LLM model for this provider (used by agent LLM pick) */
+  defaultModel?: string;
   /** Chat/LLM model IDs */
   chatModels: string[];
   /** Video model IDs */

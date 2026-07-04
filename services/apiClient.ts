@@ -361,6 +361,29 @@ export interface LLMProviderOut {
   updated_at?: string;
 }
 
+/**
+ * 后端 Pydantic ProviderOut schema（Plan 5 统一 endpoint）。
+ * 字段顺序与 backend/app/routers/providers.py:ProviderOut 一致。
+ */
+export interface ProviderOut {
+  id: number;
+  provider_id: string;
+  name: string;
+  base_url: string;
+  api_key: string;       // 后端已脱敏（仅前 4 + 后 4）
+  default_model: string;
+  protocol: string;
+  enabled: boolean;
+  chat_models: string[];
+  image_models: string[];
+  video_models: string[];
+  extra_config: Record<string, any>;
+  has_key: boolean;
+  key_preview: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
 // ============ Media Provider ============
 export interface MediaProviderOut {
   id: number;
