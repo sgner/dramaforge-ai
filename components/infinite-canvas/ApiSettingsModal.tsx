@@ -24,7 +24,6 @@ import {
   ChevronDown,
   ChevronRight,
   Target,
-  Info,
 } from 'lucide-react';
 import {
   ApiConfig,
@@ -34,7 +33,7 @@ import {
   StepType,
 } from '../../types';
 import { useI18n } from '../../i18n';
-import { api, ProviderOut } from '../../services/apiClient';
+import { api } from '../../services/apiClient';
 
 /* ====== Constants ====== */
 const FIXED_IDS = new Set<string>([]);
@@ -329,343 +328,21 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
   const [rhEditorActiveNodeId, setRhEditorActiveNodeId] = useState<string>('');
   const [rhEditorExpanded, setRhEditorExpanded] = useState<Record<string, boolean>>({});
 
-  // ---- 统一 Provider 列表（Plan 5：合并 LLM + Media） ----
-  // 单一数据源：后端 /api/providers（api.listProviders 等）
-  // 之前两个 section（"Agent LLM" + "平台列表"）已合并为这一个。
-  const [providers, setProviders] = useState<ProviderOut[]>([]);
-  const [providersLoading, setProvidersLoading] = useState(false);
-  const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
-  const [editingSaving, setEditingSaving] = useState(false);
-  const [editingError, setEditingError] = useState<string | null>(null);
-
-  const loadProviders = useCallback(async () => {
-    setProvidersLoading(true);
-    try {
-      const list = await api.listProviders();
-      setProviders(list || []);
-    } catch (e) {
-      setProviders([]);
-    } finally {
-      setProvidersLoading(false);
-    }
-  }, []);
-
-  /** ProviderOut → Provider 映射（前端表单用的 Provider 类型） */
-  const outToProvider = (p: ProviderOut): Provider => ({
-    id: p.provider_id,
-    name: p.name || p.provider_id,
-    baseUrl: p.base_url,
-    protocol: (p.protocol as ProviderProtocol) || 'openai',
-    enabled: p.enabled !== false,
-    apiKey: '',  // 后端脱敏，明文不入前端
-    hasKey: p.has_key,
-    keyPreview: p.key_preview || '',
-    imageModels: p.image_models || [],
-    chatModels: p.chat_models || [],
-    videoModels: p.video_models || [],
-    defaultModel: p.default_model,
-  });
-
-  const openNewProviderForm = () => {
-    setEditingProvider({
-      id: '',
-      name: '',
-      baseUrl: 'https://api.openai.com',
-      protocol: 'openai' as ProviderProtocol,
-      enabled: true,
-      apiKey: '',
-      imageModels: [],
-      chatModels: [],
-      videoModels: [],
-      defaultModel: '',
-    });
-    setEditingError(null);
-  };
-
-  const openEditProviderForm = (p: ProviderOut) => {
-    setEditingProvider(outToProvider(p));
-    setEditingError(null);
-  };
-
-  const submitProviderForm = async () => {
-    if (!editingProvider) return;
-    const p = editingProvider;
-    if (!p.id.trim() || !p.baseUrl.trim()) {
-      setEditingError('fill provider_id / base_url');
-      return;
-    }
-    setEditingSaving(true);
-    setEditingError(null);
-    try {
-      await api.upsertProvider(p.id.trim(), {
-        name: p.name || p.id.trim(),
-        base_url: p.baseUrl.trim(),
-        // api_key 始终传（空字符串 → 后端视为保留原值）
-        api_key: p.apiKey,
-        default_model: p.defaultModel || '',
-        protocol: p.protocol,
-        enabled: p.enabled,
-        chat_models: p.chatModels,
-        image_models: p.imageModels,
-        video_models: p.videoModels,
-        extra_config: (p as any).extra_config || {},
-      });
-      setEditingProvider(null);
-      setStatus(t('canvasApiSettingsAgentLLMSaved'));
-      await loadProviders();
-    } catch (e: any) {
-      setEditingError(e?.message || 'save failed');
-    } finally {
-      setEditingSaving(false);
-    }
-  };
-
-  const deleteProviderRow = async (pid: string) => {
-    try {
-      await api.deleteProvider(pid);
-      setStatus(t('canvasApiSettingsAgentLLMDeleted'));
-      await loadProviders();
-    } catch (e: any) {
-      setStatus(`delete failed: ${e?.message || ''}`);
-    }
-  };
-
   // ---- 兼容 shims（Plan 5：旧 LLM/Media 双 section 已合并，下方画布媒体表单的 legacy 调用点） ----
   // 旧 form-based 媒体编辑流的 syncProviderToDb / deleteProviderFromDb / setMediaSyncStatus 仍被引用，
-  // 改为 no-op（带 warning）。统一写入走 renderUnifiedProviderSection。
-  const setMediaSyncStatus = (_s: any) => { /* no-op: 统一走 renderUnifiedProviderSection */ };
+  // 改为 no-op（带 warning）。统一写入走下方的 renderProviderList + renderEditor。
+  const setMediaSyncStatus = (_s: any) => { /* no-op: 由 renderProviderList 走 cfg → 保存时统一处理 */ };
   const syncProviderToDb = async (_p: Provider) => {
-    console.warn('[Plan5] syncProviderToDb 已废弃，请用 renderUnifiedProviderSection 的统一表单');
+    console.warn('[Plan5] syncProviderToDb 已废弃，请用 renderEditor 的统一表单');
   };
   const deleteProviderFromDb = async (_providerId: string) => {
-    console.warn('[Plan5] deleteProviderFromDb 已废弃，请用 renderUnifiedProviderSection 的统一表单');
+    console.warn('[Plan5] deleteProviderFromDb 已废弃，请用 renderProviderList 的删除按钮');
   };
-
-  const renderUnifiedProviderSection = () => (
-    <div className="api-agent-llm-section">
-      <div className="api-section-head">
-        <div>
-          <div className="api-section-title">{t('canvasApiSettingsProviderList') || 'Provider 列表'}</div>
-          <div className="api-section-sub">{t('canvasApiSettingsAgentLLMSub')}</div>
-        </div>
-        {!editingProvider && (
-          <button
-            className="api-action-btn"
-            data-testid="new-provider-btn"
-            onClick={openNewProviderForm}
-          >
-            {t('canvasApiSettingsAgentLLMNewProvider')}
-          </button>
-        )}
-      </div>
-
-      {/* 编辑表单（新建 / 编辑共用） — 折叠式（基础 + 高级） */}
-      {editingProvider && (
-        <div className="api-agent-llm-form" data-testid="provider-editor">
-          <div className="api-form-row">
-            <label>Provider ID</label>
-            <input
-              type="text"
-              data-testid="provider-id"
-              value={editingProvider.id}
-              onChange={(e) => setEditingProvider({ ...editingProvider, id: e.target.value })}
-              placeholder="openai / deepseek / kimi / qwen ..."
-              autoFocus
-            />
-          </div>
-          <div className="api-form-row">
-            <label>Name</label>
-            <input
-              type="text"
-              data-testid="provider-name"
-              value={editingProvider.name}
-              onChange={(e) => setEditingProvider({ ...editingProvider, name: e.target.value })}
-              placeholder="display name"
-            />
-          </div>
-          <div className="api-form-row">
-            <label>Base URL</label>
-            <input
-              type="text"
-              data-testid="provider-base-url"
-              value={editingProvider.baseUrl}
-              onChange={(e) => setEditingProvider({ ...editingProvider, baseUrl: e.target.value })}
-              placeholder="https://api.openai.com"
-            />
-          </div>
-          <div className="api-form-row">
-            <label>API Key {!(editingProvider.hasKey) && '(未设置)'}</label>
-            <input
-              type="password"
-              data-testid="provider-api-key"
-              value={editingProvider.apiKey}
-              placeholder={editingProvider.hasKey ? '(已设置，留空保留)' : '请输入 API Key'}
-              onChange={(e) => setEditingProvider({ ...editingProvider, apiKey: e.target.value })}
-            />
-          </div>
-          <div className="api-form-row">
-            <label>
-              <input
-                type="checkbox"
-                data-testid="provider-enabled"
-                checked={editingProvider.enabled}
-                onChange={(e) => setEditingProvider({ ...editingProvider, enabled: e.target.checked })}
-              />
-              Enabled
-            </label>
-          </div>
-
-          {/* 高级字段（折叠） */}
-          <details className="api-editor-advanced">
-            <summary>▼ 高级 (Protocol, Models, 扩展)</summary>
-            <div className="api-form-row">
-              <label>Protocol</label>
-              <select
-                data-testid="provider-protocol"
-                value={editingProvider.protocol}
-                onChange={(e) => setEditingProvider({ ...editingProvider, protocol: e.target.value as ProviderProtocol })}
-              >
-                <option value="openai">openai</option>
-                <option value="gemini">gemini</option>
-                <option value="runninghub">runninghub</option>
-                <option value="volcengine">volcengine</option>
-                <option value="apimart">apimart</option>
-                <option value="jimeng">jimeng</option>
-              </select>
-            </div>
-            <div className="api-form-row">
-              <label>Default Model</label>
-              <input
-                type="text"
-                data-testid="provider-default-model"
-                value={editingProvider.defaultModel || ''}
-                onChange={(e) => setEditingProvider({ ...editingProvider, defaultModel: e.target.value })}
-                placeholder="gpt-4o-mini"
-              />
-            </div>
-            <div className="api-form-row">
-              <label>Chat Models (一行一个 ID)</label>
-              <textarea
-                rows={3}
-                data-testid="provider-chat-models"
-                value={(editingProvider.chatModels || []).join('\n')}
-                onChange={(e) => setEditingProvider({
-                  ...editingProvider,
-                  chatModels: e.target.value.split('\n').map(s => s.trim()).filter(Boolean),
-                })}
-                placeholder={'gpt-4o-mini\ngpt-4o'}
-              />
-            </div>
-            <div className="api-form-row">
-              <label>Image Models (一行一个 ID)</label>
-              <textarea
-                rows={3}
-                data-testid="provider-image-models"
-                value={(editingProvider.imageModels || []).join('\n')}
-                onChange={(e) => setEditingProvider({
-                  ...editingProvider,
-                  imageModels: e.target.value.split('\n').map(s => s.trim()).filter(Boolean),
-                })}
-              />
-            </div>
-            <div className="api-form-row">
-              <label>Video Models (一行一个 ID)</label>
-              <textarea
-                rows={3}
-                data-testid="provider-video-models"
-                value={(editingProvider.videoModels || []).join('\n')}
-                onChange={(e) => setEditingProvider({
-                  ...editingProvider,
-                  videoModels: e.target.value.split('\n').map(s => s.trim()).filter(Boolean),
-                })}
-              />
-            </div>
-          </details>
-
-          {editingError && <div className="api-form-error" data-testid="save-error">{editingError}</div>}
-          <div className="api-form-actions">
-            <button
-              className="api-action-btn"
-              data-testid="cancel-provider"
-              onClick={() => setEditingProvider(null)}
-              disabled={editingSaving}
-            >
-              {t('canvasApiSettingsClose')}
-            </button>
-            <button
-              className="api-action-btn api-save-btn"
-              data-testid="save-provider"
-              onClick={submitProviderForm}
-              disabled={editingSaving}
-            >
-              {editingSaving ? '…' : t('canvasApiSettingsAgentLLMSave')}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* 已配置的 provider 列表 */}
-      {providersLoading ? (
-        <div className="api-agent-llm-loading">…</div>
-      ) : providers.length === 0 ? (
-        <div className="api-agent-llm-empty">{t('canvasApiSettingsAgentLLMNoProviders')}</div>
-      ) : (
-        <div className="api-agent-llm-list">
-          {providers.map((p) => (
-            <div
-              key={p.provider_id}
-              className="api-agent-llm-item"
-              data-testid={`provider-row-${p.provider_id}`}
-            >
-              <div className="api-agent-llm-item-main">
-                <div className="api-agent-llm-item-title">{p.name || p.provider_id}</div>
-                <div className="api-agent-llm-item-sub">
-                  <code>{p.provider_id}</code> · {p.base_url}
-                  {p.default_model && <> · default: <b>{p.default_model}</b></>}
-                  {p.has_key && <> · key: <code>{p.key_preview || p.api_key}</code></>}
-                </div>
-                {(p.chat_models?.length > 0 || p.image_models?.length > 0 || p.video_models?.length > 0) && (
-                  <div className="api-agent-llm-item-models">
-                    {p.chat_models?.length > 0 && <span>chat: {p.chat_models.join(', ')}</span>}
-                    {p.image_models?.length > 0 && <span> · image: {p.image_models.join(', ')}</span>}
-                    {p.video_models?.length > 0 && <span> · video: {p.video_models.join(', ')}</span>}
-                  </div>
-                )}
-              </div>
-              <div className="api-agent-llm-item-actions">
-                <button
-                  className="api-action-btn"
-                  data-testid={`edit-provider-${p.provider_id}`}
-                  onClick={() => openEditProviderForm(p)}
-                >
-                  {t('canvasApiSettingsEdit') || 'Edit'}
-                </button>
-                <button
-                  className="api-action-btn api-del-btn"
-                  data-testid={`delete-provider-${p.provider_id}`}
-                  onClick={() => deleteProviderRow(p.provider_id)}
-                >
-                  {t('canvasApiSettingsAgentLLMDelete')}
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
 
   // Sync config from parent
   useEffect(() => {
     setCfg(JSON.parse(JSON.stringify(config)));
   }, [config]);
-
-  // 进入页面时拉取统一 Provider 列表（Plan 5）
-  useEffect(() => {
-    if (open) {
-      loadProviders();
-    }
-  }, [open, loadProviders]);
 
   // Auto-select first provider
   useEffect(() => {
@@ -2528,18 +2205,6 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
           </div>
           <div className="api-page-status">{status}</div>
         </header>
-
-        {/* Agent env hint banner — Task 7 */}
-        <div className="api-env-hint" role="note">
-          <Info size={14} />
-          <div>
-            <div className="api-env-hint-title">{t('canvasApiSettingsEnvHintTitle')}</div>
-            <div className="api-env-hint-body">{t('canvasApiSettingsEnvHintBody')}</div>
-          </div>
-        </div>
-
-        {/* 统一 Provider 列表（Plan 5：合并 LLM + Media） */}
-        {renderUnifiedProviderSection()}
 
         {/* Layout */}
         <div className="api-layout">
