@@ -180,8 +180,10 @@ class AgentStep(Base):
 
 
 class LLMProviderConfig(Base):
-    """Agent LLM provider 配置（前端 ApiSettingsModal 写入，后端实际用）。
+    """[DEPRECATED] 已迁移到 ProviderConfig 统一表。保留此类仅作数据回滚兜底，
+    下一版清理时删除。新代码不要用。
 
+    Agent LLM provider 配置（前端 ApiSettingsModal 写入，后端实际用）。
     与 env 的关系：DB 行优先于 env，env 是 fallback。
     api_key 字段为明文（dev 工具暂不加密；生产应改为加密存储）。
     """
@@ -224,8 +226,10 @@ class LLMProviderConfig(Base):
 
 
 class MediaProviderConfig(Base):
-    """画布媒体供应商配置（图片 / 视频 / 音频生成）。
+    """[DEPRECATED] 已迁移到 ProviderConfig 统一表。保留此类仅作数据回滚兜底，
+    下一版清理时删除。新代码不要用。
 
+    画布媒体供应商配置（图片 / 视频 / 音频生成）。
     与 LLMProviderConfig 的关系：
     - LLMProviderConfig 仅给 agent LLM 调用用（chat-only）
     - MediaProviderConfig 给画布媒体生成用（image / video / audio + 一些 chat 辅助）

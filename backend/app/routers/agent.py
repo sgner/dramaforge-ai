@@ -21,7 +21,6 @@ from ..agent.runtime import AgentRuntime
 from ..agent.tools import build_default_registry
 from ..agent.media_service import StubMediaService
 from ..agent.llm_factory import load_llm_configs, select_llm_for_task
-from ..agent.dev_scripted_llm import DevScriptedLLM
 from ..agent.tools import list_tool_metadata
 
 logger = logging.getLogger(__name__)
