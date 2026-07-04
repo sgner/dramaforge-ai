@@ -8,6 +8,8 @@ import uuid
 from datetime import datetime
 from typing import Any, Optional
 
+from ..models import _now
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -360,7 +362,7 @@ def _update_task_status(task_id: str, status: str) -> None:
             t = db.query(AgentTask).filter_by(id=task_id).first()
             if t:
                 t.status = status
-                t.updated_at = datetime.utcnow()
+                t.updated_at = _now()
                 db.commit()
     except Exception as e:
         logger.warning("failed to update task %s status: %s", task_id, e)
@@ -384,8 +386,8 @@ def _persist_steps(task_id: str, memory: AgentMemory, runtime: AgentRuntime) -> 
                     status=s.status,
                     cost_usd=s.cost_usd,
                     tokens=s.tokens,
-                    started_at=datetime.utcnow(),
-                    finished_at=datetime.utcnow(),
+                    started_at=_now(),
+                    finished_at=_now(),
                 )
                 db.add(step)
             db.commit()
@@ -406,7 +408,7 @@ def _sync_task_artifacts(task_id: str, memory: AgentMemory) -> None:
                 t.artifacts = dict(memory.artifacts)
             t.total_cost_usd = memory.total_cost_usd
             t.total_tokens = memory.total_tokens
-            t.updated_at = datetime.utcnow()
+            t.updated_at = _now()
             db.commit()
     except Exception as e:
         logger.warning("failed to sync artifacts for %s: %s", task_id, e)

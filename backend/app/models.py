@@ -1,9 +1,34 @@
 """ORM 模型"""
 from sqlalchemy import Column, String, Integer, Float, Text, Boolean, DateTime, ForeignKey, JSON
 from sqlalchemy.orm import relationship
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 from .database import Base
+
+
+
+# Service uses Asia/Shanghai (UTC+8) timezone; all timestamps are tz-aware.
+SHANGHAI_TZ = timezone(timedelta(hours=8))
+
+
+def _now() -> datetime:
+    """Return current time with Asia/Shanghai (UTC+8) timezone info attached."""
+    return datetime.now(SHANGHAI_TZ)
+
+
+def _iso(dt: datetime | None) -> str | None:
+    """Serialize datetime for API response in Asia/Shanghai with ISO 8601 +08:00.
+
+    - tz-aware dt: convert to Shanghai and format.
+    - naive dt (read back from SQLite, where tz info is dropped): treat as
+      Shanghai wall-clock time and just attach the +08:00 offset. The server's
+      clock is in Asia/Shanghai, so naive timestamps are stored as Shanghai.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=SHANGHAI_TZ)
+    return dt.astimezone(SHANGHAI_TZ).isoformat()
 
 
 class Project(Base):
@@ -12,8 +37,8 @@ class Project(Base):
 
     id = Column(String, primary_key=True)
     name = Column(String, nullable=False, default="Untitled")
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=_now)
+    updated_at = Column(DateTime, default=_now, onupdate=_now)
     # 视口状态
     viewport_x = Column(Float, default=0.0)
     viewport_y = Column(Float, default=0.0)
@@ -75,7 +100,7 @@ class Asset(Base):
     error = Column(Text, nullable=True)
     generating = Column(Boolean, default=False)
     extra = Column(JSON, default=dict)  # 其他扩展字段
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_now)
 
     project = relationship("Project", back_populates="assets")
 
@@ -102,8 +127,8 @@ class AgentTask(Base):
     # LLM 选择（仅 provider_id / model_id；key 不入库）
     llm_provider_id = Column(String(64), nullable=True, default=None)
     llm_model_id = Column(String(128), nullable=True, default=None)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=_now)
+    updated_at = Column(DateTime, default=_now, onupdate=_now)
 
     steps = relationship("AgentStep", back_populates="task", cascade="all, delete-orphan")
 
@@ -122,8 +147,8 @@ class AgentTask(Base):
             "skip_confirm": bool(self.skip_confirm),
             "llm_provider_id": self.llm_provider_id,
             "llm_model_id": self.llm_model_id,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "created_at": _iso(self.created_at),
+            "updated_at": _iso(self.updated_at),
         }
 
     @classmethod
@@ -158,7 +183,7 @@ class AgentStep(Base):
     status = Column(String, default="pending")  # pending | running | success | failed | retrying | skipped
     cost_usd = Column(Float, default=0.0)
     tokens = Column(Integer, default=0)
-    started_at = Column(DateTime, default=datetime.utcnow)
+    started_at = Column(DateTime, default=_now)
     finished_at = Column(DateTime, nullable=True)
 
     task = relationship("AgentTask", back_populates="steps")
@@ -174,8 +199,8 @@ class AgentStep(Base):
             "status": self.status,
             "cost_usd": self.cost_usd or 0.0,
             "tokens": self.tokens or 0,
-            "started_at": self.started_at.isoformat() if self.started_at else None,
-            "finished_at": self.finished_at.isoformat() if self.finished_at else None,
+            "started_at": _iso(self.started_at),
+            "finished_at": _iso(self.finished_at),
         }
 
 
@@ -196,8 +221,8 @@ class LLMProviderConfig(Base):
     default_model = Column(String(128), nullable=False)
     # 模型列表 JSON (e.g. ["gpt-4o-mini", "gpt-4o"])，供 UI 展示
     chat_models_json = Column(Text, default="[]")
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=_now)
+    updated_at = Column(DateTime, default=_now, onupdate=_now)
 
     def to_dict(self, mask_key: bool = True) -> dict:
         """默认脱敏 api_key（GET 列表时不暴露明文 key，只回显最后 4 位）。"""
@@ -210,8 +235,8 @@ class LLMProviderConfig(Base):
             "api_key": masked,
             "default_model": self.default_model,
             "chat_models": _parse_json_list(self.chat_models_json),
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "created_at": _iso(self.created_at),
+            "updated_at": _iso(self.updated_at),
         }
 
     def to_internal_dict(self) -> dict:
@@ -252,8 +277,8 @@ class MediaProviderConfig(Base):
     video_models_json = Column(Text, default="[]")
     # 扩展配置（volcengine 区域、runninghub workflow 等）
     extra_config_json = Column(Text, default="{}")
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=_now)
+    updated_at = Column(DateTime, default=_now, onupdate=_now)
 
     def to_dict(self, mask_key: bool = True) -> dict:
         """默认脱敏 api_key。"""
@@ -273,8 +298,8 @@ class MediaProviderConfig(Base):
             "extra_config": _parse_json_obj(self.extra_config_json),
             "has_key": bool(self.api_key),
             "key_preview": masked if masked and masked != key else "",
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "created_at": _iso(self.created_at),
+            "updated_at": _iso(self.updated_at),
         }
 
     def to_internal_dict(self) -> dict:
@@ -317,8 +342,8 @@ class ProviderConfig(Base):
     chat_models_json = Column(Text, default="[]")
     video_models_json = Column(Text, default="[]")
     extra_config_json = Column(Text, default="{}")
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=_now)
+    updated_at = Column(DateTime, default=_now, onupdate=_now)
 
     def to_dict(self, mask_key: bool = True) -> dict:
         key = self.api_key or ""
@@ -338,8 +363,8 @@ class ProviderConfig(Base):
             "extra_config": _parse_json_obj(self.extra_config_json),
             "has_key": bool(self.api_key),
             "key_preview": masked if masked and masked != key else "",
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "created_at": _iso(self.created_at),
+            "updated_at": _iso(self.updated_at),
         }
 
     def to_internal_dict(self) -> dict:
