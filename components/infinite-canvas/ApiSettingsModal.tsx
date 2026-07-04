@@ -34,7 +34,7 @@ import {
   StepType,
 } from '../../types';
 import { useI18n } from '../../i18n';
-import { api, LLMProviderOut } from '../../services/apiClient';
+import { api, ProviderOut } from '../../services/apiClient';
 
 /* ====== Constants ====== */
 const FIXED_IDS = new Set<string>([]);
@@ -329,333 +329,321 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
   const [rhEditorActiveNodeId, setRhEditorActiveNodeId] = useState<string>('');
   const [rhEditorExpanded, setRhEditorExpanded] = useState<Record<string, boolean>>({});
 
-  // ---- Agent LLM providers (saved to backend DB) ----
-  const [llmProviders, setLlmProviders] = useState<LLMProviderOut[]>([]);
-  const [llmProvidersLoading, setLlmProvidersLoading] = useState(false);
-  // 新增/编辑表单（每次只编辑一个 provider）
-  const [llmEditForm, setLlmEditForm] = useState<{
-    provider_id: string;
-    base_url: string;
-    api_key: string;
-    default_model: string;
-    chat_models_text: string;
-    // 编辑时保留现有媒体字段，避免 PUT 全量替换 clobber 媒体配置
-    // 新建场景为 undefined → fallback 到空值
-    _preserve_image_models?: string[];
-    _preserve_video_models?: string[];
-    _preserve_protocol?: string;
-    _preserve_extra_config?: Record<string, any>;
-  } | null>(null);
-  const [llmEditSaving, setLlmEditSaving] = useState(false);
-  const [llmEditError, setLlmEditError] = useState<string | null>(null);
+  // ---- 统一 Provider 列表（Plan 5：合并 LLM + Media） ----
+  // 单一数据源：后端 /api/providers（api.listProviders 等）
+  // 之前两个 section（"Agent LLM" + "平台列表"）已合并为这一个。
+  const [providers, setProviders] = useState<ProviderOut[]>([]);
+  const [providersLoading, setProvidersLoading] = useState(false);
+  const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
+  const [editingSaving, setEditingSaving] = useState(false);
+  const [editingError, setEditingError] = useState<string | null>(null);
 
-  const loadLlmProviders = useCallback(async () => {
-    setLlmProvidersLoading(true);
+  const loadProviders = useCallback(async () => {
+    setProvidersLoading(true);
     try {
-      const list = await api.listLLMProviders();
-      setLlmProviders(list || []);
+      const list = await api.listProviders();
+      setProviders(list || []);
     } catch (e) {
-      // 静默失败：列表留空，UI 提示
-      setLlmProviders([]);
+      setProviders([]);
     } finally {
-      setLlmProvidersLoading(false);
+      setProvidersLoading(false);
     }
   }, []);
 
-  // ---- 画布媒体供应商（图片/视频/音频）— 统一入后端 DB ----
-  // 旧版：apiConfig.providers 存 localStorage + 前端直连供应商
-  // 新版：从后端 DB 读 → 本地编辑 → 保存时回写 DB；前端不再持有明文 api_key
-  const [mediaSyncStatus, setMediaSyncStatus] = useState<{
-    syncing: boolean;
-    lastError: string | null;
-    lastSyncedAt: number | null;
-  }>({ syncing: false, lastError: null, lastSyncedAt: null });
+  /** ProviderOut → Provider 映射（前端表单用的 Provider 类型） */
+  const outToProvider = (p: ProviderOut): Provider => ({
+    id: p.provider_id,
+    name: p.name || p.provider_id,
+    baseUrl: p.base_url,
+    protocol: (p.protocol as ProviderProtocol) || 'openai',
+    enabled: p.enabled !== false,
+    apiKey: '',  // 后端脱敏，明文不入前端
+    hasKey: p.has_key,
+    keyPreview: p.key_preview || '',
+    imageModels: p.image_models || [],
+    chatModels: p.chat_models || [],
+    videoModels: p.video_models || [],
+    defaultModel: p.default_model,
+  });
 
-  /**
-   * 从后端 DB 加载所有 media providers，覆盖本地 cfg.providers。
-   * 后端返回的 api_key 是脱敏的（"sk-***1234" 形式），所以本地用空字符串 + hasKey=true 标识。
-   */
-  const loadMediaProvidersFromDb = useCallback(async () => {
-    setMediaSyncStatus((s) => ({ ...s, syncing: true, lastError: null }));
-    try {
-      const list = await api.listMediaProviders();
-      const dbProviders: Provider[] = (list || []).map((m) => ({
-        id: m.provider_id,
-        name: m.name || m.provider_id,
-        baseUrl: m.base_url,
-        protocol: (m.protocol as ProviderProtocol) || 'openai',
-        enabled: m.enabled !== false,
-        apiKey: '',  // 后端脱敏，明文不入前端
-        hasKey: m.has_key,
-        keyPreview: m.key_preview || '',
-        imageModels: m.image_models || [],
-        chatModels: m.chat_models || [],
-        videoModels: m.video_models || [],
-        // 不回填 wallet/volcengine 等扩展字段（前端只编辑基础字段，避免误覆盖）
-      }));
-      // 合并：DB 里的覆盖本地同 id 的；本地有但 DB 没有的（用户刚加未保存的）保留
-      setCfg((prev) => {
-        const dbIds = new Set(dbProviders.map((p) => p.id));
-        const kept = prev.providers.filter(
-          (p) => !dbIds.has(p.id) && (p.apiKey || p.baseUrl)
-        );
-        return { ...prev, providers: [...dbProviders, ...kept] };
-      });
-      setMediaSyncStatus({ syncing: false, lastError: null, lastSyncedAt: Date.now() });
-    } catch (e: any) {
-      setMediaSyncStatus({ syncing: false, lastError: e?.message || 'load failed', lastSyncedAt: null });
-    }
-  }, []);
-
-  /**
-   * 把单个 provider 同步到后端 DB。如果 apiKey 为空字符串（脱敏态或用户没改）则用 PATCH 不传 api_key 字段。
-   * 失败抛错，由调用方决定是否重试。
-   */
-  const syncProviderToDb = useCallback(async (p: Provider) => {
-    if (!p.id || !p.baseUrl) {
-      throw new Error(`provider ${p.name || '?'} missing id/baseUrl`);
-    }
-    const payload: Parameters<typeof api.upsertMediaProvider>[1] = {
-      name: p.name,
-      base_url: p.baseUrl,
-      default_model: '',                 // Provider 类型无 defaultModel 字段，传空（media 表单无此输入框）
-      protocol: p.protocol,
-      enabled: p.enabled !== false,
-      image_models: p.imageModels,
-      chat_models: p.chatModels,
-      video_models: p.videoModels,
-    };
-    if (p.apiKey && p.apiKey.trim()) {
-      // 用户填了明文 → upsert 整条
-      payload.api_key = p.apiKey;
-      await api.upsertMediaProvider(p.id, payload);
-    } else {
-      // 用户没改 key → PATCH 其它字段，保留 DB 原 key
-      const { api_key: _omit, ...rest } = payload;
-      await api.patchMediaProvider(p.id, rest);
-    }
-  }, []);
-
-  /** 从后端 DB 删除一个 provider。 */
-  const deleteProviderFromDb = useCallback(async (providerId: string) => {
-    try {
-      await api.deleteMediaProvider(providerId);
-    } catch (e: any) {
-      // 404 视为成功（DB 里没有）
-      if (!String(e?.message || '').includes('404')) {
-        throw e;
-      }
-    }
-  }, []);
-
-  // 进入页面时拉取
-  useEffect(() => {
-    if (open) {
-      loadLlmProviders();
-      loadMediaProvidersFromDb();
-    }
-  }, [open, loadLlmProviders, loadMediaProvidersFromDb]);
-
-  const openNewLlmForm = () => {
-    setLlmEditForm({
-      provider_id: '',
-      base_url: 'https://api.openai.com',
-      api_key: '',
-      default_model: '',
-      chat_models_text: '',
+  const openNewProviderForm = () => {
+    setEditingProvider({
+      id: '',
+      name: '',
+      baseUrl: 'https://api.openai.com',
+      protocol: 'openai' as ProviderProtocol,
+      enabled: true,
+      apiKey: '',
+      imageModels: [],
+      chatModels: [],
+      videoModels: [],
+      defaultModel: '',
     });
-    setLlmEditError(null);
+    setEditingError(null);
   };
 
-  const openEditLlmForm = (p: LLMProviderOut) => {
-    setLlmEditForm({
-      provider_id: p.provider_id,
-      base_url: p.base_url,
-      api_key: '',  // 不回填明文 key（后端已脱敏）
-      default_model: p.default_model,
-      chat_models_text: (p.chat_models || []).join('\n'),
-      // 保留现有媒体字段，避免 PUT 全量替换时 clobber
-      _preserve_image_models: p.image_models || [],
-      _preserve_video_models: p.video_models || [],
-      _preserve_protocol: p.protocol || 'openai',
-      _preserve_extra_config: p.extra_config || {},
-    });
-    setLlmEditError(null);
+  const openEditProviderForm = (p: ProviderOut) => {
+    setEditingProvider(outToProvider(p));
+    setEditingError(null);
   };
 
-  const submitLlmForm = async () => {
-    if (!llmEditForm) return;
-    const f = llmEditForm;
-    if (!f.provider_id.trim() || !f.base_url.trim() || !f.default_model.trim()) {
-      setLlmEditError('fill provider_id / base_url / default_model');
+  const submitProviderForm = async () => {
+    if (!editingProvider) return;
+    const p = editingProvider;
+    if (!p.id.trim() || !p.baseUrl.trim()) {
+      setEditingError('fill provider_id / base_url');
       return;
     }
-    if (!f.api_key.trim()) {
-      setLlmEditError('API Key is required (write-only)');
-      return;
-    }
-    setLlmEditSaving(true);
-    setLlmEditError(null);
+    setEditingSaving(true);
+    setEditingError(null);
     try {
-      await api.upsertLLMProvider(f.provider_id.trim(), {
-        name: f.provider_id.trim(),        // LLM 表单没有 name 输入框，用 provider_id 作 name
-        base_url: f.base_url.trim(),
-        api_key: f.api_key,
-        default_model: f.default_model.trim(),
-        protocol: f._preserve_protocol || 'openai',        // 编辑时保留现有协议，新建默认 openai
-        enabled: true,                     // LLM 表单默认启用
-        chat_models: f.chat_models_text
-          .split('\n')
-          .map((s) => s.trim())
-          .filter(Boolean),
-        image_models: f._preserve_image_models || [],      // 编辑时保留现有媒体模型，新建默认空
-        video_models: f._preserve_video_models || [],
-        extra_config: f._preserve_extra_config || {},
+      await api.upsertProvider(p.id.trim(), {
+        name: p.name || p.id.trim(),
+        base_url: p.baseUrl.trim(),
+        // api_key 始终传（空字符串 → 后端视为保留原值）
+        api_key: p.apiKey,
+        default_model: p.defaultModel || '',
+        protocol: p.protocol,
+        enabled: p.enabled,
+        chat_models: p.chatModels,
+        image_models: p.imageModels,
+        video_models: p.videoModels,
+        extra_config: (p as any).extra_config || {},
       });
-      setLlmEditForm(null);
+      setEditingProvider(null);
       setStatus(t('canvasApiSettingsAgentLLMSaved'));
-      await loadLlmProviders();
+      await loadProviders();
     } catch (e: any) {
-      setLlmEditError(e?.message || 'save failed');
+      setEditingError(e?.message || 'save failed');
     } finally {
-      setLlmEditSaving(false);
+      setEditingSaving(false);
     }
   };
 
-  const deleteLlmProvider = async (pid: string) => {
+  const deleteProviderRow = async (pid: string) => {
     try {
-      await api.deleteLLMProvider(pid);
+      await api.deleteProvider(pid);
       setStatus(t('canvasApiSettingsAgentLLMDeleted'));
-      await loadLlmProviders();
+      await loadProviders();
     } catch (e: any) {
       setStatus(`delete failed: ${e?.message || ''}`);
     }
   };
 
-  const renderAgentLLMSection = () => (
+  // ---- 兼容 shims（Plan 5：旧 LLM/Media 双 section 已合并，下方画布媒体表单的 legacy 调用点） ----
+  // 旧 form-based 媒体编辑流的 syncProviderToDb / deleteProviderFromDb / setMediaSyncStatus 仍被引用，
+  // 改为 no-op（带 warning）。统一写入走 renderUnifiedProviderSection。
+  const setMediaSyncStatus = (_s: any) => { /* no-op: 统一走 renderUnifiedProviderSection */ };
+  const syncProviderToDb = async (_p: Provider) => {
+    console.warn('[Plan5] syncProviderToDb 已废弃，请用 renderUnifiedProviderSection 的统一表单');
+  };
+  const deleteProviderFromDb = async (_providerId: string) => {
+    console.warn('[Plan5] deleteProviderFromDb 已废弃，请用 renderUnifiedProviderSection 的统一表单');
+  };
+
+  const renderUnifiedProviderSection = () => (
     <div className="api-agent-llm-section">
       <div className="api-section-head">
         <div>
-          <div className="api-section-title">{t('canvasApiSettingsAgentLLMSection')}</div>
+          <div className="api-section-title">{t('canvasApiSettingsProviderList') || 'Provider 列表'}</div>
           <div className="api-section-sub">{t('canvasApiSettingsAgentLLMSub')}</div>
         </div>
-        {!llmEditForm && (
-          <button className="api-action-btn" onClick={openNewLlmForm}>
+        {!editingProvider && (
+          <button
+            className="api-action-btn"
+            data-testid="new-provider-btn"
+            onClick={openNewProviderForm}
+          >
             {t('canvasApiSettingsAgentLLMNewProvider')}
           </button>
         )}
       </div>
 
-      {/* 编辑表单（新建 / 编辑共用） */}
-      {llmEditForm && (
-        <div className="api-agent-llm-form">
+      {/* 编辑表单（新建 / 编辑共用） — 折叠式（基础 + 高级） */}
+      {editingProvider && (
+        <div className="api-agent-llm-form" data-testid="provider-editor">
           <div className="api-form-row">
-            <label>{t('canvasApiSettingsAgentLLMProviderId')}</label>
+            <label>Provider ID</label>
             <input
               type="text"
-              value={llmEditForm.provider_id}
-              onChange={(e) =>
-                setLlmEditForm({ ...llmEditForm, provider_id: e.target.value })
-              }
+              data-testid="provider-id"
+              value={editingProvider.id}
+              onChange={(e) => setEditingProvider({ ...editingProvider, id: e.target.value })}
               placeholder="openai / deepseek / kimi / qwen ..."
               autoFocus
             />
           </div>
           <div className="api-form-row">
-            <label>{t('canvasApiSettingsAgentLLMBaseUrl')}</label>
+            <label>Name</label>
             <input
               type="text"
-              value={llmEditForm.base_url}
-              onChange={(e) =>
-                setLlmEditForm({ ...llmEditForm, base_url: e.target.value })
-              }
+              data-testid="provider-name"
+              value={editingProvider.name}
+              onChange={(e) => setEditingProvider({ ...editingProvider, name: e.target.value })}
+              placeholder="display name"
+            />
+          </div>
+          <div className="api-form-row">
+            <label>Base URL</label>
+            <input
+              type="text"
+              data-testid="provider-base-url"
+              value={editingProvider.baseUrl}
+              onChange={(e) => setEditingProvider({ ...editingProvider, baseUrl: e.target.value })}
               placeholder="https://api.openai.com"
             />
           </div>
           <div className="api-form-row">
-            <label>{t('canvasApiSettingsAgentLLMKeyNew')}</label>
+            <label>API Key {!(editingProvider.hasKey) && '(未设置)'}</label>
             <input
               type="password"
-              value={llmEditForm.api_key}
-              onChange={(e) =>
-                setLlmEditForm({ ...llmEditForm, api_key: e.target.value })
-              }
-              placeholder="sk-..."
+              data-testid="provider-api-key"
+              value={editingProvider.apiKey}
+              placeholder={editingProvider.hasKey ? '(已设置，留空保留)' : '请输入 API Key'}
+              onChange={(e) => setEditingProvider({ ...editingProvider, apiKey: e.target.value })}
             />
           </div>
           <div className="api-form-row">
-            <label>{t('canvasApiSettingsAgentLLMDefaultModel')}</label>
-            <input
-              type="text"
-              value={llmEditForm.default_model}
-              onChange={(e) =>
-                setLlmEditForm({ ...llmEditForm, default_model: e.target.value })
-              }
-              placeholder="gpt-4o-mini"
-            />
+            <label>
+              <input
+                type="checkbox"
+                data-testid="provider-enabled"
+                checked={editingProvider.enabled}
+                onChange={(e) => setEditingProvider({ ...editingProvider, enabled: e.target.checked })}
+              />
+              Enabled
+            </label>
           </div>
-          <div className="api-form-row">
-            <label>{t('canvasApiSettingsAgentLLMChatModels')}</label>
-            <textarea
-              rows={3}
-              value={llmEditForm.chat_models_text}
-              onChange={(e) =>
-                setLlmEditForm({ ...llmEditForm, chat_models_text: e.target.value })
-              }
-              placeholder={'gpt-4o-mini\ngpt-4o'}
-            />
-          </div>
-          {llmEditError && <div className="api-form-error">{llmEditError}</div>}
+
+          {/* 高级字段（折叠） */}
+          <details className="api-editor-advanced">
+            <summary>▼ 高级 (Protocol, Models, 扩展)</summary>
+            <div className="api-form-row">
+              <label>Protocol</label>
+              <select
+                data-testid="provider-protocol"
+                value={editingProvider.protocol}
+                onChange={(e) => setEditingProvider({ ...editingProvider, protocol: e.target.value as ProviderProtocol })}
+              >
+                <option value="openai">openai</option>
+                <option value="gemini">gemini</option>
+                <option value="runninghub">runninghub</option>
+                <option value="volcengine">volcengine</option>
+                <option value="apimart">apimart</option>
+                <option value="jimeng">jimeng</option>
+              </select>
+            </div>
+            <div className="api-form-row">
+              <label>Default Model</label>
+              <input
+                type="text"
+                data-testid="provider-default-model"
+                value={editingProvider.defaultModel || ''}
+                onChange={(e) => setEditingProvider({ ...editingProvider, defaultModel: e.target.value })}
+                placeholder="gpt-4o-mini"
+              />
+            </div>
+            <div className="api-form-row">
+              <label>Chat Models (一行一个 ID)</label>
+              <textarea
+                rows={3}
+                data-testid="provider-chat-models"
+                value={(editingProvider.chatModels || []).join('\n')}
+                onChange={(e) => setEditingProvider({
+                  ...editingProvider,
+                  chatModels: e.target.value.split('\n').map(s => s.trim()).filter(Boolean),
+                })}
+                placeholder={'gpt-4o-mini\ngpt-4o'}
+              />
+            </div>
+            <div className="api-form-row">
+              <label>Image Models (一行一个 ID)</label>
+              <textarea
+                rows={3}
+                data-testid="provider-image-models"
+                value={(editingProvider.imageModels || []).join('\n')}
+                onChange={(e) => setEditingProvider({
+                  ...editingProvider,
+                  imageModels: e.target.value.split('\n').map(s => s.trim()).filter(Boolean),
+                })}
+              />
+            </div>
+            <div className="api-form-row">
+              <label>Video Models (一行一个 ID)</label>
+              <textarea
+                rows={3}
+                data-testid="provider-video-models"
+                value={(editingProvider.videoModels || []).join('\n')}
+                onChange={(e) => setEditingProvider({
+                  ...editingProvider,
+                  videoModels: e.target.value.split('\n').map(s => s.trim()).filter(Boolean),
+                })}
+              />
+            </div>
+          </details>
+
+          {editingError && <div className="api-form-error" data-testid="save-error">{editingError}</div>}
           <div className="api-form-actions">
             <button
               className="api-action-btn"
-              onClick={() => setLlmEditForm(null)}
-              disabled={llmEditSaving}
+              data-testid="cancel-provider"
+              onClick={() => setEditingProvider(null)}
+              disabled={editingSaving}
             >
               {t('canvasApiSettingsClose')}
             </button>
             <button
               className="api-action-btn api-save-btn"
-              onClick={submitLlmForm}
-              disabled={llmEditSaving}
+              data-testid="save-provider"
+              onClick={submitProviderForm}
+              disabled={editingSaving}
             >
-              {llmEditSaving ? '…' : t('canvasApiSettingsAgentLLMSave')}
+              {editingSaving ? '…' : t('canvasApiSettingsAgentLLMSave')}
             </button>
           </div>
         </div>
       )}
 
       {/* 已配置的 provider 列表 */}
-      {llmProvidersLoading ? (
+      {providersLoading ? (
         <div className="api-agent-llm-loading">…</div>
-      ) : llmProviders.length === 0 ? (
+      ) : providers.length === 0 ? (
         <div className="api-agent-llm-empty">{t('canvasApiSettingsAgentLLMNoProviders')}</div>
       ) : (
         <div className="api-agent-llm-list">
-          {llmProviders.map((p) => (
-            <div key={p.provider_id} className="api-agent-llm-item">
+          {providers.map((p) => (
+            <div
+              key={p.provider_id}
+              className="api-agent-llm-item"
+              data-testid={`provider-row-${p.provider_id}`}
+            >
               <div className="api-agent-llm-item-main">
-                <div className="api-agent-llm-item-title">{p.provider_id}</div>
+                <div className="api-agent-llm-item-title">{p.name || p.provider_id}</div>
                 <div className="api-agent-llm-item-sub">
-                  {p.base_url} · default: <b>{p.default_model}</b> · key: <code>{p.api_key}</code>
+                  <code>{p.provider_id}</code> · {p.base_url}
+                  {p.default_model && <> · default: <b>{p.default_model}</b></>}
+                  {p.has_key && <> · key: <code>{p.key_preview || p.api_key}</code></>}
                 </div>
-                {p.chat_models && p.chat_models.length > 0 && (
+                {(p.chat_models?.length > 0 || p.image_models?.length > 0 || p.video_models?.length > 0) && (
                   <div className="api-agent-llm-item-models">
-                    {p.chat_models.join(', ')}
+                    {p.chat_models?.length > 0 && <span>chat: {p.chat_models.join(', ')}</span>}
+                    {p.image_models?.length > 0 && <span> · image: {p.image_models.join(', ')}</span>}
+                    {p.video_models?.length > 0 && <span> · video: {p.video_models.join(', ')}</span>}
                   </div>
                 )}
               </div>
               <div className="api-agent-llm-item-actions">
                 <button
                   className="api-action-btn"
-                  onClick={() => openEditLlmForm(p)}
-                  title="Update base_url / models (key is write-only)"
+                  data-testid={`edit-provider-${p.provider_id}`}
+                  onClick={() => openEditProviderForm(p)}
                 >
                   {t('canvasApiSettingsEdit') || 'Edit'}
                 </button>
                 <button
                   className="api-action-btn api-del-btn"
-                  onClick={() => deleteLlmProvider(p.provider_id)}
+                  data-testid={`delete-provider-${p.provider_id}`}
+                  onClick={() => deleteProviderRow(p.provider_id)}
                 >
                   {t('canvasApiSettingsAgentLLMDelete')}
                 </button>
@@ -671,6 +659,13 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
   useEffect(() => {
     setCfg(JSON.parse(JSON.stringify(config)));
   }, [config]);
+
+  // 进入页面时拉取统一 Provider 列表（Plan 5）
+  useEffect(() => {
+    if (open) {
+      loadProviders();
+    }
+  }, [open, loadProviders]);
 
   // Auto-select first provider
   useEffect(() => {
@@ -2543,8 +2538,8 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
           </div>
         </div>
 
-        {/* Agent LLM providers (saved to backend DB) */}
-        {renderAgentLLMSection()}
+        {/* 统一 Provider 列表（Plan 5：合并 LLM + Media） */}
+        {renderUnifiedProviderSection()}
 
         {/* Layout */}
         <div className="api-layout">
