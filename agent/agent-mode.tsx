@@ -247,6 +247,37 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
           modelId = modelId || llmBinding?.modelId || undefined;
         }
       }
+
+      // Defensive sync: 如果选中的 provider 还在 localStorage 但已不在 DB，
+      // 先把它的 baseUrl / apiKey / models 推回 DB，避免后端 load_llm_configs
+      // 拿不到 provider 而回退到 DevScriptedLLM 假任务。
+      if (providerId) {
+        const inDb = dbProviders.some((p) => p.provider_id === providerId);
+        if (!inDb) {
+          const local = useCanvasStore.getState().apiConfig.providers.find(
+            (p) => p.id === providerId,
+          );
+          if (local && local.baseUrl) {
+            try {
+              await api.upsertProvider(providerId, {
+                name: local.name || providerId,
+                base_url: local.baseUrl,
+                api_key: local.apiKey || '',
+                default_model: modelId || local.defaultModel || '',
+                protocol: local.protocol || 'openai',
+                enabled: local.enabled !== false,
+                chat_models: local.chatModels || [],
+                image_models: local.imageModels || [],
+                video_models: local.videoModels || [],
+                extra_config: {},
+              });
+            } catch (e: any) {
+              console.warn('[agent-mode] failed to sync provider to DB', e);
+            }
+          }
+        }
+      }
+
       const t = await api.startAgent(projectId, goal.trim(), {
         providerId,
         modelId,
