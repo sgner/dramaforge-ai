@@ -444,7 +444,6 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
     const item = provider();
     if (!item) return;
     if (isFixedProvider(item.id)) { alert(t('canvasApiSettingsAlertDefaultNoDelete')); return; }
-    if (cfg.providers.length <= 1) { alert(t('canvasApiSettingsAlertKeepOne')); return; }
     setCfg(prev => ({
       ...prev,
       providers: prev.providers.filter(p => p.id !== item.id),
