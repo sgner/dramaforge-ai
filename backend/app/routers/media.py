@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import MediaProviderConfig
+from ..models import ProviderConfig
 
 
 router = APIRouter()
@@ -57,8 +57,8 @@ class GenerateOut(BaseModel):
 # ============ Helpers ============
 
 def _load_provider(db: Session, provider_id: str) -> dict:
-    """读 provider 明文配置；找不到抛 404。"""
-    row = db.query(MediaProviderConfig).filter_by(provider_id=provider_id).first()
+    """读 provider 明文配置（统一表 provider_configs）；找不到抛 404。"""
+    row = db.query(ProviderConfig).filter_by(provider_id=provider_id).first()
     if not row:
         raise HTTPException(status_code=404, detail=f"provider '{provider_id}' not found in DB")
     if not row.enabled:

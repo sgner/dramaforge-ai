@@ -239,3 +239,67 @@ def test_generate_video_fallback_on_404(client):
 
     assert r.status_code == 200
     assert "mp4" in r.json()["url"]
+
+
+# ============ _load_provider 直接测试（in-memory sqlite）===========
+
+@pytest.fixture
+def db():
+    """in-memory sqlite，每个 test 独立 DB，不污染真实 dramaforge.db。"""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(bind=engine)
+    Session = sessionmaker(bind=engine)
+    session = Session()
+    try:
+        yield session
+    finally:
+        session.close()
+
+
+def test_load_provider_reads_unified_table(db):
+    """_load_provider 从 ProviderConfig 表读。"""
+    from app.models import ProviderConfig
+    from app.routers.media import _load_provider
+
+    db.add(ProviderConfig(
+        provider_id="test-media", name="Test",
+        base_url="https://media.example.com/v1", api_key="sk-media-1234567890",
+        protocol="openai", enabled=True, chat_models_json='[]',
+        image_models_json='["dall-e-3"]',
+    ))
+    db.commit()
+
+    p = _load_provider(db, "test-media")
+    assert p["provider_id"] == "test-media"
+    assert p["base_url"] == "https://media.example.com/v1"
+    assert p["api_key"] == "sk-media-1234567890"
+    assert p["image_models"] == ["dall-e-3"]
+
+
+def test_load_provider_404(db):
+    """找不到 → 404。"""
+    from app.routers.media import _load_provider
+    import pytest
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as exc:
+        _load_provider(db, "nonexistent")
+    assert exc.value.status_code == 404
+
+
+def test_load_provider_disabled(db):
+    """enabled=False → 400。"""
+    from app.models import ProviderConfig
+    from app.routers.media import _load_provider
+    import pytest
+    from fastapi import HTTPException
+
+    db.add(ProviderConfig(
+        provider_id="disabled", base_url="https://x", api_key="k",
+        protocol="openai", enabled=False,
+    ))
+    db.commit()
+    with pytest.raises(HTTPException) as exc:
+        _load_provider(db, "disabled")
+    assert exc.value.status_code == 400
