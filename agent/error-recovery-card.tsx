@@ -25,7 +25,7 @@ export const ErrorRecoveryCard: React.FC = () => {
   if (!pending) return null;
 
   const onConfirm = async () => {
-    await api.respond(taskId, {
+    await api.respondAgent(taskId, {
       response: action,
       recovery_action: action,
       new_model_id: action === 'change_model' ? modelId : null,

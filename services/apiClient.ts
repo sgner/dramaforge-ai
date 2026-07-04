@@ -177,7 +177,14 @@ export const api = {
   listAgentSteps: (taskId: string) =>
     request<AgentStepOut[]>(`/agent/tasks/${taskId}/steps`),
 
-  respondAgent: (taskId: string, payload: { response: string; approved?: boolean }) =>
+  respondAgent: (taskId: string, payload: {
+    response: string;
+    approved?: boolean;
+    /** Spec B: 工具失败恢复决策 (retry / change_model / skip) */
+    recovery_action?: 'retry' | 'change_model' | 'skip';
+    /** Spec B: 换模型时的新 model id */
+    new_model_id?: string | null;
+  }) =>
     request<{ ok: boolean }>(`/agent/tasks/${taskId}/respond`, {
       method: 'POST',
       body: JSON.stringify(payload),

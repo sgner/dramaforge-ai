@@ -37,7 +37,7 @@ const upsertMock = vi.fn(async (id: string, payload: any) => {
 
 vi.mock('../../services/apiClient', () => ({
   api: {
-    upsertMediaProvider: upsertMock,
+    upsertProvider: upsertMock,
   },
 }));
 

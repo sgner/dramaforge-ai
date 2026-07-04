@@ -79,7 +79,7 @@ export async function migrateLocalProvidersToBackend(): Promise<MigrationResult>
     }
     result.attempted += 1;
     try {
-      await api.upsertMediaProvider(id, {
+      await api.upsertProvider(id, {
         name: p.name || id,
         base_url: baseUrl,
         api_key: String(p.apiKey),

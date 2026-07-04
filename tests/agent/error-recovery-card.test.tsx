@@ -8,7 +8,7 @@ import { useAgentStore } from '@/agent/use-agent-store';
 
 vi.mock('@/services/apiClient', () => ({
   api: {
-    respond: vi.fn().mockResolvedValue({ ok: true }),
+    respondAgent: vi.fn().mockResolvedValue({ ok: true }),
   },
 }));
 
@@ -90,7 +90,7 @@ describe('<ErrorRecoveryCard />', () => {
     fireEvent.click(screen.getByDisplayValue('change_model'));
     fireEvent.click(screen.getByTestId('erc-confirm'));
     await waitFor(() => {
-      expect(api.respond).toHaveBeenCalledWith('t-1', {
+      expect(api.respondAgent).toHaveBeenCalledWith('t-1', {
         response: 'change_model',
         recovery_action: 'change_model',
         new_model_id: 'dall-e-2',
@@ -112,7 +112,7 @@ describe('<ErrorRecoveryCard />', () => {
     fireEvent.click(screen.getByDisplayValue('skip'));
     fireEvent.click(screen.getByTestId('erc-confirm'));
     await waitFor(() => {
-      expect(api.respond).toHaveBeenCalledWith('t-1', {
+      expect(api.respondAgent).toHaveBeenCalledWith('t-1', {
         response: 'skip',
         recovery_action: 'skip',
         new_model_id: null,
