@@ -51,10 +51,23 @@ class OpenAICompatibleLLMClient:
         model: str,
         timeout_sec: float = 60.0,
     ):
-        self.base_url = base_url.rstrip("/")
+        # 兼容用户填 base_url 时是否带 /v1 后缀
+        #  - 官方 OpenAI: https://api.openai.com/v1
+        #  - DeepSeek/Kimi/Qwen: https://api.deepseek.com/v1
+        #  - 自定义代理: http://localhost:8765/v1
+        #  - 也有少数用户会填根: http://localhost:8765
+        # 统一规整为 <root>/v1/chat/completions
+        self.base_url = self._normalize_base_url(base_url)
         self.api_key = api_key
         self.model = model
         self._timeout = httpx.Timeout(timeout_sec)
+
+    @staticmethod
+    def _normalize_base_url(base_url: str) -> str:
+        s = (base_url or "").rstrip("/")
+        if s.endswith("/v1"):
+            s = s[: -len("/v1")]
+        return s
 
     def _headers(self) -> dict[str, str]:
         return {

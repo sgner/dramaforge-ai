@@ -25,6 +25,8 @@ vi.mock('@/services/apiClient', () => {
       listAgentTools: vi.fn(),
       respondAgent: vi.fn(),
       getAgentTask: vi.fn(),
+      // 新增：LLM provider 列表 — 测试里默认返回空，模拟"无 provider"
+      listLLMProviders: vi.fn().mockResolvedValue([]),
     },
   };
 });
@@ -39,18 +41,27 @@ vi.mock('@/agent/error-recovery-card', () => ({
   ErrorRecoveryCard: () => null,
 }));
 
-// Mock use-canvas-store
-vi.mock('@/components/infinite-canvas/use-canvas-store', () => ({
-  useCanvasStore: {
-    getState: () => ({
-      addAgentNodes: vi.fn(),
-      clearAgentNodes: vi.fn(),
-      setTaskAssets: vi.fn(),
-      // Task 6: startAgent now reads apiConfig.stepBindings to get LLM provider
-      apiConfig: { providers: [], stepBindings: [] },
-    }),
-  },
-}));
+// Mock use-canvas-store — 同时支持 hook 调用（(s) => ...）和 getState
+vi.mock('@/components/infinite-canvas/use-canvas-store', () => {
+  const mockState = {
+    addAgentNodes: vi.fn(),
+    clearAgentNodes: vi.fn(),
+    setTaskAssets: vi.fn(),
+    relayoutAgentNodes: vi.fn(),
+    fitAgentView: vi.fn(),
+    resetViewportToAgentOrigin: vi.fn(),
+    // addAgentNodes / fitAgentView / resetViewportToAgentOrigin 内部读 cs.nodes
+    nodes: [],
+    // Task 6: startAgent now reads apiConfig.stepBindings to get LLM provider
+    apiConfig: { providers: [], stepBindings: [] },
+  };
+  const useCanvasStore: any = (selector?: any) =>
+    selector ? selector(mockState) : mockState;
+  useCanvasStore.getState = () => mockState;
+  useCanvasStore.subscribe = () => () => {};
+  useCanvasStore.setState = () => {};
+  return { useCanvasStore };
+});
 
 // Mock use-agent-tools — 跳过 fetch，立即返回 PALETTE_TOOLS
 vi.mock('@/agent/use-agent-tools', async () => {

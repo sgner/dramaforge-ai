@@ -6,7 +6,7 @@ import React, {
   useMemo,
 } from 'react';
 import { Package, Download, Trash2, X } from 'lucide-react';
-import { useCanvasStore } from './use-canvas-store';
+import { useCanvasStore, migrateLocalProvidersToBackend } from './use-canvas-store';
 import { CanvasNodeComponent } from './CanvasNode';
 import { CanvasLinks } from './CanvasLinks';
 import { CanvasMiniMap } from './CanvasMiniMap';
@@ -47,8 +47,10 @@ export const InfiniteCanvas: React.FC<{
   projectId?: string;
   onAgentMode?: () => void;
   agentModeActive?: boolean;
+  /** 当 true 时隐藏画布自带顶栏（用于 AgentMode 已有自己的顶栏） */
+  hideToolbar?: boolean;
   [key: string]: any;
-}> = React.memo(({ onBack, projectId, onAgentMode, agentModeActive, ...rest }) => {
+}> = React.memo(({ onBack, projectId, onAgentMode, agentModeActive, hideToolbar, ...rest }) => {
   const boardRef = useRef<HTMLDivElement>(null);
   const worldRef = useRef<HTMLDivElement>(null);
   const { t } = useI18n();
@@ -87,6 +89,45 @@ export const InfiniteCanvas: React.FC<{
       loadProject(projectId);
     }
   }, [projectId, loadProject]);
+
+  // 一次性供应商迁移：把 localStorage 中已配置的供应商（含 apiKey）入库到后端 DB。
+  // 完成后写 `dramaforge-media-migrated-v1=1` 标志，不再重复执行。
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await migrateLocalProvidersToBackend();
+        if (!cancelled && r.attempted > 0) {
+          // eslint-disable-next-line no-console
+          console.info(
+            `[media-migration] attempted=${r.attempted} synced=${r.synced} ` +
+              `skipped=${r.skipped} failed=${r.failed.length}`,
+            r.failed,
+          );
+        }
+      } catch (e) {
+        // 静默：迁移失败不影响画布使用
+        // eslint-disable-next-line no-console
+        console.warn('[media-migration] failed', e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // 调试钩子：window.__dramaforgeReRunMigration() 可在控制台手动触发迁移
+  // （先清 localStorage 标志，再次刷新）
+  useEffect(() => {
+    if (import.meta.env.DEV && typeof window !== 'undefined') {
+      (window as any).__dramaforgeReRunMigration = async () => {
+        const { resetMediaMigrationFlag, migrateLocalProvidersToBackend } =
+          await import('./use-canvas-store');
+        resetMediaMigrationFlag();
+        return await migrateLocalProvidersToBackend();
+      };
+    }
+  }, []);
 
   const [panning, setPanning] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -802,6 +843,7 @@ export const InfiniteCanvas: React.FC<{
           onAgentMode={onAgentMode}
           agentModeActive={agentModeActive}
         />
+        {hideToolbar && <style>{`.canvas-root > .canvas-topbar{display:none !important;}`}</style>}
 
       <div ref={worldRef} className="canvas-world" style={worldStyle}>
         <CanvasLinks
@@ -814,18 +856,48 @@ export const InfiniteCanvas: React.FC<{
           onLinkDelete={handleLinkDelete}
         />
 
-        {nodes.map((node) => (
-          <CanvasNodeComponent
-            key={node.id}
-            node={node}
-            onDragStart={handleNodeDragStart}
-            onResizeStart={handleNodeResizeStart}
-            onPortMouseDown={handlePortMouseDown}
-            onNodeDoubleClick={handleNodeDoubleClick}
-            onNodeContextMenu={handleNodeContextMenu}
-            onOpenTemplate={(nodeId) => setPromptTemplate({ open: true, nodeId })}
-          />
-        ))}
+        {/* 视口 culling：只渲染当前视口内（含 ±2 屏 padding）且未超出 hard cap 的节点
+            - 避免大量 agent_node 拖垮画布
+            - 选中/拖动中的节点始终保留
+            - hard cap 100 是最坏情况兜底 */}
+        {(() => {
+          const boardRect = getBoardRect();
+          const scale = viewport.scale || 1;
+          const padding = 2; // 视口外 2 屏 padding 仍渲染（拖动时不闪现）
+          const visW = boardRect ? boardRect.width * padding : 6000;
+          const visH = boardRect ? boardRect.height * padding : 4000;
+          const visX0 = -viewport.x / scale - visW / 2;
+          const visY0 = -viewport.y / scale - visH / 2;
+          const visX1 = visX0 + visW;
+          const visY1 = visY0 + visH;
+          const HARD_CAP = 100;
+          // 总是显示：选中节点 / 拖动节点 / 视口内节点
+          const isVisible = (n: CanvasNode) => {
+            if (selected.has(n.id)) return true;
+            const drag = (dragRef.current && dragRef.current.id === n.id);
+            const resize = (resizeRef.current && resizeRef.current.id === n.id);
+            if (drag || resize) return true;
+            // agent_node 一律显示（它们通常聚集在小区域内，不参与 culling 收益）
+            if (n.type === 'agent_node') return true;
+            const w = n.w || 200;
+            const h = n.h || 160;
+            return !(n.x + w < visX0 || n.x > visX1 || n.y + h < visY0 || n.y > visY1);
+          };
+          const filtered = nodes.filter(isVisible);
+          const capped = filtered.length > HARD_CAP ? filtered.slice(0, HARD_CAP) : filtered;
+          return capped.map((node) => (
+            <CanvasNodeComponent
+              key={node.id}
+              node={node}
+              onDragStart={handleNodeDragStart}
+              onResizeStart={handleNodeResizeStart}
+              onPortMouseDown={handlePortMouseDown}
+              onNodeDoubleClick={handleNodeDoubleClick}
+              onNodeContextMenu={handleNodeContextMenu}
+              onOpenTemplate={(nodeId) => setPromptTemplate({ open: true, nodeId })}
+            />
+          ));
+        })()}
 
         <ComposerPanel />
       </div>

@@ -122,6 +122,7 @@ export const CanvasNodeComponent: React.FC<NodeProps> = React.memo(
     // 参考项目类名逻辑
     const nodeClass = [
       'image-node',
+      node.type === 'agent_node' ? 'agent-canvas-node' : '',
       isGroupType ? 'group-container-node' : '',
       isVideoNode ? 'video-node' : '',
       isPipelineNode ? 'pipeline-node' : '',
@@ -1639,12 +1640,6 @@ const ScriptNodeBody: React.FC<{ node: CanvasNode }> = React.memo(({ node }) => 
 ScriptNodeBody.displayName = 'ScriptNodeBody';
 
 /* ===== Agent Node (agent 事件节点) ===== */
-const STATUS_LABEL_AGENT: Record<string, string> = {
-  pending: '○ 等待',
-  running: '◐ 执行中',
-  success: '● 成功',
-  failed: '✕ 失败',
-};
 
 const AgentNodeBody: React.FC<{ node: CanvasNode }> = React.memo(({ node }) => {
   const taskType = (node._agentTaskType as TaskType) || 'goal';
@@ -1658,18 +1653,28 @@ const AgentNodeBody: React.FC<{ node: CanvasNode }> = React.memo(({ node }) => {
   const isImage = isArtifact && payload.kind === 'image' && typeof payload.url === 'string';
   const isText = isArtifact && payload.kind === 'text' && typeof payload.snippet === 'string';
 
+  // 严格黑白灰：左边框细线 + 节点 type icon，去掉一切彩色
   return (
     <div
       data-testid="agent-node-body"
       style={{
         minWidth: 0,
-        background: '#ffffff',
-        border: `2px solid ${meta.color}`,
-        borderRadius: 10,
-        padding: 10,
+        width: '100%',
+        height: '100%',
+        boxSizing: 'border-box',
+        background: 'var(--bg, #ffffff)',
+        border: '1px solid var(--line, rgba(0,0,0,0.12))',
+        borderLeft: '2px solid var(--text, #0f172a)',
+        borderRadius: 8,
+        padding: '8px 10px',
         fontFamily: 'ui-sans-serif, system-ui, sans-serif',
         fontSize: 12,
-        boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+        color: 'var(--text, #0f172a)',
+        boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4,
+        overflow: 'hidden',
       }}
     >
       <div
@@ -1677,32 +1682,38 @@ const AgentNodeBody: React.FC<{ node: CanvasNode }> = React.memo(({ node }) => {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          marginBottom: 6,
+          gap: 6,
         }}
       >
         <span
           data-testid={`task-graph-node-badge-${taskType}`}
           style={{
             fontSize: 10,
-            padding: '2px 6px',
-            background: meta.color,
-            color: 'white',
-            borderRadius: 4,
-            fontWeight: 600,
-            letterSpacing: 0.3,
+            color: 'var(--muted, #475569)',
+            fontWeight: 500,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            letterSpacing: 0.2,
           }}
         >
-          {meta.icon} {meta.label}
+          <span style={{ fontSize: 11 }}>{meta.icon}</span>
+          {meta.label}
         </span>
-        <AgentStatusBadge status={status} color={meta.color} />
+        <AgentStatusBadge status={status} />
       </div>
       <div
         data-testid="task-graph-node-label"
         style={{
           fontWeight: 600,
-          color: '#0f172a',
-          marginBottom: 6,
+          color: 'var(--text, #0f172a)',
+          fontSize: 12,
+          lineHeight: 1.3,
           wordBreak: 'break-word',
+          display: '-webkit-box',
+          WebkitLineClamp: 2,
+          WebkitBoxOrient: 'vertical',
+          overflow: 'hidden',
         }}
       >
         {label || '—'}
@@ -1711,31 +1722,32 @@ const AgentNodeBody: React.FC<{ node: CanvasNode }> = React.memo(({ node }) => {
         <img
           src={payload.url}
           alt={label}
-          style={{ width: '100%', height: 'auto', borderRadius: 6, marginTop: 4, display: 'block' }}
+          style={{ width: '100%', height: 56, objectFit: 'cover', borderRadius: 4, marginTop: 2, display: 'block', background: 'var(--soft, rgba(0,0,0,0.04))' }}
         />
       )}
       {isText && (
         <div
           data-testid="task-graph-node-text-snippet"
           style={{
-            fontSize: 11,
-            color: '#475569',
-            background: 'rgba(0,0,0,0.03)',
-            padding: 6,
+            fontSize: 10,
+            color: 'var(--muted, #475569)',
+            background: 'var(--soft, rgba(0,0,0,0.04))',
+            padding: 4,
             borderRadius: 4,
-            maxHeight: 80,
+            maxHeight: 60,
             overflow: 'hidden',
             textOverflow: 'ellipsis',
+            lineHeight: 1.35,
           }}
         >
-          {String(payload.snippet).slice(0, 200)}
+          {String(payload.snippet).slice(0, 140)}
         </div>
       )}
       {isPlan && Array.isArray(payload.plan) && (
-        <ol style={{ margin: 0, paddingLeft: 18, fontSize: 11, color: '#334155' }}>
-          {payload.plan.slice(0, 8).map((step: any, i: number) => (
-            <li key={i} data-testid={`task-graph-node-plan-step-${i}`} style={{ marginBottom: 2 }}>
-              <code style={{ fontSize: 10 }}>{step.tool || step.name || `step ${i + 1}`}</code>
+        <ol style={{ margin: 0, paddingLeft: 16, fontSize: 10, color: 'var(--text, #334155)', lineHeight: 1.4 }}>
+          {payload.plan.slice(0, 6).map((step: any, i: number) => (
+            <li key={i} data-testid={`task-graph-node-plan-step-${i}`} style={{ marginBottom: 1 }}>
+              <code style={{ fontSize: 9, color: 'var(--muted, #475569)' }}>{step.tool || step.name || `step ${i + 1}`}</code>
             </li>
           ))}
         </ol>
@@ -1744,16 +1756,16 @@ const AgentNodeBody: React.FC<{ node: CanvasNode }> = React.memo(({ node }) => {
         <div
           data-testid="task-graph-node-question"
           style={{
-            fontSize: 11,
-            color: '#b45309',
-            background: 'rgba(245,158,11,0.08)',
-            padding: 6,
+            fontSize: 10,
+            color: 'var(--muted, #475569)',
+            background: 'var(--soft, rgba(0,0,0,0.04))',
+            padding: 4,
             borderRadius: 4,
-            border: '1px dashed rgba(245,158,11,0.4)',
-            marginTop: 4,
+            border: '1px dashed var(--line, rgba(0,0,0,0.2))',
+            marginTop: 2,
           }}
         >
-          ⚠ 等待用户回答
+          等待用户回答
         </div>
       )}
     </div>
@@ -1761,31 +1773,35 @@ const AgentNodeBody: React.FC<{ node: CanvasNode }> = React.memo(({ node }) => {
 });
 AgentNodeBody.displayName = 'AgentNodeBody';
 
-const AgentStatusBadge: React.FC<{ status: string; color: string }> = ({ status }) => {
+const AgentStatusBadge: React.FC<{ status: string }> = ({ status }) => {
   const testId = `task-graph-node-status-${status}`;
-  const bg =
-    status === 'running' ? 'rgba(14,165,233,0.15)' :
-    status === 'success' ? 'rgba(16,185,129,0.15)' :
-    status === 'failed' ? 'rgba(239,68,68,0.15)' :
-    'rgba(148,163,184,0.15)';
-  const fg =
-    status === 'running' ? '#0369a1' :
-    status === 'success' ? '#047857' :
-    status === 'failed' ? '#b91c1c' :
-    '#475569';
+  // 严格黑白灰系：无颜色，仅用文字 + 边框粗细区分
+  const cfg =
+    status === 'running' ? { label: '运行中', emphasis: 'strong' as const } :
+    status === 'success' ? { label: '完成', emphasis: 'normal' as const } :
+    status === 'failed' ? { label: '失败', emphasis: 'strong' as const } :
+    status === 'pending' ? { label: '等待', emphasis: 'soft' as const } :
+    { label: status, emphasis: 'soft' as const };
+  const emphasisStyle: React.CSSProperties = cfg.emphasis === 'strong'
+    ? { fontWeight: 700, color: 'var(--text, #0f172a)' }
+    : cfg.emphasis === 'soft'
+    ? { fontWeight: 500, color: 'var(--muted, #94a3b8)' }
+    : { fontWeight: 500, color: 'var(--muted, #475569)' };
   return (
     <span
       data-testid={testId}
       style={{
         fontSize: 9,
-        padding: '2px 6px',
-        background: bg,
-        color: fg,
-        borderRadius: 4,
+        ...emphasisStyle,
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
         fontFamily: 'ui-monospace, monospace',
+        textTransform: 'lowercase',
+        letterSpacing: 0.2,
       }}
     >
-      {STATUS_LABEL_AGENT[status] || status}
+      {cfg.label}
     </span>
   );
 };

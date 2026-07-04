@@ -12,10 +12,14 @@ import {
   TaskAssetRef,
   TaskAssetKind,
   TaskType,
-  AGENT_COL_X,
   AGENT_NODE_W,
   AGENT_NODE_H,
+  AGENT_NODE_H_TALL,
   AGENT_ROW_GAP,
+  AGENT_COL_GAP,
+  AGENT_GRID_COLS,
+  MAX_AGENT_NODES,
+  MAX_AGENT_NODES_PER_TYPE,
 } from './types';
 import {
   ApiConfig,
@@ -284,6 +288,19 @@ function saveApiConfig(config: ApiConfig) {
   }
 }
 
+/* ========================
+ * 供应商迁移：localStorage → 后端 DB
+ * 实际逻辑在 services/mediaProviderMigration.ts；这里保留旧名 re-export 避免破坏调用方。
+ * 一次性：完成后写 `dramaforge-media-migrated-v1=1`，后续不再尝试。
+ * 目标：把用户此前在前端 localStorage 配置的供应商（含 apiKey）一次性入库；
+ *       之后所有读 / 写都走后端，前端不再持有明文 apiKey。
+ * ======================== */
+export {
+  migrateLocalProvidersToBackend,
+  resetMediaMigrationFlag,
+  type MigrationResult,
+} from '../../services/mediaProviderMigration';
+
 function createDefaultApiConfig(): ApiConfig {
   return {
     providers: DEFAULT_PROVIDERS.map(p => ({
@@ -393,6 +410,9 @@ interface CanvasStore {
   }) => void;
   clearAgentNodes: () => void;
   recordAgentNodeDrag: (nodeId: string, x: number, y: number) => void;
+  relayoutAgentNodes: () => void;
+  /** 自动缩放 viewport 以容纳所有 agent_node + 一些 padding，让用户一眼看到完整时间线 */
+  fitAgentView: (boardW: number, boardH: number) => void;
 }
 
 export const useCanvasStore = create<CanvasStore>((set, get) => ({
@@ -1462,85 +1482,259 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
   setNodes: (nodes) => set({ nodes }),
   setConnections: (connections) => set({ connections }),
 
-  // AgentMode × Canvas 集成：把 agent 事件投影到 7 列画布节点
+  // AgentMode × Canvas 集成：把 agent 事件投影到画布节点
+  //
+  // 布局策略（单条横向时间线流）：
+  // 1. 所有事件按发生顺序（goal → plan → actions → observations → artifacts → question → done）
+  //    排成一条横向时间线
+  // 2. 每行最多 AGENT_GRID_COLS=5 个节点，超出后换行（row=floor(idx/GRID_COLS)）
+  // 3. 节点总数上限 MAX_AGENT_NODES=20，超过时合并最旧的 observation
+  // 4. 同类型上限 MAX_AGENT_NODES_PER_TYPE=8，超过时合并
+  // 5. 目标：用户一眼看到完整 agent 进展，无需上下/左右滚动
+  // 6. 用户拖动后通过 nodeOverrides 记录偏移
   addAgentNodes: (input) => {
     const state = get();
     const { userGoal, plan, actions, observations, artifacts, pendingQuestion } = input;
     const projectId = state.projectId || 'global';
 
-    const upsert = (id: string, taskType: TaskType, label: string, payload: Record<string, any>, status: 'pending' | 'running' | 'success' | 'failed' = 'pending') => {
-      const colX = AGENT_COL_X[taskType];
-      // 使用 get() 获取最新状态，确保同一 addAgentNodes 调用内的多次 upsert 能正确累加 colIndex
-      const live = get();
-      const existing = live.nodes.find((n) => n.id === id);
-      const override = live.nodeOverrides[id] || { dx: 0, dy: 0 };
-      const colIndex = live.nodes.filter(
-        (n) => n.type === 'agent_node' && (n as any)._agentTaskType === taskType && n.id !== id,
-      ).length;
-      const x = colX + override.dx;
-      const y = 0 + override.dy + colIndex * (AGENT_NODE_H + AGENT_ROW_GAP);
-      if (existing) {
-        set((s) => ({
-          nodes: s.nodes.map((n) =>
-            n.id === id
-              ? { ...n, _agentStatus: status, _agentPayload: payload, _agentLabel: label, _agentTaskType: taskType }
-              : n,
-          ),
-        }));
-      } else {
-        const node: CanvasNode = {
-          id,
-          type: 'agent_node',
-          x,
-          y,
-          w: AGENT_NODE_W,
-          h: AGENT_NODE_H,
-          _agentTaskType: taskType,
-          _agentStatus: status,
-          _agentPayload: payload,
-          _agentLabel: label,
-        } as any;
-        set((s) => ({ nodes: [...s.nodes, node] }));
-      }
-    };
-
+    // 1) 按发生顺序构造事件数组（保留时序，不打乱）
+    const order: { id: string; taskType: TaskType; label: string; payload: Record<string, any>; status: 'pending' | 'running' | 'success' | 'failed' }[] = [];
     if (userGoal) {
-      upsert(`agent-goal-${projectId}`, 'goal', userGoal.slice(0, 60), { text: userGoal });
+      order.push({ id: `agent-goal-${projectId}`, taskType: 'goal', label: userGoal.slice(0, 80), payload: { text: userGoal }, status: 'success' });
     }
     if (plan && plan.length) {
-      upsert(`agent-plan-${projectId}`, 'plan', `计划 (${plan.length} 步)`, { plan });
+      order.push({ id: `agent-plan-${projectId}`, taskType: 'plan', label: `计划 (${plan.length} 步)`, payload: { plan }, status: 'success' });
     }
     actions.forEach((evt, i) => {
-      const id = `agent-action-${i}-${evt.timestamp || i}`;
-      upsert(id, 'action', (evt.payload as any)?.tool || `action ${i + 1}`, evt.payload || {}, 'success');
+      order.push({
+        id: `agent-action-${i}-${evt.timestamp || i}`,
+        taskType: 'action',
+        label: (evt.payload as any)?.tool || `action ${i + 1}`,
+        payload: evt.payload || {},
+        status: 'success',
+      });
     });
     observations.forEach((evt, i) => {
-      const id = `agent-obs-${i}-${evt.timestamp || i}`;
-      upsert(id, 'observation', (evt.payload as any)?.tool || `obs ${i + 1}`, evt.payload || {}, 'success');
+      order.push({
+        id: `agent-obs-${i}-${evt.timestamp || i}`,
+        taskType: 'observation',
+        label: (evt.payload as any)?.tool || `obs ${i + 1}`,
+        payload: evt.payload || {},
+        status: 'success',
+      });
     });
     const flatArtifacts = Object.values(artifacts).flat() as ArtifactLite[];
     flatArtifacts.forEach((item, i) => {
-      const id = `agent-artifact-${item.id || i}`;
-      upsert(id, 'artifact', (item.name as string) || (item.asset_kind as string) || '资产', item, 'success');
+      order.push({
+        id: `agent-artifact-${item.id || i}`,
+        taskType: 'artifact',
+        label: (item.name as string) || (item.asset_kind as string) || '资产',
+        payload: item,
+        status: 'success',
+      });
     });
     if (pendingQuestion) {
-      upsert(`agent-question-${projectId}`, 'question', '等待用户回答', pendingQuestion, 'running');
+      order.push({
+        id: `agent-question-${projectId}`,
+        taskType: 'question',
+        label: '等待用户回答',
+        payload: pendingQuestion,
+        status: 'running',
+      });
     }
+
+    // 2) 节点数量限制：保留时序，超限时从最旧的 observation 合并开始裁剪
+    //    始终保留：goal / plan / question（避免"切回发现 goal 没了"）
+    //    超限时按 type 配额裁剪：超过 perTypeLimit 的多余 type，从最旧的 observation/action 开始裁
+    const totalLimit = MAX_AGENT_NODES;
+    const perTypeLimit = MAX_AGENT_NODES_PER_TYPE;
+    const pinnedTypes = new Set<TaskType>(['goal', 'plan', 'question']);
+    const typeCount: Record<string, number> = {};
+    const kept: typeof order = [];
+    for (const item of order) {
+      typeCount[item.taskType] = (typeCount[item.taskType] || 0) + 1;
+      const isPinned = pinnedTypes.has(item.taskType);
+      const overPerType = typeCount[item.taskType] > perTypeLimit;
+      if (!isPinned && overPerType) {
+        // 超过单类型配额：跳过最旧的（按时序的当前就是最旧的）
+        continue;
+      }
+      if (kept.length >= totalLimit && !isPinned) {
+        // 总数超限：先看是否可以挤掉 pinned（不行，pinned 必留）
+        // 非 pinned 跳过
+        continue;
+      }
+      kept.push(item);
+    }
+    const finalOrder = kept;
+
+    // 3) 单条横向时间线布局：每行 AGENT_GRID_COLS=5 个，超出换行
+    //    row = floor(idx / GRID_COLS), col = idx % GRID_COLS
+    const layouts: Record<string, { x: number; y: number; w: number; h: number }> = {};
+    finalOrder.forEach((item, idx) => {
+      const override = state.nodeOverrides[item.id] || { dx: 0, dy: 0 };
+      const col = idx % AGENT_GRID_COLS;
+      const row = Math.floor(idx / AGENT_GRID_COLS);
+      const x = col * (AGENT_NODE_W + AGENT_COL_GAP) + override.dx;
+      const y = row * (AGENT_NODE_H + AGENT_ROW_GAP) + override.dy;
+      const w = AGENT_NODE_W;
+      const h = item.taskType === 'plan' || item.taskType === 'question' || item.taskType === 'artifact'
+        ? AGENT_NODE_H_TALL
+        : AGENT_NODE_H;
+      layouts[item.id] = { x, y, w, h };
+    });
+
+    // 4) 应用更新：保留已存在的非 agent_node 节点；重建 agent_node 列表
+    set((s) => {
+      const otherNodes = s.nodes.filter((n) => n.type !== 'agent_node');
+      const otherConns = s.connections.filter((c) => {
+        const fromIsAgent = finalOrder.some((it) => it.id === c.from);
+        const toIsAgent = finalOrder.some((it) => it.id === c.to);
+        // 保留：两端都不是 agent_node 的连接（user-drawn）
+        return !(fromIsAgent || toIsAgent);
+      });
+      const newAgentNodes: CanvasNode[] = finalOrder.map((item) => {
+        const existing = s.nodes.find((n) => n.id === item.id);
+        const layout = layouts[item.id];
+        return {
+          id: item.id,
+          type: 'agent_node' as const,
+          x: layout.x,
+          y: layout.y,
+          w: layout.w,
+          h: layout.h,
+          _agentTaskType: item.taskType,
+          _agentStatus: item.status,
+          _agentPayload: item.payload,
+          _agentLabel: item.label,
+          // 保留用户拖动过的其他字段
+          ...(existing ? { running: existing.running } : {}),
+        } as CanvasNode;
+      });
+      // 5) 按事件发生顺序为 agent_node 添加连接线（让用户看清"思路 → 动作 → 观察"流程）
+      const newConns: Connection[] = otherConns;
+      for (let i = 1; i < newAgentNodes.length; i++) {
+        const from = newAgentNodes[i - 1].id;
+        const to = newAgentNodes[i].id;
+        // 不重复添加（保险）
+        if (!newConns.some((c) => c.from === from && c.to === to)) {
+          newConns.push({ id: `agent-conn-${from}-${to}`, from, to });
+        }
+      }
+      return {
+        nodes: [...otherNodes, ...newAgentNodes],
+        connections: newConns,
+      };
+    });
   },
 
   clearAgentNodes: () =>
     set((s) => ({ nodes: s.nodes.filter((n) => n.type !== 'agent_node') })),
 
+  // 用户拖动 agent_node 时记录偏移；dx/dy 为相对默认时间线位置 (x=col*step, y=row*step) 的偏移
   recordAgentNodeDrag: (nodeId, x, y) =>
     set((s) => {
       const node = s.nodes.find((n) => n.id === nodeId);
       if (!node || node.type !== 'agent_node') return s;
-      const taskType = (node as any)._agentTaskType as TaskType;
-      const colX = AGENT_COL_X[taskType];
+      // 计算该节点在 agent_node 数组中的索引（按 y→x 排序稳定）
+      const allAgents = s.nodes
+        .filter((nn) => nn.type === 'agent_node')
+        .sort((a, b) => (a.y - b.y) || (a.x - b.x));
+      const idx = allAgents.findIndex((n) => n.id === nodeId);
+      if (idx < 0) return s;
+      const col = idx % AGENT_GRID_COLS;
+      const row = Math.floor(idx / AGENT_GRID_COLS);
+      const baseX = col * (AGENT_NODE_W + AGENT_COL_GAP);
+      const baseY = row * (AGENT_NODE_H + AGENT_ROW_GAP);
       return {
-        nodeOverrides: { ...s.nodeOverrides, [nodeId]: { dx: x - colX, dy: y } },
+        nodeOverrides: { ...s.nodeOverrides, [nodeId]: { dx: x - baseX, dy: y - baseY } },
       };
     }),
+
+  // 重新整理 agent_node 布局：清空所有 user drag overrides，按横向时间线重新排布
+  // 用户主动点"重排"按钮 / 切换视图时调用
+  relayoutAgentNodes: () =>
+    set((s) => {
+      const agentNodes = s.nodes.filter((n) => n.type === 'agent_node');
+      if (!agentNodes.length) return s;
+      // 按当前 y→x 排序保持相对顺序
+      const sorted = [...agentNodes].sort((a, b) => (a.y - b.y) || (a.x - b.x));
+      const newAgentNodes = sorted.map((n, idx) => {
+        const col = idx % AGENT_GRID_COLS;
+        const row = Math.floor(idx / AGENT_GRID_COLS);
+        const x = col * (AGENT_NODE_W + AGENT_COL_GAP);
+        const y = row * (AGENT_NODE_H + AGENT_ROW_GAP);
+        const taskType = (n as any)._agentTaskType as TaskType;
+        const h = taskType === 'plan' || taskType === 'question' || taskType === 'artifact'
+          ? AGENT_NODE_H_TALL
+          : AGENT_NODE_H;
+        return { ...n, x, y, h, w: AGENT_NODE_W };
+      });
+      const otherNodes = s.nodes.filter((n) => n.type !== 'agent_node');
+      // 重新生成 agent_node 之间的连接线（按新顺序）
+      const agentIds = new Set(newAgentNodes.map((n) => n.id));
+      const otherConns = s.connections.filter(
+        (c) => !agentIds.has(c.from) && !agentIds.has(c.to)
+      );
+      const newAgentConns: Connection[] = [];
+      for (let i = 1; i < newAgentNodes.length; i++) {
+        newAgentConns.push({
+          id: `agent-conn-${newAgentNodes[i - 1].id}-${newAgentNodes[i].id}`,
+          from: newAgentNodes[i - 1].id,
+          to: newAgentNodes[i].id,
+        });
+      }
+      return {
+        nodes: [...otherNodes, ...newAgentNodes],
+        connections: [...otherConns, ...newAgentConns],
+        nodeOverrides: {},
+      };
+    }),
+
+  // 自动缩放 viewport 让用户一眼看到完整 agent 时间线
+  // 算法：取所有 agent_node 的 bbox → 算合适 scale → 算 viewport xy 居中
+  // 容错：boardW/boardH 极小时也能 fit（防止 div 还没渲染好时调用）
+  fitAgentView: (boardW, boardH) => {
+    const state = get();
+    const agents = state.nodes.filter((n) => n.type === 'agent_node');
+    if (!agents.length) return;
+    // 包围盒
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const n of agents) {
+      minX = Math.min(minX, n.x);
+      minY = Math.min(minY, n.y);
+      maxX = Math.max(maxX, n.x + (n.w || AGENT_NODE_W));
+      maxY = Math.max(maxY, n.y + (n.h || AGENT_NODE_H));
+    }
+    // padding：四周各留 32px
+    const PADDING = 32;
+    const bboxW = maxX - minX;
+    const bboxH = maxY - minY;
+    if (bboxW <= 0 || bboxH <= 0) return;
+    // 兜底 board 尺寸（避免 0 除）
+    const w = Math.max(boardW || 0, 600);
+    const h = Math.max(boardH || 0, 400);
+    // 计算合适 scale：保证不放大（scale ≤ 1）但能 fit 整张时间线
+    const scaleX = (w - PADDING * 2) / bboxW;
+    const scaleY = (h - PADDING * 2) / bboxH;
+    let scale = Math.min(scaleX, scaleY, 1);
+    scale = Math.max(scale, 0.5); // 下限：不要缩太小看不清
+    // 居中
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    const x = w / 2 - cx * scale;
+    const y = h / 2 - cy * scale;
+    set({ viewport: { x, y, scale } });
+  },
+
+  // 把 viewport 移动到 (0, 0) 区域（agent 节点布局原点），用于"刚进入 agent 模式还没有节点"时
+  // 避免 viewport 默认在 (-1800, -1000) 远离节点位置
+  resetViewportToAgentOrigin: (boardW, boardH) => {
+    const w = Math.max(boardW || 0, 600);
+    const h = Math.max(boardH || 0, 400);
+    // 把画布中心放到 (0, 0) 区域
+    set({ viewport: { x: w / 2, y: h / 2, scale: 1 } });
+  },
 
   reset: () =>
     set({

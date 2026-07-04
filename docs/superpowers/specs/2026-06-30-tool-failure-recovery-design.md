@@ -8,16 +8,25 @@
 
 ## 0. 全局约束
 
-- 现有 100 个前端测试 + 131 个后端测试必须全过
-- `Tool` / `BaseTool` / `ToolContext` / `ToolRegistry` 现有 API 保持兼容（只增字段/方法）
-- `EventType` 枚举只增不改
-- `AgentUserResponse` schema 只增字段不改语义
-- 不引入新的外部依赖
-- Python 包管理使用 uv（已确认）
-- TDD：每个任务先写失败测试，再实现，最后验证全绿
-- 测试运行命令：
-  - 后端：`cd backend; uv run pytest -q`
-  - 前端：`cd ..; npm test -- --run`
+* 现有 100 个前端测试 + 131 个后端测试必须全过
+
+* `Tool` / `BaseTool` / `ToolContext` / `ToolRegistry` 现有 API 保持兼容（只增字段/方法）
+
+* `EventType` 枚举只增不改
+
+* `AgentUserResponse` schema 只增字段不改语义
+
+* 不引入新的外部依赖
+
+* Python 包管理使用 uv（已确认）
+
+* TDD：每个任务先写失败测试，再实现，最后验证全绿
+
+* 测试运行命令：
+
+  * 后端：`cd backend; uv run pytest -q`
+
+  * 前端：`cd ..; npm test -- --run`
 
 ## 1. 目标 & 范围
 
@@ -27,34 +36,46 @@
 
 ### 1.2 MVP 范围（本 spec 全部做）
 
-- 工具调用失败自动重试 N 次（指数退避）
-- 重试耗尽后自动换 fallback 模型重试一次
-- 仍失败后挂起任务，前端弹模态卡让用户决策
-- 3 选项：重试（同 params）、换模型（指定新 model_id）、跳过
-- 跳过时注入 observation 让 agent 决定如何继续
-- 后端推送 `tool_retrying` / `tool_fallback_model` / `tool_error` 三类事件
-- 前端 ThoughtStream 显示重试/切换气泡
-- 前端 ErrorRecoveryCard 画布中央模态卡
+* 工具调用失败自动重试 N 次（指数退避）
+
+* 重试耗尽后自动换 fallback 模型重试一次
+
+* 仍失败后挂起任务，前端弹模态卡让用户决策
+
+* 3 选项：重试（同 params）、换模型（指定新 model\_id）、跳过
+
+* 跳过时注入 observation 让 agent 决定如何继续
+
+* 后端推送 `tool_retrying` / `tool_fallback_model` / `tool_error` 三类事件
+
+* 前端 ThoughtStream 显示重试/切换气泡
+
+* 前端 ErrorRecoveryCard 画布中央模态卡
 
 ### 1.3 范围外（明确不做）
 
-- ❌ 调用前高成本工具审批（属于 Spec A：人类介入）
-- ❌ 跨任务重试策略累积（每次 task 独立）
-- ❌ 自动重试 budget 全局上限（每个 tool 独立计数）
-- ❌ 错误上报到 Sentry/Datadog
-- ❌ Plan 阶段修改
-- ❌ 分支 A/B 测试
+* ❌ 调用前高成本工具审批（属于 Spec A：人类介入）
+
+* ❌ 跨任务重试策略累积（每次 task 独立）
+
+* ❌ 自动重试 budget 全局上限（每个 tool 独立计数）
+
+* ❌ 错误上报到 Sentry/Datadog
+
+* ❌ Plan 阶段修改
+
+* ❌ 分支 A/B 测试
 
 ## 2. 决策汇总
 
-| 项 | 决策 | 理由 |
-|---|---|---|
-| 失败流程 | 自动重试 N 次 → 换 fallback 模型 → 问用户 | 三级降级，最大化自动恢复，保留用户控制 |
-| Fallback 模型来源 | 每 tool 静态 `fallback_model_id` 字段 | 明确可控，与 PRD 一致 |
-| 重试配置 | 每 tool 静态 `max_retries=2` + `retry_backoff_base=1.0` | 全局默认 + tool 可覆盖 |
-| 恢复 UI | 画布中央模态卡 (ErrorRecoveryCard) | 注意焦点集中 |
-| 跳过语义 | step 状态 `skipped`，observation 注入 `user_skip`，agent 决定下游 | 智能，不硬中断 |
-| 换模型选项 | 查 `api_config` 同 category 模型下拉 | 与现有 ApiSettings 共享 |
+| 项             | 决策                                                      | 理由                  |
+| ------------- | ------------------------------------------------------- | ------------------- |
+| 失败流程          | 自动重试 N 次 → 换 fallback 模型 → 问用户                          | 三级降级，最大化自动恢复，保留用户控制 |
+| Fallback 模型来源 | 每 tool 静态 `fallback_model_id` 字段                        | 明确可控，与 PRD 一致       |
+| 重试配置          | 每 tool 静态 `max_retries=2` + `retry_backoff_base=1.0`    | 全局默认 + tool 可覆盖     |
+| 恢复 UI         | 画布中央模态卡 (ErrorRecoveryCard)                             | 注意焦点集中              |
+| 跳过语义          | step 状态 `skipped`，observation 注入 `user_skip`，agent 决定下游 | 智能，不硬中断             |
+| 换模型选项         | 查 `api_config` 同 category 模型下拉                          | 与现有 ApiSettings 共享  |
 
 ## 3. 后端架构
 
@@ -62,7 +83,7 @@
 
 **文件**：`backend/app/agent/tools/base.py`（新增类）
 
-包装任意 `BaseTool`，实现自动重试 + fallback_model 降级：
+包装任意 `BaseTool`，实现自动重试 + fallback\_model 降级：
 
 ```python
 class RetryableTool:
@@ -161,11 +182,16 @@ class EventType(str, Enum):
 1. 查 `tool` 后，用 `RetryableTool(tool)` 包装（若 tool 是 `BaseTool` 实例）
 2. 调用 `RetryableTool.call(ctx, params)`
 3. 捕获 `RetryableError`：
-   - **不返回 failed**，而是：
-     - 设置 `self.pending_request = {"type": "tool_error", "step_id": str(self._step_count), "tool": tool_name, "error": str(e), "params": params, "fallback_model_id": getattr(tool, "fallback_model_id", None), "available_models": self._list_available_models(tool)}`
-     - 发 `tool_error` 事件
-     - `self.state = AgentState.PAUSED`
-     - 返回 `({"error": str(e), "pending": "awaiting_user_recovery"}, "paused")`
+
+   * **不返回 failed**，而是：
+
+     * 设置 `self.pending_request = {"type": "tool_error", "step_id": str(self._step_count), "tool": tool_name, "error": str(e), "params": params, "fallback_model_id": getattr(tool, "fallback_model_id", None), "available_models": self._list_available_models(tool)}`
+
+     * 发 `tool_error` 事件
+
+     * `self.state = AgentState.PAUSED`
+
+     * 返回 `({"error": str(e), "pending": "awaiting_user_recovery"}, "paused")`
 
 ```python
 async def _execute_tool(self, tool_name: str, params: dict) -> tuple[dict, str]:
@@ -494,19 +520,19 @@ function fmtPayload(ev: AgentEventLike): string {
 
 ## 6. 错误处理矩阵
 
-| 场景 | 行为 |
-|---|---|
-| RetryableError（网络超时） | 自动重试 max_retries 次 |
-| NonRetryableError（参数错误） | 直接抛出，不重试，step failed |
-| ToolValidationError | 直接抛出，step failed |
-| 重试耗尽 + 无 fallback | 抛 RetryableError → runtime PAUSED → 问用户 |
-| 重试耗尽 + 有 fallback + fallback 成功 | 返回成功结果，继续 |
-| 重试耗尽 + 有 fallback + fallback 失败 | 抛 RetryableError → runtime PAUSED → 问用户 |
-| 用户选 retry | 重新执行同 step 同 params |
-| 用户选 change_model | params.model_id = new_model_id 后重执行 |
-| 用户选 skip | step 状态 skipped，observation 注入 user_skip，agent 继续 think |
-| api_config 为 None | available_models 返回空列表，用户仍可手动输入 |
-| 用户长时间不响应 | task 保持 paused，不超时 |
+| 场景                              | 行为                                                       |
+| ------------------------------- | -------------------------------------------------------- |
+| RetryableError（网络超时）            | 自动重试 max\_retries 次                                      |
+| NonRetryableError（参数错误）         | 直接抛出，不重试，step failed                                     |
+| ToolValidationError             | 直接抛出，step failed                                         |
+| 重试耗尽 + 无 fallback               | 抛 RetryableError → runtime PAUSED → 问用户                  |
+| 重试耗尽 + 有 fallback + fallback 成功 | 返回成功结果，继续                                                |
+| 重试耗尽 + 有 fallback + fallback 失败 | 抛 RetryableError → runtime PAUSED → 问用户                  |
+| 用户选 retry                       | 重新执行同 step 同 params                                      |
+| 用户选 change\_model               | params.model\_id = new\_model\_id 后重执行                   |
+| 用户选 skip                        | step 状态 skipped，observation 注入 user\_skip，agent 继续 think |
+| api\_config 为 None              | available\_models 返回空列表，用户仍可手动输入                         |
+| 用户长时间不响应                        | task 保持 paused，不超时                                       |
 
 ## 7. 测试策略
 
@@ -514,47 +540,69 @@ function fmtPayload(ev: AgentEventLike): string {
 
 **新文件**：`backend/tests/test_retryable_tool.py`
 
-- `RetryableTool` 成功调用：不重试，返回结果
-- `RetryableError` 重试 max_retries 次后成功
-- `RetryableError` 重试耗尽 + 无 fallback → 抛出
-- `RetryableError` 重试耗尽 + 有 fallback + fallback 成功
-- `RetryableError` 重试耗尽 + 有 fallback + fallback 失败 → 抛出
-- `NonRetryableError` 不重试，直接抛出
-- `ToolValidationError` 不重试，直接抛出
-- emit `tool_retrying` 事件（验证 emit_event 被调用）
-- emit `tool_fallback_model` 事件
-- 指数退避 sleep 被调用（mock asyncio.sleep）
+* `RetryableTool` 成功调用：不重试，返回结果
+
+* `RetryableError` 重试 max\_retries 次后成功
+
+* `RetryableError` 重试耗尽 + 无 fallback → 抛出
+
+* `RetryableError` 重试耗尽 + 有 fallback + fallback 成功
+
+* `RetryableError` 重试耗尽 + 有 fallback + fallback 失败 → 抛出
+
+* `NonRetryableError` 不重试，直接抛出
+
+* `ToolValidationError` 不重试，直接抛出
+
+* emit `tool_retrying` 事件（验证 emit\_event 被调用）
+
+* emit `tool_fallback_model` 事件
+
+* 指数退避 sleep 被调用（mock asyncio.sleep）
 
 **修改**：`backend/tests/test_agent_runtime.py`
 
-- `_execute_tool` 捕获 RetryableError → 设置 pending_request + state=PAUSED
-- `_execute_tool` 推送 tool_error 事件
-- `_resume_from_tool_error` retry 路径
-- `_resume_from_tool_error` change_model 路径
-- `_resume_from_tool_error` skip 路径（observation 注入 user_skip）
+* `_execute_tool` 捕获 RetryableError → 设置 pending\_request + state=PAUSED
+
+* `_execute_tool` 推送 tool\_error 事件
+
+* `_resume_from_tool_error` retry 路径
+
+* `_resume_from_tool_error` change\_model 路径
+
+* `_resume_from_tool_error` skip 路径（observation 注入 user\_skip）
 
 ### 7.2 前端单元测试
 
 **新文件**：`tests/agent/error-recovery-card.test.tsx`
 
-- pendingErrorRecovery 为 null → 不渲染
-- pendingErrorRecovery 存在 → 渲染模态卡
-- 默认选中 "retry"
-- 选 "change_model" → 显示模型下拉
-- 点击确认 → 调用 api.respond + 正确 payload
-- 显示 tool name 和 error
+* pendingErrorRecovery 为 null → 不渲染
+
+* pendingErrorRecovery 存在 → 渲染模态卡
+
+* 默认选中 "retry"
+
+* 选 "change\_model" → 显示模型下拉
+
+* 点击确认 → 调用 api.respond + 正确 payload
+
+* 显示 tool name 和 error
 
 **修改**：`tests/agent/use-agent-store.test.ts`
 
-- applyEvent('tool_error') → pendingErrorRecovery 填充 + status=paused
-- applyEvent('tool_resumed') → pendingErrorRecovery 清空 + status=running
-- applyEvent('tool_retrying') → thoughts 追加
-- applyEvent('tool_fallback_model') → thoughts 追加
+* applyEvent('tool\_error') → pendingErrorRecovery 填充 + status=paused
+
+* applyEvent('tool\_resumed') → pendingErrorRecovery 清空 + status=running
+
+* applyEvent('tool\_retrying') → thoughts 追加
+
+* applyEvent('tool\_fallback\_model') → thoughts 追加
 
 **修改**：`tests/agent/thought-stream.test.tsx`
 
-- tool_retrying 事件显示 "🔄 重试中"
-- tool_fallback_model 事件显示 "↩ 已切换"
+* tool\_retrying 事件显示 "🔄 重试中"
+
+* tool\_fallback\_model 事件显示 "↩ 已切换"
 
 ### 7.3 TDD 顺序
 
@@ -569,22 +617,22 @@ function fmtPayload(ev: AgentEventLike): string {
 
 ## 8. 文件清单
 
-| 文件 | 改动 | 责任 |
-|---|---|---|
-| `backend/app/agent/tools/base.py` (改) | + `RetryableTool` 类 + `BaseTool` 3 字段 | 重试 + fallback 包装 |
-| `backend/app/agent/events.py` (改) | + 3 个 EventType | 事件类型 |
-| `backend/app/agent/runtime.py` (改) | `_execute_tool` 改造 + `_resume_from_tool_error` + `_list_available_models` | 挂起 + 恢复 |
-| `backend/app/schemas.py` (改) | `AgentUserResponse` + 2 字段 | API schema |
-| `backend/app/routers/agent.py` (改) | `user_respond` 传递 recovery 字段 | 路由 |
-| `agent/use-agent-store.ts` (改) | + `pendingErrorRecovery` + 4 个 case | 前端状态 |
-| `agent/error-recovery-card.tsx` (新) | 模态卡组件 | UI |
-| `agent/agent-mode.tsx` (改) | 挂载 ErrorRecoveryCard | 集成 |
-| `agent/thought-stream.tsx` (改) | fmtPayload 增强 | 显示 |
-| `backend/tests/test_retryable_tool.py` (新) | RetryableTool 单测 | TDD |
-| `backend/tests/test_agent_runtime.py` (改) | runtime 改造测试 | TDD |
-| `tests/agent/error-recovery-card.test.tsx` (新) | 组件测试 | TDD |
-| `tests/agent/use-agent-store.test.ts` (改) | store 扩展测试 | TDD |
-| `tests/agent/thought-stream.test.tsx` (改) | 显示增强测试 | TDD |
+| 文件                                             | 改动                                                                        | 责任               |
+| ---------------------------------------------- | ------------------------------------------------------------------------- | ---------------- |
+| `backend/app/agent/tools/base.py` (改)          | + `RetryableTool` 类 + `BaseTool` 3 字段                                     | 重试 + fallback 包装 |
+| `backend/app/agent/events.py` (改)              | + 3 个 EventType                                                           | 事件类型             |
+| `backend/app/agent/runtime.py` (改)             | `_execute_tool` 改造 + `_resume_from_tool_error` + `_list_available_models` | 挂起 + 恢复          |
+| `backend/app/schemas.py` (改)                   | `AgentUserResponse` + 2 字段                                                | API schema       |
+| `backend/app/routers/agent.py` (改)             | `user_respond` 传递 recovery 字段                                             | 路由               |
+| `agent/use-agent-store.ts` (改)                 | + `pendingErrorRecovery` + 4 个 case                                       | 前端状态             |
+| `agent/error-recovery-card.tsx` (新)            | 模态卡组件                                                                     | UI               |
+| `agent/agent-mode.tsx` (改)                     | 挂载 ErrorRecoveryCard                                                      | 集成               |
+| `agent/thought-stream.tsx` (改)                 | fmtPayload 增强                                                             | 显示               |
+| `backend/tests/test_retryable_tool.py` (新)     | RetryableTool 单测                                                          | TDD              |
+| `backend/tests/test_agent_runtime.py` (改)      | runtime 改造测试                                                              | TDD              |
+| `tests/agent/error-recovery-card.test.tsx` (新) | 组件测试                                                                      | TDD              |
+| `tests/agent/use-agent-store.test.ts` (改)      | store 扩展测试                                                                | TDD              |
+| `tests/agent/thought-stream.test.tsx` (改)      | 显示增强测试                                                                    | TDD              |
 
 ## 9. 任务依赖图
 
@@ -606,9 +654,15 @@ Task 6 (AgentMode integration + ThoughtStream)
 
 ## 10. 验收标准
 
-- [ ] RetryableTool 单测全绿（10+ 用例）
-- [ ] Runtime 失败恢复路径单测全绿
-- [ ] ErrorRecoveryCard 组件测试全绿
-- [ ] useAgentStore 新 case 测试全绿
-- [ ] 现有 100 前端 + 131 后端测试不回归
-- [ ] 手动验证：构造一个会失败的工具调用，观察自动重试 → fallback → 模态卡 → 用户恢复 全流程
+* [ ] RetryableTool 单测全绿（10+ 用例）
+
+* [ ] Runtime 失败恢复路径单测全绿
+
+* [ ] ErrorRecoveryCard 组件测试全绿
+
+* [ ] useAgentStore 新 case 测试全绿
+
+* [ ] 现有 100 前端 + 131 后端测试不回归
+
+* [ ] 手动验证：构造一个会失败的工具调用，观察自动重试 → fallback → 模态卡 → 用户恢复 全流程
+

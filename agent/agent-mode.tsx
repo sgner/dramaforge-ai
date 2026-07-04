@@ -40,6 +40,68 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
   const [thoughtOpen, setThoughtOpen] = useState(false);
   const [toolDrawerOpen, setToolDrawerOpen] = useState(false);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+  // 用户在 Agent 模式顶栏手动选择的 LLM provider/model
+  // 空值表示回退到 scriptGeneration 步骤绑定 / stub
+  const [selectedProviderId, setSelectedProviderId] = useState<string>('');
+  const [selectedModelId, setSelectedModelId] = useState<string>('');
+  // LLM provider 列表 — 从后端 DB 拉取（与 ApiSettings 同步的"真"数据源）
+  // 而不是从 localStorage 的 apiConfig.providers（可能与 DB 不一致）
+  const [dbProviders, setDbProviders] = useState<Array<{
+    provider_id: string;
+    name: string;
+    chat_models: string[];
+    default_model: string;
+  }>>([]);
+  const [dbProvidersLoading, setDbProvidersLoading] = useState(false);
+
+  // 画布容器 ref（用于 fitAgentView 时获取 board 尺寸）
+  const canvasContainerRef = useRef<HTMLDivElement | null>(null);
+
+  // 加载 DB 里的 LLM provider 列表
+  useEffect(() => {
+    let mounted = true;
+    setDbProvidersLoading(true);
+    api.listLLMProviders()
+      .then((rows) => {
+        if (!mounted) return;
+        const list = (rows || []).map((r) => ({
+          provider_id: r.provider_id,
+          name: r.provider_id,
+          chat_models: r.chat_models || [],
+          default_model: r.default_model || '',
+        }));
+        setDbProviders(list);
+        // 自动选第一个 provider（让用户不手动选也能跑真实 LLM，避免无脑走 DevScriptedLLM 假任务）
+        if (list.length > 0) {
+          setSelectedProviderId(list[0].provider_id);
+          setSelectedModelId(list[0].default_model || '');
+        }
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setDbProviders([]);
+      })
+      .finally(() => {
+        if (mounted) setDbProvidersLoading(false);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [projectId]);
+
+  // 优先用 DB 里的 LLM provider 列表（数据源唯一：DB 才是真）
+  // 兜底用 localStorage 的 apiConfig.providers
+  const apiConfigFallback = useCanvasStore((s) => s.apiConfig);
+  const availableProviders = (dbProviders.length > 0
+    ? dbProviders.map((p) => ({
+        id: p.provider_id,
+        name: p.provider_id,
+        chatModels: p.chat_models,
+      }))
+    : apiConfigFallback.providers
+        .filter((p) => p.enabled !== false && p.chatModels && p.chatModels.length > 0)
+        .map((p) => ({ id: p.id, name: p.name || p.id, chatModels: p.chatModels || [] }))
+  );
 
   const taskId = useAgentStore((s) => s.taskId);
   const setTask = useAgentStore((s) => s.setTask);
@@ -51,6 +113,8 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
   const artifacts = useAgentStore((s) => s.artifacts);
   const pendingQuestion = useAgentStore((s) => s.pendingQuestion);
   const status = useAgentStore((s) => s.status);
+  const llmMode = useAgentStore((s) => s.llmMode);
+  const llmFallbackReason = useAgentStore((s) => s.llmFallbackReason);
 
   const { tools, isLoading: toolsLoading } = useAgentTools();
   // SSE 由全局 agent-stream-manager 管理：基于 useAgentStore.taskId 自动开关
@@ -85,7 +149,7 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
       ) {
         return;
       }
-      const userGoal = state.status === 'running' || state.status === 'paused' || state.status === 'done'
+      const userGoal = state.status === 'running' || state.status === 'paused' || state.status === 'done' || state.status === 'failed'
         ? (state.thoughts[0]?.payload?.text as string) || ''
         : '';
       useCanvasStore.getState().addAgentNodes({
@@ -104,6 +168,22 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
         artifacts: state.artifacts,
         pendingQuestion: state.pendingQuestion,
       };
+      // 节点更新后自动 fit 视图，让用户一眼看到完整时间线
+      // 多次 fit 不会重复触发太多（zustand 内部 setState 节流）
+      const container = canvasContainerRef.current;
+      if (container) {
+        const r = container.getBoundingClientRect();
+        // 延后一帧：等 React 完成渲染 + DOM 更新后再 fit
+        requestAnimationFrame(() => {
+          const cs = useCanvasStore.getState();
+          if (cs.nodes.filter((n) => n.type === 'agent_node').length === 0) {
+            // 还没有节点：把 viewport 移到 (0, 0) 区域，避免 viewport 停留在 (-1800, -1000)
+            cs.resetViewportToAgentOrigin(r.width, r.height);
+          } else {
+            cs.fitAgentView(r.width, r.height);
+          }
+        });
+      }
     };
     lastProjectedRef.current = null;
     project();
@@ -111,6 +191,27 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
     return () => {
       unsubscribe();
       useCanvasStore.getState().clearAgentNodes();
+    };
+  }, [projectId]);
+
+  // 组件挂载时：把 viewport 立即移到 agent 节点区域（避免 viewport 默认在 (-1800, -1000) 远离节点）
+  useEffect(() => {
+    let cancelled = false;
+    // 等一帧让 DOM 渲染完
+    requestAnimationFrame(() => {
+      if (cancelled) return;
+      const container = canvasContainerRef.current;
+      if (!container) return;
+      const r = container.getBoundingClientRect();
+      const cs = useCanvasStore.getState();
+      if (cs.nodes.filter((n) => n.type === 'agent_node').length === 0) {
+        cs.resetViewportToAgentOrigin(r.width, r.height);
+      } else {
+        cs.fitAgentView(r.width, r.height);
+      }
+    });
+    return () => {
+      cancelled = true;
     };
   }, [projectId]);
 
@@ -126,16 +227,28 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
     setSubmitting(true);
     setError(null);
     try {
-      // 从前端 apiConfig 里读 LLM provider 选择（仅 provider_id，不发 key）
-      // 优先用 scriptGeneration 步骤的 LLM 绑定（最常走 LLM 的画布步骤）；
-      // 没有则静默回退，让后端走 stub。
-      const apiConfig = useCanvasStore.getState().apiConfig;
-      const llmBinding = apiConfig.stepBindings.find(
-        (b) => b.step === 'scriptGeneration'
-      );
+      // 1) 优先用用户在 Agent 模式顶栏手动选择的 provider/model
+      // 2) 否则自动选 DB 里第一个可用的真实 LLM（避免无脑走 DevScriptedLLM 假任务）
+      // 3) 都没有 → 走 stub，但提示用户去 API 设置里配 LLM
+      let providerId: string | undefined = selectedProviderId;
+      let modelId: string | undefined = selectedModelId;
+      if (!providerId) {
+        if (dbProviders.length > 0) {
+          const first = dbProviders[0];
+          providerId = first.provider_id;
+          modelId = selectedModelId || first.default_model || undefined;
+        } else {
+          const apiConfig = useCanvasStore.getState().apiConfig;
+          const llmBinding = apiConfig.stepBindings.find(
+            (b) => b.step === 'scriptGeneration',
+          );
+          providerId = llmBinding?.providerId || undefined;
+          modelId = modelId || llmBinding?.modelId || undefined;
+        }
+      }
       const t = await api.startAgent(projectId, goal.trim(), {
-        providerId: llmBinding?.providerId || undefined,
-        modelId: llmBinding?.modelId || undefined,
+        providerId,
+        modelId,
       });
       setTask(t.id, 'running', projectId);
       setGoal('');
@@ -147,6 +260,18 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
       setError(e?.message || 'failed to start agent');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  // 整理节点 / 重排画布视图：让用户一键修复节点乱跑、视图错位
+  const onRelayout = () => {
+    useCanvasStore.getState().relayoutAgentNodes();
+    const container = canvasContainerRef.current;
+    if (container) {
+      const r = container.getBoundingClientRect();
+      requestAnimationFrame(() => {
+        useCanvasStore.getState().fitAgentView(r.width, r.height);
+      });
     }
   };
 
@@ -188,8 +313,67 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
         <div
           data-testid="agent-mode-input-bar"
           className="canvas-topbar"
-          style={{ padding: '10px 14px', zIndex: 40 }}
+          style={{ padding: '10px 14px', zIndex: 40, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}
         >
+          {/* LLM provider/model 选择 — 黑白灰样式 */}
+          <div className="canvas-panel" style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '2px 6px' }}>
+            <span style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 600, marginRight: 4 }}>LLM</span>
+            <select
+              data-testid="agent-mode-llm-provider"
+              value={selectedProviderId}
+              onChange={(e) => {
+                setSelectedProviderId(e.target.value);
+                setSelectedModelId(''); // 切换 provider 后清空 model 选择
+              }}
+              title={availableProviders.length === 0
+                ? '⚠️ DB 里没有 LLM provider 配置 → agent 会用 DevScriptedLLM（假任务）'
+                : '选择 LLM 提供商（空 = 使用 scriptGeneration 步骤绑定）'}
+              style={{
+                height: 26,
+                fontSize: 11,
+                background: 'var(--bg)',
+                color: availableProviders.length === 0 ? 'var(--muted)' : 'var(--text)',
+                border: `1px solid ${availableProviders.length === 0 ? 'var(--line-strong)' : 'var(--line)'}`,
+                borderRadius: 4,
+                padding: '0 4px',
+                outline: 'none',
+              }}
+            >
+              <option value="">{dbProvidersLoading ? '加载中…' : '默认（步骤绑定）'}</option>
+              {availableProviders.map((p) => (
+                <option key={p.id} value={p.id}>{p.name || p.id}</option>
+              ))}
+            </select>
+            {selectedProviderId && (() => {
+              const p = availableProviders.find((x) => x.id === selectedProviderId);
+              const models = p?.chatModels || [];
+              if (!models.length) return null;
+              return (
+                <select
+                  data-testid="agent-mode-llm-model"
+                  value={selectedModelId}
+                  onChange={(e) => setSelectedModelId(e.target.value)}
+                  title="选择 LLM 模型"
+                  style={{
+                    height: 26,
+                    fontSize: 11,
+                    background: 'var(--bg)',
+                    color: 'var(--text)',
+                    border: '1px solid var(--line)',
+                    borderRadius: 4,
+                    padding: '0 4px',
+                    outline: 'none',
+                    maxWidth: 160,
+                  }}
+                >
+                  <option value="">默认模型</option>
+                  {models.map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+              );
+            })()}
+          </div>
           <div className="canvas-panel" style={{ flex: 1, borderRadius: 999, padding: '4px 6px 4px 14px', display: 'flex', alignItems: 'center', gap: 8 }}>
             <input
               data-testid="agent-mode-input"
@@ -222,6 +406,29 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
             </button>
           </div>
           <div className="canvas-panel" style={{ padding: 4, display: 'flex', gap: 4 }}>
+            <button
+              data-testid="agent-mode-fit-view"
+              type="button"
+              onClick={() => {
+                const container = canvasContainerRef.current;
+                if (!container) return;
+                const r = container.getBoundingClientRect();
+                useCanvasStore.getState().fitAgentView(r.width, r.height);
+              }}
+              className="tool-btn"
+              title="缩放到完整时间线（自动 fit）"
+            >
+              ⊡
+            </button>
+            <button
+              data-testid="agent-mode-relayout"
+              type="button"
+              onClick={onRelayout}
+              className="tool-btn"
+              title="自动整理节点布局并缩放到完整时间线"
+            >
+              <RotateCw size={14} />
+            </button>
             <button
               data-testid="agent-mode-thought-toggle"
               type="button"
@@ -266,6 +473,31 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
             <span className="agent-mode-progress-hint">点击查看详情</span>
           </div>
         )}
+        {/* LLM 模式横幅：明示当前 agent 是真实 LLM 还是 Dev 假任务 */}
+        {taskId && (
+          <div
+            data-testid="agent-llm-mode-banner"
+            className={`agent-llm-mode-banner ${llmMode || 'pending'}`}
+            title={llmFallbackReason || (llmMode === 'real' ? '已连接真实 LLM' : llmMode === 'stub' ? 'DevScriptedLLM 假任务' : '等待 task_started 事件上报 LLM 模式...')}
+          >
+            {llmMode === 'real' ? (
+              <>
+                <span className="agent-llm-mode-dot" />
+                <span>已连接真实 LLM — 正在调用供应商</span>
+              </>
+            ) : llmMode === 'stub' ? (
+              <>
+                <span className="agent-llm-mode-dot" />
+                <span>Dev 假任务（DevScriptedLLM）：去 API 设置里配置 LLM key 才会用真模型</span>
+              </>
+            ) : (
+              <>
+                <span className="agent-llm-mode-dot" />
+                <span>等待后端启动 runtime...</span>
+              </>
+            )}
+          </div>
+        )}
         {error && (
           <div
             data-testid="agent-mode-error"
@@ -274,7 +506,7 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
             {error}
           </div>
         )}
-        <div data-testid="agent-mode-canvas-container" style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}>
+        <div ref={canvasContainerRef} data-testid="agent-mode-canvas-container" style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}>
           <style>{`
             [data-testid="agent-mode-canvas-container"] .canvas-root {
               width: 100% !important;

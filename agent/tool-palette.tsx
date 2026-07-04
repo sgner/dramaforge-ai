@@ -1,10 +1,15 @@
 /**
- * ToolPalette — 展示 agent 可用的工具（按 6 类分组）。
+ * ToolPalette — 展示 agent 可用的工具（按 6 类分组） + 当前任务中已被调用的工具列表。
  *
  * 数据源：硬编码（与 backend/app/agent/tools/__init__.py:ALL_TOOLS 一一对应）。
  * 后续可改为拉取 /api/agent/tools。
+ *
+ * 增强：
+ *   - 接收 `actions` 数组，显示每个工具被调用的次数和最近一次结果
+ *   - 等待审核的工具（requiresApproval）会高亮，并显示"等待审核"标记
  */
-import React from 'react';
+import React, { useMemo } from 'react';
+import { CheckCircle2, Clock, AlertCircle } from 'lucide-react';
 import './agent.css';
 
 export interface PaletteTool {
@@ -52,8 +57,41 @@ const CATEGORY_LABELS: Record<PaletteTool['category'], string> = {
   asset: '资产',
 };
 
-export const ToolPalette: React.FC<{ tools?: PaletteTool[] }> = ({ tools }) => {
+export interface ToolCallStat {
+  name: string;
+  count: number;
+  lastStatus: 'ok' | 'pending' | 'error';
+  lastTs: number;
+}
+
+export const ToolPalette: React.FC<{
+  tools?: PaletteTool[];
+  /**
+   * 当前任务的 action 事件数组（来自 useAgentStore.actions）。
+   * 用于统计每个工具被调用了几次、最近一次结果。
+   */
+  actions?: any[];
+}> = ({ tools, actions }) => {
   const data = tools ?? PALETTE_TOOLS;
+
+  // 统计每个工具的调用情况
+  const stats = useMemo(() => {
+    const map = new Map<string, ToolCallStat>();
+    for (const a of actions || []) {
+      const name = a?.payload?.tool;
+      if (!name) continue;
+      const cur = map.get(name) || { name, count: 0, lastStatus: 'pending' as const, lastTs: 0 };
+      cur.count += 1;
+      const r = a?.payload?.result;
+      if (r && typeof r === 'object' && 'ok' in r) {
+        cur.lastStatus = r.ok ? 'ok' : 'error';
+      }
+      cur.lastTs = Math.max(cur.lastTs, a?.timestamp || 0);
+      map.set(name, cur);
+    }
+    return map;
+  }, [actions]);
+
   const byCat = CATEGORIES.map((c) => ({
     category: c,
     tools: data.filter((t) => t.category === c),
@@ -61,37 +99,64 @@ export const ToolPalette: React.FC<{ tools?: PaletteTool[] }> = ({ tools }) => {
 
   return (
     <div className="tool-palette" data-testid="tool-palette">
-      {byCat.map(({ category, tools }) => (
-        <div
-          key={category}
-          data-testid={`tool-palette-category-${category}`}
-          className="tool-palette-category"
-        >
-          <div className="tool-palette-category-head">
-            <span>{CATEGORY_LABELS[category]}</span>
-            <span className="tool-palette-category-count">{tools.length}</span>
-          </div>
-          <div className="tool-palette-list">
-            {tools.map((t) => (
-              <div key={t.name} className="tool-palette-item" data-testid="tool-palette-item">
-                <div className="tool-palette-item-body">
-                  <div className="tool-palette-item-name">{t.name}</div>
-                  <div className="tool-palette-item-desc">{t.description}</div>
-                </div>
-                {t.requiresApproval && (
-                  <span
-                    data-testid="tool-palette-requires-approval"
-                    className="tool-palette-badge requires"
-                    title="需用户审核"
+      {byCat.map(({ category, tools }) => {
+        const called = tools.filter(t => stats.has(t.name));
+        return (
+          <div
+            key={category}
+            data-testid={`tool-palette-category-${category}`}
+            className="tool-palette-category"
+          >
+            <div className="tool-palette-category-head">
+              <span>{CATEGORY_LABELS[category]}</span>
+              <span className="tool-palette-category-count">
+                {called.length > 0 ? `${called.length}/${tools.length}` : tools.length}
+              </span>
+            </div>
+            <div className="tool-palette-list">
+              {tools.map((t) => {
+                const s = stats.get(t.name);
+                return (
+                  <div
+                    key={t.name}
+                    className={`tool-palette-item ${s ? 'is-called' : ''} ${s?.lastStatus === 'error' ? 'is-error' : ''}`}
+                    data-testid="tool-palette-item"
+                    title={s ? `已调用 ${s.count} 次` : '尚未调用'}
                   >
-                    需审核
-                  </span>
-                )}
-              </div>
-            ))}
+                    <div className="tool-palette-item-body">
+                      <div className="tool-palette-item-name">
+                        {s && (
+                          <span className={`tool-palette-item-status ${s.lastStatus}`}>
+                            {s.lastStatus === 'ok' && <CheckCircle2 size={10} />}
+                            {s.lastStatus === 'error' && <AlertCircle size={10} />}
+                            {s.lastStatus === 'pending' && <Clock size={10} />}
+                          </span>
+                        )}
+                        {t.name}
+                      </div>
+                      <div className="tool-palette-item-desc">{t.description}</div>
+                    </div>
+                    {t.requiresApproval && (
+                      <span
+                        data-testid="tool-palette-requires-approval"
+                        className="tool-palette-badge requires"
+                        title="需用户审核"
+                      >
+                        需审核
+                      </span>
+                    )}
+                    {s && (
+                      <span className="tool-palette-count">×{s.count}</span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 };
+
+export default ToolPalette;

@@ -21,6 +21,9 @@ import { useTaskExecutor } from './hooks/useTaskExecutor';
 import { useTaskActions } from './hooks/useTaskActions';
 import { I18nProvider, useI18n } from './i18n';
 import { AgentMode } from './agent/agent-mode';
+import { useAgentStore } from './agent/use-agent-store';
+// 引入全局 SSE 管理器：模块加载即启动，自动监听 useAgentStore.taskId
+import './agent/agent-stream-manager';
 
 const STORAGE_KEY_TASKS = 'dramaforge_tasks';
 const STORAGE_KEY_LANG = 'dramaforge_language';
@@ -93,33 +96,41 @@ function AppContent() {
 
   // 点击 Canvas 工具栏的 Agent 按钮时：先确保有 activeTask，再进入 AgentMode。
   const handleEnterAgentMode = useCallback(() => {
-    if (activeTaskId) { setAgentMode(true); return; }
-    let targetId: string;
-    if (tasks.length > 0) {
-      targetId = tasks[0].id;
-    } else {
-      const newTask: DramaTask = {
-        id: genId(),
-        name: 'Agent Demo',
-        style: ArtStyle.REALISTIC,
-        language: 'zh',
-        mode: 'auto',
-        sourceType: 'idea',
-        createdAt: Date.now(),
-        status: TaskStatus.IDLE,
-        stepStatus: 'idle',
-        progress: 0,
-        rawNovelText: '',
-        originalIdea: undefined,
-        characters: [],
-        bigShots: [],
-      };
-      setTasks(prev => [newTask, ...prev]);
-      targetId = newTask.id;
+    // 优先使用已有的 activeTaskId
+    if (activeTaskId) {
+      setAgentMode(true);
+      return;
     }
-    setActiveTaskId(targetId);
-    setAgentMode(true);
-  }, [activeTaskId, tasks]);
+    // 否则用第一个 task 或新建一个
+    setTasks((prev) => {
+      let targetId: string;
+      if (prev.length > 0) {
+        targetId = prev[0].id;
+      } else {
+        const newTask: DramaTask = {
+          id: genId(),
+          name: 'Agent Demo',
+          style: ArtStyle.REALISTIC,
+          language: 'zh',
+          mode: 'auto',
+          sourceType: 'idea',
+          createdAt: Date.now(),
+          status: TaskStatus.IDLE,
+          stepStatus: 'idle',
+          progress: 0,
+          rawNovelText: '',
+          originalIdea: undefined,
+          characters: [],
+          bigShots: [],
+        };
+        prev = [newTask, ...prev];
+        targetId = newTask.id;
+      }
+      setActiveTaskId(targetId);
+      setAgentMode(true);
+      return prev;
+    });
+  }, [activeTaskId]);
 
   // URL ?agent=1 启动时自动进入（等待 tasks 加载完，再决定用现有任务还是新建）
   useEffect(() => {
@@ -139,11 +150,27 @@ function AppContent() {
     if (typeof window === 'undefined') return;
     const onExit = () => {
       setAgentMode(false);
-      // 不清 activeTask：用户应当返回原来的画布继续工作
+      // 不清 activeTask 和 taskId：用户应当可以重新进入 agent 模式查看进度
     };
     window.addEventListener('agent-mode-exit', onExit as EventListener);
     return () => window.removeEventListener('agent-mode-exit', onExit as EventListener);
   }, []);
+
+  const activeTask = tasks.find(t => t.id === activeTaskId);
+
+  // 监听 agent 后台任务：useAgentStore 暴露 taskId / projectId / status
+  // 关键：banner 只在 agent 任务属于当前 active task（画布项目）时才显示，
+  //       避免在别的项目上误显"agent 在后台运行"提示。
+  const agentTaskId = useAgentStore((s) => s.taskId);
+  const agentProjectId = useAgentStore((s) => s.projectId);
+  const agentStatus = useAgentStore((s) => s.status);
+  const showBackgroundBanner =
+    !agentMode &&
+    activeTask &&
+    agentTaskId &&
+    // agent 任务必须属于当前画布项目（不是任意 activeTask，而是它所代表的 projectId）
+    activeTask.id === agentProjectId &&
+    (agentStatus === 'running' || agentStatus === 'paused' || agentStatus === 'pending');
 
   const triggerCelebration = useCallback((x: number, y: number) => {
     const id = Date.now();
@@ -230,8 +257,6 @@ function AppContent() {
   const updateTask = useCallback((taskId: string, updates: Partial<DramaTask>) => {
     setTasks(prev => prev.map(t => t.id === taskId ? { ...t, ...updates } : t));
   }, []);
-
-  const activeTask = tasks.find(t => t.id === activeTaskId);
 
   const setTaskAssets = useCanvasStore((s) => s.setTaskAssets);
 
@@ -343,6 +368,21 @@ function AppContent() {
         <AgentMode projectId={activeTask.id} />
       ) : (
         <>
+      {/* Agent 后台运行提示横幅 — 退出 agent 模式后仍能看到任务在跑 */}
+      {showBackgroundBanner && (
+        <div
+          data-testid="agent-background-banner"
+          className="agent-background-banner"
+          onClick={handleEnterAgentMode}
+          title="点击重新进入 Agent 模式"
+        >
+          <span className="agent-background-banner-dot" />
+          <span className="agent-background-banner-text">
+            Agent 正在后台运行 ({agentStatus === 'paused' ? '已暂停' : '思考中…'})
+          </span>
+          <span className="agent-background-banner-action">点击查看</span>
+        </div>
+      )}
       <div className="fixed inset-0 z-0 pointer-events-none">
         <div className="absolute inset-0" style={{ background: 'radial-gradient(ellipse 80% 50% at 50% -20%, rgba(17,24,39,0.03), transparent)' }} />
       </div>

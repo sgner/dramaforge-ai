@@ -36,31 +36,32 @@ export type NodeType =
   | 'script'
   | 'agent_node';
 
-// agent_node 视觉元数据（与 task-graph-node.tsx 中的 TYPE_META 保持一致）
+// 单条横向时间线：所有事件按发生顺序一字排开，超出一行后换行。
+// 目标：用户一眼看到完整 agent 进展，无需上下滚动。
+// 黑白灰风格：去掉彩色边框，只保留"节点类型 icon"作为视觉区分。
 export const AGENT_TYPE_META: Record<TaskType, { label: string; color: string; icon: string }> = {
-  goal: { label: '目标', color: '#6366f1', icon: '🎯' },
-  plan: { label: '计划', color: '#8b5cf6', icon: '📋' },
-  action: { label: '动作', color: '#0ea5e9', icon: '⚡' },
-  observation: { label: '观察', color: '#14b8a6', icon: '👁' },
-  artifact: { label: '资产', color: '#ec4899', icon: '🎨' },
-  question: { label: '询问', color: '#f59e0b', icon: '❓' },
-  done: { label: '完成', color: '#10b981', icon: '✅' },
+  goal: { label: '目标', color: 'var(--text, #0f172a)', icon: '◎' },
+  plan: { label: '计划', color: 'var(--text, #0f172a)', icon: '▤' },
+  action: { label: '动作', color: 'var(--text, #0f172a)', icon: '▶' },
+  observation: { label: '观察', color: 'var(--text, #0f172a)', icon: '◉' },
+  artifact: { label: '资产', color: 'var(--text, #0f172a)', icon: '◆' },
+  question: { label: '询问', color: 'var(--text, #0f172a)', icon: '?' },
+  done: { label: '完成', color: 'var(--text, #0f172a)', icon: '✓' },
 };
 
-// 7 列 x 坐标（间距 320 px，节点宽 280 + 间距 40）
-export const AGENT_COL_X: Record<TaskType, number> = {
-  goal: 0,
-  plan: 320,
-  action: 640,
-  observation: 960,
-  artifact: 1280,
-  question: 1600,
-  done: 1920,
-};
-
-export const AGENT_NODE_W = 280;
-export const AGENT_NODE_H = 200;
-export const AGENT_ROW_GAP = 40;
+// 紧凑节点尺寸（横向时间线）
+export const AGENT_NODE_W = 220;
+export const AGENT_NODE_H = 120;
+export const AGENT_NODE_H_TALL = 168; // 计划 / 资产 / 询问 节点较高
+export const AGENT_ROW_GAP = 16;
+export const AGENT_COL_GAP = 16;
+// 每行节点数（横向时间线流：默认 5 个/行，超出换行）
+export const AGENT_GRID_COLS = 5;
+// 画布上 agent_node 总数上限：超出后合并最旧的 observation 节点，避免页面卡顿
+// 实际经验：12 个紧凑节点占 3 行 × 5 列 = 1100×440 px，缩放后单屏可看完整时间线
+export const MAX_AGENT_NODES = 12;
+// 同类型节点在画布上保留的最大数量（超过时合并）
+export const MAX_AGENT_NODES_PER_TYPE = 5;
 
 export interface CanvasNode {
   id: string;
@@ -203,7 +204,7 @@ export const DEFAULT_NODE_SIZES: Record<string, { w: number; h?: number }> = {
   pipeline: { w: 360, h: 420 },
   novel: { w: 420, h: 480 },
   script: { w: 480, h: 420 },
-  agent_node: { w: 280, h: 200 },
+  agent_node: { w: 220, h: 120 },
 };
 
 export function uid(prefix = 'n'): string {

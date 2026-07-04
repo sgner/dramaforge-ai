@@ -236,6 +236,31 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity: 0 !imp
   border-radius: 12px;
 }
 
+/* ===== Agent Canvas Node (agent 事件节点) — 紧凑、黑白灰、避免 178px 最小高度 ===== */
+.image-node.agent-canvas-node {
+  width: auto !important;
+  min-height: 0 !important;
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  outline: 0 !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+  overflow: visible !important;
+  cursor: grab;
+}
+.image-node.agent-canvas-node:active { cursor: grabbing; }
+.image-node.agent-canvas-node .node-hint,
+.image-node.agent-canvas-node .node-port,
+.image-node.agent-canvas-node .node-resize-handle,
+.image-node.agent-canvas-node .run-time-pill,
+.image-node.agent-canvas-node .cascade-status-badge { display: none !important; }
+.image-node.agent-canvas-node.selected {
+  outline: 0 !important;
+  box-shadow: 0 0 0 2px var(--strong) !important;
+  border-radius: 8px !important;
+}
+
 .image-node.selected:not(.empty-node):not(.group-node) .image-wrap img,
 .image-node.selected:not(.empty-node):not(.group-node) .node-img {
   border-color: var(--strong);

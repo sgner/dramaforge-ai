@@ -127,6 +127,16 @@ class AgentRuntime:
         # 2. 决策：finish_task / 调工具 / ask_user
         tool_name = action.get("tool", "")
         if tool_name == "finish_task":
+            # 记录 finish_task 这一步到 memory（与正常 tool 步骤一致，便于持久化）
+            self.memory.add_step(
+                step_number=self._step_count,
+                thought=thought,
+                action=action,
+                observation={"summary": action.get("params", {})},
+                status="success",
+                cost_usd=response.cost_usd,
+                tokens=response.total_tokens,
+            )
             await self._emit(EventType.TASK_DONE, {"summary": action.get("params", {})})
             self.state = AgentState.DONE
             return True

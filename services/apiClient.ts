@@ -251,6 +251,86 @@ export const api = {
     request<{ deleted: string }>(`/llm-providers/${encodeURIComponent(providerId)}`, {
       method: 'DELETE',
     }),
+
+  // ---------- Media Providers (画布图片/视频供应商, key 写到后端 DB) ----------
+  // 取代旧的 localStorage-based 供应商配置。所有 api_key 走 DB，前端不持有明文。
+  listMediaProviders: () =>
+    request<MediaProviderOut[]>('/media-providers'),
+
+  getMediaProvider: (providerId: string) =>
+    request<MediaProviderOut>(`/media-providers/${encodeURIComponent(providerId)}`),
+
+  upsertMediaProvider: (
+    providerId: string,
+    payload: {
+      name?: string;
+      base_url: string;
+      api_key?: string;        // 空字符串 = 不变（仅修改其他字段）
+      protocol?: string;
+      enabled?: boolean;
+      image_models?: string[];
+      chat_models?: string[];
+      video_models?: string[];
+      extra_config?: Record<string, any>;
+    }
+  ) =>
+    request<MediaProviderOut>(`/media-providers/${encodeURIComponent(providerId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+
+  patchMediaProvider: (
+    providerId: string,
+    payload: Partial<{
+      name: string;
+      base_url: string;
+      api_key: string;
+      protocol: string;
+      enabled: boolean;
+      image_models: string[];
+      chat_models: string[];
+      video_models: string[];
+      extra_config: Record<string, any>;
+    }>
+  ) =>
+    request<MediaProviderOut>(`/media-providers/${encodeURIComponent(providerId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+
+  deleteMediaProvider: (providerId: string) =>
+    request<{ deleted: string }>(`/media-providers/${encodeURIComponent(providerId)}`, {
+      method: 'DELETE',
+    }),
+
+  // ---------- Media Generation (后端代理供应商调用) ----------
+  // 取代前端直连供应商。所有图片/视频由后端用 DB 里的 api_key 调。
+  generateImage: (payload: {
+    provider_id: string;
+    model: string;
+    prompt: string;
+    ref_urls?: string[];
+    aspect_ratio?: string;
+    extra?: Record<string, any>;
+  }) =>
+    request<{ url: string; provider_id: string; model: string; raw: any }>('/media/generate/image', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  generateVideo: (payload: {
+    provider_id: string;
+    model: string;
+    prompt: string;
+    ref_urls?: string[];
+    aspect_ratio?: string;
+    duration_sec?: number;
+    extra?: Record<string, any>;
+  }) =>
+    request<{ url: string; provider_id: string; model: string; raw: any }>('/media/generate/video', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 };
 
 // ============ LLM Provider ============
@@ -261,6 +341,25 @@ export interface LLMProviderOut {
   api_key: string;       // 后端已脱敏（仅前 4 + 后 4）
   default_model: string;
   chat_models: string[];
+  created_at?: string;
+  updated_at?: string;
+}
+
+// ============ Media Provider ============
+export interface MediaProviderOut {
+  id: number;
+  provider_id: string;
+  name: string;
+  base_url: string;
+  api_key: string;       // 后端已脱敏
+  protocol: string;      // openai / gemini / runninghub / volcengine
+  enabled: boolean;
+  image_models: string[];
+  chat_models: string[];
+  video_models: string[];
+  extra_config: Record<string, any>;
+  has_key: boolean;
+  key_preview: string;
   created_at?: string;
   updated_at?: string;
 }

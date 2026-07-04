@@ -80,10 +80,22 @@ class AgentEvent:
 
 
 class EventBus:
-    """事件总线：按 task_id 路由事件。"""
+    """事件总线：按 task_id 路由事件。
+
+    维护 per-task 事件日志：所有 publish 的事件都先 append 到日志，再 fan-out 给 subscribers。
+    新 subscriber 调用 get_replay(task_id) 即可拿到该 task 的全部历史事件，
+    用于解决"runtime 启动与 SSE subscribe 之间的竞态丢失"问题。
+
+    日志清理：调用 clear_log(task_id) 释放内存（例如 task 终态后一段时间）。
+    """
+
+    # 单个 task 的事件日志上限（防止内存泄漏）。LMM 长 task 大约 emit 几十~上百条，
+    # 设 5000 足够任何常规任务。
+    MAX_LOG_PER_TASK = 5000
 
     def __init__(self):
         self._subscribers: dict[str, list[asyncio.Queue]] = defaultdict(list)
+        self._event_log: dict[str, list[AgentEvent]] = defaultdict(list)
 
     def subscribe(self, task_id: str) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue()
@@ -100,9 +112,31 @@ class EventBus:
                 del self._subscribers[task_id]
 
     async def publish(self, event: AgentEvent) -> None:
+        # 1. 写入 per-task 日志（供 late subscriber 重放）
+        log = self._event_log[event.task_id]
+        log.append(event)
+        if len(log) > self.MAX_LOG_PER_TASK:
+            # 超过上限：丢弃最早的事件（FIFO）。对前端 UI 来说，最新事件最重要。
+            del log[: len(log) - self.MAX_LOG_PER_TASK]
+
+        # 2. Fan-out 给当前所有 subscriber
         queues = self._subscribers.get(event.task_id, [])
         for q in queues:
             await q.put(event)
+
+    def get_replay(self, task_id: str) -> list[AgentEvent]:
+        """返回该 task 目前为止发布过的全部事件（不修改 subscribers）。
+
+        新 SSE subscriber 在创建 queue 之后、开始 await queue.get() 之前，
+        应先调用本方法把历史事件一次性 yield 给客户端，
+        再 await queue.get() 接收 live 事件——这样无论客户端何时打开 SSE
+        都能看到完整流程，不会出现"既无想法也无动作"的空白。
+        """
+        return list(self._event_log.get(task_id, []))
+
+    def clear_log(self, task_id: str) -> None:
+        """清空某 task 的事件日志（task 终态后回收内存）。"""
+        self._event_log.pop(task_id, None)
 
     def subscriber_count(self, task_id: str) -> int:
         return len(self._subscribers.get(task_id, []))

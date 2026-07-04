@@ -200,8 +200,10 @@ async def test_e2e_runs_through_all_5_stages(task_id, media_service):
         # 验证：任务状态 = DONE
         assert runtime.state.value == "done"
 
-        # 验证：memory 里有 5 条 step 记录（finish_task 不入 step）
-        assert len(memory.short_term) == 5
+        # 验证：memory 里有 6 条 step 记录（5 阶段 + finish_task）
+        # 之前设计：finish_task 不入 step。现在改为 finish_task 也入 step，
+        # 与其他工具步骤保持一致，便于在 ThoughtStream / 数据库中可观察。
+        assert len(memory.short_term) == 6
     finally:
         collector.close()
 

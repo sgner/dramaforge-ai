@@ -223,6 +223,73 @@ class LLMProviderConfig(Base):
         }
 
 
+class MediaProviderConfig(Base):
+    """画布媒体供应商配置（图片 / 视频 / 音频生成）。
+
+    与 LLMProviderConfig 的关系：
+    - LLMProviderConfig 仅给 agent LLM 调用用（chat-only）
+    - MediaProviderConfig 给画布媒体生成用（image / video / audio + 一些 chat 辅助）
+
+    api_key 字段为明文（dev 工具暂不加密；生产应改为加密存储）。
+    GET 列表时脱敏（保留前 4 + 后 4 位）。
+    """
+    __tablename__ = "media_provider_configs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    provider_id = Column(String(64), nullable=False, unique=True)  # 如 "openai" / "nano-banana" / "kling"
+    name = Column(String(128), nullable=False, default="")
+    base_url = Column(String(512), nullable=False)
+    api_key = Column(Text, nullable=False, default="")
+    protocol = Column(String(32), nullable=False, default="openai")  # openai / gemini / runninghub / volcengine
+    enabled = Column(Boolean, default=True)
+    # 模型列表 JSON（按类别）
+    image_models_json = Column(Text, default="[]")
+    chat_models_json = Column(Text, default="[]")
+    video_models_json = Column(Text, default="[]")
+    # 扩展配置（volcengine 区域、runninghub workflow 等）
+    extra_config_json = Column(Text, default="{}")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self, mask_key: bool = True) -> dict:
+        """默认脱敏 api_key。"""
+        key = self.api_key or ""
+        masked = (key[:4] + "***" + key[-4:]) if (len(key) > 8 and mask_key) else key
+        return {
+            "id": self.id,
+            "provider_id": self.provider_id,
+            "name": self.name,
+            "base_url": self.base_url,
+            "api_key": masked,
+            "protocol": self.protocol,
+            "enabled": bool(self.enabled),
+            "image_models": _parse_json_list(self.image_models_json),
+            "chat_models": _parse_json_list(self.chat_models_json),
+            "video_models": _parse_json_list(self.video_models_json),
+            "extra_config": _parse_json_obj(self.extra_config_json),
+            "has_key": bool(self.api_key),
+            "key_preview": masked if masked and masked != key else "",
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+    def to_internal_dict(self) -> dict:
+        """内部使用：含明文 api_key，供后端调供应商用。"""
+        return {
+            "id": self.id,
+            "provider_id": self.provider_id,
+            "name": self.name,
+            "base_url": self.base_url,
+            "api_key": self.api_key,
+            "protocol": self.protocol,
+            "enabled": bool(self.enabled),
+            "image_models": _parse_json_list(self.image_models_json),
+            "chat_models": _parse_json_list(self.chat_models_json),
+            "video_models": _parse_json_list(self.video_models_json),
+            "extra_config": _parse_json_obj(self.extra_config_json),
+        }
+
+
 def _parse_json_list(raw: str | None) -> list:
     if not raw:
         return []
@@ -232,3 +299,14 @@ def _parse_json_list(raw: str | None) -> list:
         return v if isinstance(v, list) else []
     except Exception:
         return []
+
+
+def _parse_json_obj(raw: str | None) -> dict:
+    if not raw:
+        return {}
+    try:
+        import json
+        v = json.loads(raw)
+        return v if isinstance(v, dict) else {}
+    except Exception:
+        return {}

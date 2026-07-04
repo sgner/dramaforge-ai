@@ -356,10 +356,98 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
     }
   }, []);
 
+  // ---- 画布媒体供应商（图片/视频/音频）— 统一入后端 DB ----
+  // 旧版：apiConfig.providers 存 localStorage + 前端直连供应商
+  // 新版：从后端 DB 读 → 本地编辑 → 保存时回写 DB；前端不再持有明文 api_key
+  const [mediaSyncStatus, setMediaSyncStatus] = useState<{
+    syncing: boolean;
+    lastError: string | null;
+    lastSyncedAt: number | null;
+  }>({ syncing: false, lastError: null, lastSyncedAt: null });
+
+  /**
+   * 从后端 DB 加载所有 media providers，覆盖本地 cfg.providers。
+   * 后端返回的 api_key 是脱敏的（"sk-***1234" 形式），所以本地用空字符串 + hasKey=true 标识。
+   */
+  const loadMediaProvidersFromDb = useCallback(async () => {
+    setMediaSyncStatus((s) => ({ ...s, syncing: true, lastError: null }));
+    try {
+      const list = await api.listMediaProviders();
+      const dbProviders: Provider[] = (list || []).map((m) => ({
+        id: m.provider_id,
+        name: m.name || m.provider_id,
+        baseUrl: m.base_url,
+        protocol: (m.protocol as ProviderProtocol) || 'openai',
+        enabled: m.enabled !== false,
+        apiKey: '',  // 后端脱敏，明文不入前端
+        hasKey: m.has_key,
+        keyPreview: m.key_preview || '',
+        imageModels: m.image_models || [],
+        chatModels: m.chat_models || [],
+        videoModels: m.video_models || [],
+        // 不回填 wallet/volcengine 等扩展字段（前端只编辑基础字段，避免误覆盖）
+      }));
+      // 合并：DB 里的覆盖本地同 id 的；本地有但 DB 没有的（用户刚加未保存的）保留
+      setCfg((prev) => {
+        const dbIds = new Set(dbProviders.map((p) => p.id));
+        const kept = prev.providers.filter(
+          (p) => !dbIds.has(p.id) && (p.apiKey || p.baseUrl)
+        );
+        return { ...prev, providers: [...dbProviders, ...kept] };
+      });
+      setMediaSyncStatus({ syncing: false, lastError: null, lastSyncedAt: Date.now() });
+    } catch (e: any) {
+      setMediaSyncStatus({ syncing: false, lastError: e?.message || 'load failed', lastSyncedAt: null });
+    }
+  }, []);
+
+  /**
+   * 把单个 provider 同步到后端 DB。如果 apiKey 为空字符串（脱敏态或用户没改）则用 PATCH 不传 api_key 字段。
+   * 失败抛错，由调用方决定是否重试。
+   */
+  const syncProviderToDb = useCallback(async (p: Provider) => {
+    if (!p.id || !p.baseUrl) {
+      throw new Error(`provider ${p.name || '?'} missing id/baseUrl`);
+    }
+    const payload: Parameters<typeof api.upsertMediaProvider>[1] = {
+      name: p.name,
+      base_url: p.baseUrl,
+      protocol: p.protocol,
+      enabled: p.enabled !== false,
+      image_models: p.imageModels,
+      chat_models: p.chatModels,
+      video_models: p.videoModels,
+    };
+    if (p.apiKey && p.apiKey.trim()) {
+      // 用户填了明文 → upsert 整条
+      payload.api_key = p.apiKey;
+      await api.upsertMediaProvider(p.id, payload);
+    } else {
+      // 用户没改 key → PATCH 其它字段，保留 DB 原 key
+      const { api_key: _omit, ...rest } = payload;
+      await api.patchMediaProvider(p.id, rest);
+    }
+  }, []);
+
+  /** 从后端 DB 删除一个 provider。 */
+  const deleteProviderFromDb = useCallback(async (providerId: string) => {
+    try {
+      await api.deleteMediaProvider(providerId);
+    } catch (e: any) {
+      // 404 视为成功（DB 里没有）
+      if (!String(e?.message || '').includes('404')) {
+        throw e;
+      }
+    }
+  }, []);
+
   // 进入页面时拉取
   useEffect(() => {
-    if (open) loadLlmProviders();
-  }, [open, loadLlmProviders]);
+    if (open) {
+      loadLlmProviders();
+      loadMediaProvidersFromDb();
+    }
+  }, [open, loadLlmProviders, loadMediaProvidersFromDb]);
 
   const openNewLlmForm = () => {
     setLlmEditForm({
@@ -649,7 +737,7 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
     setStatus(t('canvasApiSettingsStatusCreated'));
   }, [cfg.providers, t]);
 
-  const deleteProvider = useCallback(() => {
+  const deleteProvider = useCallback(async () => {
     const item = provider();
     if (!item) return;
     if (isFixedProvider(item.id)) { alert(t('canvasApiSettingsAlertDefaultNoDelete')); return; }
@@ -660,8 +748,14 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
     }));
     const remaining = cfg.providers.filter(p => p.id !== item.id);
     setSelectedId(remaining[0]?.id || '');
-    setStatus(t('canvasApiSettingsStatusDeleted'));
-  }, [provider, cfg.providers, t]);
+    // 同步删除后端 DB 里的记录
+    try {
+      await deleteProviderFromDb(item.id);
+      setStatus(t('canvasApiSettingsStatusDeleted'));
+    } catch (e: any) {
+      setStatus(`DB delete failed: ${e?.message || ''}`);
+    }
+  }, [provider, cfg.providers, t, deleteProviderFromDb]);
 
   const selectProvider = useCallback((id: string) => {
     setSelectedId(id);
@@ -1019,7 +1113,7 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
   }, [lorasFor, setLorasFor]);
 
   /* ---- Save ---- */
-  const handleSave = useCallback(() => {
+  const handleSave = useCallback(async () => {
     // Normalize providers before saving
     const normalized = {
       ...cfg,
@@ -1031,11 +1125,44 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
         videoModels: unique(p.videoModels),
       })),
     };
+    // 1) 同步到后端 DB（统一存储）
+    //    - 有 apiKey 明文 → upsert
+    //    - 没改 key（hasKey=true 但 apiKey=''）→ PATCH 其它字段，保留 DB 原 key
+    //    - 全新未保存的（没有 hasKey）→ 必须有 apiKey，否则报错提示
+    setMediaSyncStatus((s) => ({ ...s, syncing: true, lastError: null }));
+    const errors: string[] = [];
+    for (const p of normalized.providers) {
+      try {
+        if (!p.baseUrl) {
+          errors.push(`${p.id}: base_url empty, skipped`);
+          continue;
+        }
+        if (!p.apiKey && !p.hasKey) {
+          // 全新 provider 必须有 key
+          errors.push(`${p.id}: api_key required for new provider`);
+          continue;
+        }
+        await syncProviderToDb(p);
+      } catch (e: any) {
+        errors.push(`${p.id}: ${e?.message || 'sync failed'}`);
+      }
+    }
+    setMediaSyncStatus({
+      syncing: false,
+      lastError: errors.length ? errors.join('; ') : null,
+      lastSyncedAt: errors.length ? null : Date.now(),
+    });
+
+    // 2) 触发父组件回调（保持向后兼容 — 旧 store 仍以 localStorage 兜底）
     onSave(normalized);
     setSaved(true);
-    setStatus(t('canvasApiSettingsStatusSaved'));
+    setStatus(
+      errors.length
+        ? `${t('canvasApiSettingsStatusSaved')} (${errors.length} DB 错误)`
+        : t('canvasApiSettingsStatusSaved')
+    );
     setTimeout(() => setSaved(false), 2000);
-  }, [cfg, onSave, t]);
+  }, [cfg, onSave, t, syncProviderToDb]);
 
   /* ---- Key save ---- */
   const saveKeyOnly = useCallback(() => {

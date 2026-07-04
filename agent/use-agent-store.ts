@@ -67,6 +67,10 @@ export interface AgentState {
   pendingPlan: any[] | null;
   pendingErrorRecovery: PendingErrorRecovery | null;
 
+  // LLM 模式
+  llmMode: 'real' | 'stub' | null;
+  llmFallbackReason: string | null;
+
   // 成本
   totalCostUsd: number;
   totalTokens: number;
@@ -96,6 +100,8 @@ const INITIAL: Pick<
   | 'pendingQuestion'
   | 'pendingPlan'
   | 'pendingErrorRecovery'
+  | 'llmMode'
+  | 'llmFallbackReason'
   | 'totalCostUsd'
   | 'totalTokens'
   | 'error'
@@ -111,6 +117,8 @@ const INITIAL: Pick<
   pendingQuestion: null,
   pendingPlan: null,
   pendingErrorRecovery: null,
+  llmMode: null,
+  llmFallbackReason: null,
   totalCostUsd: 0,
   totalTokens: 0,
   error: null,
@@ -134,6 +142,14 @@ export const useAgentStore = create<AgentState>((set) => ({
       const t = event.type;
       const p = event.payload || {};
       switch (t) {
+        case 'task_started': {
+          // 后端在 runtime 启动时上报 LLM 模式 + fallback 原因
+          // real = 真实 LLM（DB 里有 provider/api_key）
+          // stub = DevScriptedLLM 假任务（需要用户在 API 设置里配 LLM key）
+          const mode = p.llm_mode === 'real' ? 'real' : (p.llm_mode === 'stub' ? 'stub' : state.llmMode);
+          const reason = typeof p.llm_fallback_reason === 'string' ? p.llm_fallback_reason : state.llmFallbackReason;
+          return { llmMode: mode, llmFallbackReason: reason, status: 'running' };
+        }
         case 'thought':
           return { thoughts: [...state.thoughts, event] };
         case 'action':

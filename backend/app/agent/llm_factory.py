@@ -120,19 +120,38 @@ def select_llm_for_task(
     """为单个 task 选 LLM 客户端。
 
     决策树：
-    1. task_provider_id 为 None → 静默回 stub（用户没指定就是 dev 模式）
-    2. configs 为空 → 回 stub，reason="no LLM configured in env"
-    3. configs 中找不到 task_provider_id → 回 stub，reason="provider not found in env"
+    1. task_provider_id 为 None + configs 非空 → 自动用 configs[0] 跑真实 LLM
+       （避免用户没显式选 provider 时无脑走 DevScriptedLLM 假任务；
+        DB 里只要有任意 provider 配置就视为"用户已经配好了 LLM"）
+    2. configs 为空 → 回 stub，reason="no LLM configured in DB"
+    3. configs 中找不到 task_provider_id → 回 stub，reason="provider not found in DB"
     4. 找到 → 用真实 client；model 优先用 task_model_id，否则 config.default_model
 
     Returns: (client, mode, fallback_reason_or_none)
     """
+    # 1) task_provider_id 为 None 但 DB 有 provider → 自动用 configs[0] 跑真实 LLM
+    #    避免用户没显式选 provider 时无脑走 DevScriptedLLM 假任务；
+    #    DB 里只要有任意 provider 配置就视为"用户已经配好了 LLM"
     if task_provider_id is None:
-        return DevScriptedLLM(user_goal=""), "stub", None
+        if not configs:
+            # 静默回 stub：user 没选 + DB 也没配，等同于 Dev 模式
+            return DevScriptedLLM(user_goal=""), "stub", None
+        first = configs[0]
+        model = task_model_id or first.default_model
+        client = OpenAICompatibleLLMClient(
+            base_url=first.base_url,
+            api_key=first.api_key,
+            model=model,
+        )
+        return client, "real", None
 
+    # 2) task_provider_id 有值但 configs 为空
     if not configs:
-        return DevScriptedLLM(user_goal=""), "stub", "no LLM configured in env (set LLM_API_KEY or LLM_PROVIDERS_JSON)"
+        return DevScriptedLLM(user_goal=""), "stub", (
+            "no LLM configured in DB — go to API settings to add one"
+        )
 
+    # 3) 找到指定 provider
     for c in configs:
         if c.provider_id == task_provider_id:
             model = task_model_id or c.default_model
@@ -143,7 +162,8 @@ def select_llm_for_task(
             )
             return client, "real", None
 
+    # 4) 找不到 → 回 stub
     available = ", ".join(c.provider_id for c in configs) or "(none)"
     return DevScriptedLLM(user_goal=""), "stub", (
-        f"provider '{task_provider_id}' not found in env; available: {available}"
+        f"provider '{task_provider_id}' not found in DB; available: {available}"
     )

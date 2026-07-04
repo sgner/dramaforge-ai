@@ -5,6 +5,14 @@ import {
   buildImageRequestBody, buildVideoRequestBody,
   extractVideoTaskId, buildPollUrl
 } from './apiAdapter';
+import { api } from './apiClient';
+
+/**
+ * 统一代理标志：true = 通过后端 /api/media/generate/* 调用供应商（api_key 不入前端，安全）；
+ *                false = 旧路径，前端直连供应商（保留以做 fallback 调试用）。
+ * 默认 true：新架构下所有画布媒体生成都走后端。
+ */
+const USE_BACKEND_PROXY = true;
 
 const findUrlInResponse = (data: any): string | null => {
   if (!data) return null;
@@ -63,6 +71,8 @@ const LANG_MAP: Record<string, string> = {
   'ko': 'Korean context'
 };
 
+// ============ 旧路径辅助（USE_BACKEND_PROXY=false 时使用） ============
+
 const buildFullUrl = (provider: Provider, model: ModelConfig): string => {
   let url = buildUrl(provider, model);
   const keyParam = buildApiKeyQueryParam(provider, model);
@@ -73,6 +83,59 @@ const buildFullUrl = (provider: Provider, model: ModelConfig): string => {
   return url;
 };
 
+// ============ 后端代理路径 ============
+
+/**
+ * 构建角色设计 prompt
+ */
+function buildCharacterPrompt(character: Character, style: string): string {
+  if (character.faceAnchor && character.hairSystem && character.clothingLayers) {
+    const fa = character.faceAnchor;
+    const hs = character.hairSystem;
+    const cl = character.clothingLayers;
+    return `${character.era || ''} ${character.identity || ''} ${character.gender || ''} ${character.ageRange || ''} ${style}。面容：${fa.faceShape}，${fa.eyebrow}，${fa.eyeType}，${fa.noseType}，${fa.lipType}，${fa.boneStructure}，${fa.skinTone}肤${fa.landmarks ? '，' + fa.landmarks : ''}。发式：${hs.lengthAndStyle}，${hs.color}发${hs.headwear ? '，' + hs.headwear : ''}，${hs.bangsDirection}。服装：内层${cl.inner}，外层${cl.outer}，套层${cl.overlay}，腰部${cl.waist}，下身${cl.lower}，足部${cl.feet}。${character.specialState ? '特殊状态：' + character.specialState + '。' : ''}姿态：双手自然下垂，站姿自然，面容平静。${CHARACTER_CONCEPT_SHEET_LAYOUT} 8K超精细，材质纹理清晰可触，纯白底背景`;
+  }
+  return `Character Design Sheet (Three Views: Front, Side, Back) for ${character.name}. 
+Visual features: ${character.visualFeatures}. 
+Clothing: ${character.clothing}. 
+Style: ${style}. 
+High quality, detailed character reference sheet, white background.`;
+}
+
+/**
+ * 构建分镜图 prompt
+ */
+function buildStoryboardPrompt(description: string, style: string, language: string, sceneAsset?: SceneAsset): string {
+  const langContext = LANG_MAP[language] || language;
+  let sceneContext = '';
+  if (sceneAsset) {
+    sceneContext = `\n[Scene Asset — 7-Layer Structure]\n世界观定位：${sceneAsset.worldPositioning}\n地理位置：${sceneAsset.geography}\n主体建筑：${sceneAsset.mainStructure}\n延伸空间：${sceneAsset.extendedSpace}\n自然远景：${sceneAsset.naturalAndDistant}\n光影色彩：${sceneAsset.lightAndColor}\n技术规格：${sceneAsset.techSpec}\n氛围人物：${sceneAsset.ambientCharacters}\n${sceneAsset.qualitySuffix}`;
+  }
+  return `
+  *** Six-Panel Storyboard Sheet, 2 rows x 3 columns layout, 2x3 grid ***
+  Visual Style: ${style}. ${langContext}.
+  ${sceneContext}
+  [Panel Content]
+  ${description}
+  `;
+}
+
+/**
+ * 构建视频 prompt
+ */
+function buildVideoPrompt(optimizedPrompt: string, style: string, language: string, storyboardImageUrl?: string): string {
+  const langContext = LANG_MAP[language] || language;
+  return `
+  Visual Style: ${style}.
+  Cultural Context: ${langContext}.
+  ${storyboardImageUrl 
+    ? `${optimizedPrompt} \n\n[REFERENCE] Use the attached six-grid storyboard image as a strict visual reference for characters, composition, and timeline.`
+    : optimizedPrompt}
+  `;
+}
+
+// ============ 公开 API ============
+
 export const generateCharacterDesign = async (
   character: Character, 
   style: string,
@@ -81,23 +144,23 @@ export const generateCharacterDesign = async (
   model: ModelConfig,
   signal?: AbortSignal
 ): Promise<string> => {
-  if (!provider.apiKey) throw new Error("Image provider API Key is missing");
+  const prompt = buildCharacterPrompt(character, style);
 
-  const langContext = LANG_MAP[language] || language;
-
-  let prompt: string;
-  if (character.faceAnchor && character.hairSystem && character.clothingLayers) {
-    const fa = character.faceAnchor;
-    const hs = character.hairSystem;
-    const cl = character.clothingLayers;
-    prompt = `${character.era || ''} ${character.identity || ''} ${character.gender || ''} ${character.ageRange || ''} ${style}。面容：${fa.faceShape}，${fa.eyebrow}，${fa.eyeType}，${fa.noseType}，${fa.lipType}，${fa.boneStructure}，${fa.skinTone}肤${fa.landmarks ? '，' + fa.landmarks : ''}。发式：${hs.lengthAndStyle}，${hs.color}发${hs.headwear ? '，' + hs.headwear : ''}，${hs.bangsDirection}。服装：内层${cl.inner}，外层${cl.outer}，套层${cl.overlay}，腰部${cl.waist}，下身${cl.lower}，足部${cl.feet}。${character.specialState ? '特殊状态：' + character.specialState + '。' : ''}姿态：双手自然下垂，站姿自然，面容平静。${CHARACTER_CONCEPT_SHEET_LAYOUT} 8K超精细，材质纹理清晰可触，纯白底背景`;
-  } else {
-    prompt = `Character Design Sheet (Three Views: Front, Side, Back) for ${character.name}. 
-  Visual features: ${character.visualFeatures}. 
-  Clothing: ${character.clothing}. 
-  Style: ${style}. 
-  High quality, detailed character reference sheet, white background.`;
+  if (USE_BACKEND_PROXY) {
+    // 后端代理模式：不需要前端持有 apiKey
+    const refUrls: string[] = character.referenceImage ? [character.referenceImage] : [];
+    const result = await api.generateImage({
+      provider_id: provider.id,
+      model: model.modelName,
+      prompt,
+      ref_urls: refUrls,
+      aspect_ratio: '1:1',
+    });
+    return result.url;
   }
+
+  // 旧路径：前端直连供应商
+  if (!provider.apiKey) throw new Error("Image provider API Key is missing");
 
   try {
     if (character.referenceImage) {
@@ -158,31 +221,33 @@ export const generateStoryboardImage = async (
   signal?: AbortSignal,
   sceneAsset?: SceneAsset
 ): Promise<string> => {
-  if (!provider.apiKey) throw new Error("Image provider API Key is missing");
-  console.log(characterImages)
-  const langContext = LANG_MAP[language] || language;
+  const prompt = buildStoryboardPrompt(description, style, language, sceneAsset);
 
-  let sceneContext = '';
-  if (sceneAsset) {
-    sceneContext = `\n[Scene Asset — 7-Layer Structure]\n世界观定位：${sceneAsset.worldPositioning}\n地理位置：${sceneAsset.geography}\n主体建筑：${sceneAsset.mainStructure}\n延伸空间：${sceneAsset.extendedSpace}\n自然远景：${sceneAsset.naturalAndDistant}\n光影色彩：${sceneAsset.lightAndColor}\n技术规格：${sceneAsset.techSpec}\n氛围人物：${sceneAsset.ambientCharacters}\n${sceneAsset.qualitySuffix}`;
+  if (USE_BACKEND_PROXY) {
+    // 后端代理模式：将参考图 URL 作为 ref_urls 传递
+    const result = await api.generateImage({
+      provider_id: provider.id,
+      model: model.modelName,
+      prompt,
+      ref_urls: characterImages || [],
+      aspect_ratio: '16:9',
+    });
+    return result.url;
   }
 
-  const fullPrompt = `
-  *** Six-Panel Storyboard Sheet, 2 rows x 3 columns layout, 2x3 grid ***
-  Visual Style: ${style}. ${langContext}.
-  ${sceneContext}
-  [Panel Content]
-  ${description}
-  `;
-  
+  // 旧路径：前端直连供应商
+  if (!provider.apiKey) throw new Error("Image provider API Key is missing");
+  console.log(characterImages);
+  const langContext = LANG_MAP[language] || language;
+
   try {
-    console.log(fullPrompt)
+    console.log(prompt);
     if (characterImages && characterImages.length > 0) {
       const url = buildFullUrl(provider, model);
       const formData = new FormData();
       
       formData.append('model', model.modelName);
-      formData.append('prompt', fullPrompt);
+      formData.append('prompt', prompt);
       formData.append('image_size', '4K');
       formData.append('response_format', 'url');
       formData.append('aspect_ratio', '');
@@ -217,7 +282,7 @@ export const generateStoryboardImage = async (
 
     const url = buildFullUrl(provider, model);
     const headers = buildHeaders(provider, model);
-    const requestBody = buildImageRequestBody(model, fullPrompt, {
+    const requestBody = buildImageRequestBody(model, prompt, {
       size: '1024x1024',
       n: 1,
       responseFormat: 'url',
@@ -327,9 +392,21 @@ export const generatePropImage = async (
   model: ModelConfig,
   signal?: AbortSignal
 ): Promise<string> => {
-  if (!provider.apiKey) throw new Error("Image provider API Key is missing");
-
   const prompt = `Still life product photography, ${propPrompt}`;
+
+  if (USE_BACKEND_PROXY) {
+    // 后端代理模式
+    const result = await api.generateImage({
+      provider_id: provider.id,
+      model: model.modelName,
+      prompt,
+      aspect_ratio: '1:1',
+    });
+    return result.url;
+  }
+
+  // 旧路径：前端直连供应商
+  if (!provider.apiKey) throw new Error("Image provider API Key is missing");
 
   try {
     const url = buildFullUrl(provider, model);
@@ -363,21 +440,28 @@ export const generateSoraVideo = async (
   onProgress?: (status: string) => void,
   signal?: AbortSignal
 ): Promise<string> => {
+  const prompt = buildVideoPrompt(optimizedPrompt, style, language, storyboardImageUrl);
+
+  if (USE_BACKEND_PROXY) {
+    // 后端代理模式
+    const result = await api.generateVideo({
+      provider_id: provider.id,
+      model: model.modelName,
+      prompt,
+      ref_urls: storyboardImageUrl ? [storyboardImageUrl] : [],
+      aspect_ratio: '16:9',
+      duration_sec: 15,
+    });
+    return result.url;
+  }
+
+  // 旧路径：前端直连供应商
   if (!provider.apiKey) throw new Error("Video provider API Key is missing");
 
   const url = buildFullUrl(provider, model);
   const headers = buildHeaders(provider, model);
-  const langContext = LANG_MAP[language] || language;
 
-  const finalPrompt = `
-  Visual Style: ${style}.
-  Cultural Context: ${langContext}.
-  ${storyboardImageUrl 
-    ? `${optimizedPrompt} \n\n[REFERENCE] Use the attached six-grid storyboard image as a strict visual reference for characters, composition, and timeline.`
-    : optimizedPrompt}
-  `;
-
-  const requestBody = buildVideoRequestBody(model, finalPrompt, {
+  const requestBody = buildVideoRequestBody(model, prompt, {
     aspectRatio: '16:9',
     duration: '15',
     hd: true,
