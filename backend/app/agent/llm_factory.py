@@ -86,30 +86,30 @@ def load_llm_configs_from_env() -> list[LLMProviderConfig]:
 
 
 def load_llm_configs(db) -> list[LLMProviderConfig]:
-    """从 DB 读所有 LLMProviderConfig。
+    """从 DB 读所有可用的 LLM provider 配置。
 
-    单数据源：DB 行（前端 ApiSettingsModal 配置）。
-    缺 db / 缺行 → 返回 []，由 select_llm_for_task 决定走 stub。
-
-    之前版本会 fallback 到 env，现已移除（统一后端承担 + DB 配置）。
+    数据源：统一表 provider_configs（合并自 media_provider_configs + llm_provider_configs）。
+    过滤条件：enabled=True 且 chat_models 非空（否则不能当 LLM 用）。
+    缺 db / 缺行 → 返回 []，由 select_llm_for_task 决定如何处理。
     """
     if db is None:
         return []
 
-    # 延迟导入避免 agent 模块被循环导入到 app.__init__
-    from ..models import LLMProviderConfig as OrmConfig
-    rows = db.query(OrmConfig).all()
-    if not rows:
-        return []
-    return [
-        LLMProviderConfig(
+    # 延迟导入避免循环导入；复用 models.py 的 _parse_json_list（DRY）
+    from ..models import ProviderConfig, _parse_json_list
+    rows = db.query(ProviderConfig).filter(ProviderConfig.enabled.is_(True)).all()
+    configs: list[LLMProviderConfig] = []
+    for r in rows:
+        chat_models = _parse_json_list(r.chat_models_json)
+        if not chat_models:
+            continue
+        configs.append(LLMProviderConfig(
             provider_id=r.provider_id,
             base_url=r.base_url,
             api_key=r.api_key,
-            default_model=r.default_model,
-        )
-        for r in rows
-    ]
+            default_model=r.default_model or chat_models[0],
+        ))
+    return configs
 
 
 def select_llm_for_task(
