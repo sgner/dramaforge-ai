@@ -1,210 +1,179 @@
-"""Tests for app.agent.llm_factory — env-based LLMProviderConfig loader
-+ select_llm_for_task factory with stub fallback.
+"""TDD: llm_factory
 
-Covers:
-- Short env mode (LLM_API_KEY + LLM_BASE_URL + LLM_MODEL) → single provider
-- Long env mode (LLM_PROVIDERS_JSON) → multiple providers
-- Missing env → empty list (no exception)
-- Partial short env → empty list (must not guess fields)
-- Malformed JSON → empty list (no exception)
+覆盖：
+- load_llm_configs: 过滤 enabled / chat_models，从 DB 构建 LLMProviderConfig
+- select_llm_for_task:
+  * task_provider_id=None + configs 非空 → 自动用 configs[0] (real client)
+  * task_provider_id=None + configs 空 → 抛 NoLLMConfigured
+  * 找到指定 provider → 用其 base_url/api_key/model
+  * 找不到指定 provider → 抛 NoLLMConfigured(reason_code="provider_not_found")
+- model 优先级: task_model_id > config.default_model
 
-select_llm_for_task:
-- env 命中 provider_id → 返回 OpenAICompatibleLLMClient (mode=real)
-- env 没命中 → 回 DevScriptedLLM (mode=stub, reason 非 None)
-- env 完全没配 → 回 DevScriptedLLM (mode=stub, reason 非 None)
-- task_provider_id=None → 静默回 DevScriptedLLM (mode=stub, reason=None)
-- task_model_id 覆盖 config.default_model
+本测试套件**绝不**依赖任何模拟/脚本化 LLM 实现。NoLLMConfigured 必须被
+测试为可预期的失败路径。
 """
-import json
-
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
-from app.agent.dev_scripted_llm import DevScriptedLLM
 from app.agent.llm_factory import (
     LLMProviderConfig,
+    NoLLMConfigured,
     load_llm_configs,
-    load_llm_configs_from_env,
     select_llm_for_task,
 )
-from app.agent.openai_llm_client import OpenAICompatibleLLMClient
+from app.database import Base
+from app.models import ProviderConfig
 
 
-def test_load_single_provider_from_short_env(monkeypatch):
-    """短 env（LLM_API_KEY / LLM_BASE_URL / LLM_MODEL）合成一个 provider。"""
-    monkeypatch.setenv("LLM_API_KEY", "sk-test-123")
-    monkeypatch.setenv("LLM_BASE_URL", "https://api.openai.com")
-    monkeypatch.setenv("LLM_MODEL", "gpt-4o-mini")
-    monkeypatch.delenv("LLM_PROVIDERS_JSON", raising=False)
+# ---------------- fixtures ----------------
 
-    configs = load_llm_configs_from_env()
+@pytest.fixture
+def db_session():
+    """In-memory SQLite + Base metadata + ProviderConfig table。"""
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    s = Session()
+    yield s
+    s.close()
+    engine.dispose()
 
+
+def _seed(db, *, provider_id="custom-api", name="ZZ", base_url="https://x.test/v1",
+          api_key="sk-test", chat_models=('["gpt-4","deepseek-v3"]'),
+          enabled=True, default_model=""):
+    row = ProviderConfig(
+        provider_id=provider_id,
+        name=name,
+        base_url=base_url,
+        api_key=api_key,
+        protocol="openai",
+        enabled=enabled,
+        default_model=default_model,
+        chat_models_json=chat_models,
+        image_models_json="[]",
+        video_models_json="[]",
+        extra_config_json="{}",
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+# ---------------- load_llm_configs ----------------
+
+def test_load_llm_configs_returns_empty_when_db_is_none():
+    assert load_llm_configs(None) == []
+
+
+def test_load_llm_configs_returns_empty_when_no_providers(db_session):
+    assert load_llm_configs(db_session) == []
+
+
+def test_load_llm_configs_includes_enabled_provider_with_chat_models(db_session):
+    _seed(db_session, provider_id="custom-api",
+          chat_models='["gpt-4","deepseek-v3"]')
+    configs = load_llm_configs(db_session)
     assert len(configs) == 1
     c = configs[0]
-    assert isinstance(c, LLMProviderConfig)
-    assert c.provider_id == "openai"
-    assert c.api_key == "sk-test-123"
-    assert c.base_url == "https://api.openai.com"
-    assert c.default_model == "gpt-4o-mini"
+    assert c.provider_id == "custom-api"
+    assert c.base_url == "https://x.test/v1"
+    assert c.api_key == "sk-test"
+    assert c.default_model == "gpt-4"  # 缺 default_model 时取 chat_models[0]
 
 
-def test_load_multiple_providers_from_json(monkeypatch):
-    """LLM_PROVIDERS_JSON 解析多 provider（openai / deepseek / kimi 等）。"""
-    monkeypatch.delenv("LLM_API_KEY", raising=False)
-    monkeypatch.delenv("LLM_BASE_URL", raising=False)
-    monkeypatch.delenv("LLM_MODEL", raising=False)
-    monkeypatch.setenv("LLM_PROVIDERS_JSON", json.dumps({
-        "openai": {"api_key": "sk-1", "base_url": "https://api.openai.com", "default_model": "gpt-4o-mini"},
-        "deepseek": {"api_key": "sk-2", "base_url": "https://api.deepseek.com", "default_model": "deepseek-chat"},
-    }))
-
-    configs = load_llm_configs_from_env()
-
-    ids = sorted(c.provider_id for c in configs)
-    assert ids == ["deepseek", "openai"]
-    by_id = {c.provider_id: c for c in configs}
-    assert by_id["openai"].default_model == "gpt-4o-mini"
-    assert by_id["deepseek"].base_url == "https://api.deepseek.com"
+def test_load_llm_configs_uses_explicit_default_model_when_set(db_session):
+    _seed(db_session, default_model="deepseek-v3",
+          chat_models='["gpt-4","deepseek-v3"]')
+    configs = load_llm_configs(db_session)
+    assert configs[0].default_model == "deepseek-v3"
 
 
-def test_load_returns_empty_when_no_env(monkeypatch):
-    """env 完全没配 → 返回空列表（不是抛错）。"""
-    for k in ("LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL", "LLM_PROVIDERS_JSON"):
-        monkeypatch.delenv(k, raising=False)
-
-    configs = load_llm_configs_from_env()
-
-    assert configs == []
-
-
-def test_short_env_requires_all_three_or_returns_empty(monkeypatch):
-    """短 env 只配了 LLM_API_KEY 但没 LLM_BASE_URL → 返回空（不能瞎猜 base_url）。"""
-    monkeypatch.setenv("LLM_API_KEY", "sk-test-123")
-    monkeypatch.delenv("LLM_BASE_URL", raising=False)
-    monkeypatch.delenv("LLM_MODEL", raising=False)
-    monkeypatch.delenv("LLM_PROVIDERS_JSON", raising=False)
-
-    configs = load_llm_configs_from_env()
-
-    assert configs == []
+def test_load_llm_configs_skips_disabled_providers(db_session):
+    _seed(db_session, provider_id="disabled", enabled=False,
+          chat_models='["gpt-4"]')
+    _seed(db_session, provider_id="enabled", enabled=True,
+          chat_models='["gpt-4"]')
+    configs = load_llm_configs(db_session)
+    assert [c.provider_id for c in configs] == ["enabled"]
 
 
-def test_malformed_json_returns_empty(monkeypatch):
-    """malformed LLM_PROVIDERS_JSON → 返回空 list（不向上抛 JSONDecodeError）。"""
-    monkeypatch.delenv("LLM_API_KEY", raising=False)
-    monkeypatch.delenv("LLM_BASE_URL", raising=False)
-    monkeypatch.delenv("LLM_MODEL", raising=False)
-    monkeypatch.setenv("LLM_PROVIDERS_JSON", "not-json")
-
-    configs = load_llm_configs_from_env()
-
-    assert configs == []
+def test_load_llm_configs_skips_providers_without_chat_models(db_session):
+    _seed(db_session, provider_id="no-models", chat_models="[]")
+    _seed(db_session, provider_id="with-models", chat_models='["gpt-4"]')
+    configs = load_llm_configs(db_session)
+    assert [c.provider_id for c in configs] == ["with-models"]
 
 
-# ========================
-# select_llm_for_task
-# ========================
+# ---------------- select_llm_for_task ----------------
+
+def _make_config(pid="custom-api", base_url="https://x.test/v1",
+                 api_key="sk-test", default_model="gpt-4"):
+    return LLMProviderConfig(
+        provider_id=pid, base_url=base_url, api_key=api_key,
+        default_model=default_model,
+    )
 
 
-def test_select_returns_real_llm_when_provider_match():
-    """env 配了 openai，task_provider_id='openai' → 返回 OpenAICompatibleLLMClient。"""
-    configs = [LLMProviderConfig("openai", "https://api.openai.com", "sk-1", "gpt-4o-mini")]
-    llm, mode, reason = select_llm_for_task("openai", configs)
-    assert mode == "real"
-    assert reason is None
-    assert isinstance(llm, OpenAICompatibleLLMClient)
-    assert llm.model == "gpt-4o-mini"
+def test_select_returns_real_client_when_no_task_provider_but_configs_exist():
+    configs = [_make_config()]
+    client = select_llm_for_task(task_provider_id=None, configs=configs)
+    # 真实 OpenAI 客户端：base_url 会被 /v1 规范化（client 内置的 _normalize_base_url）
+    assert client.base_url == "https://x.test"  # 原始 /v1 被剥掉（client 内部会再补回 /v1/chat/completions）
+    assert client.model == "gpt-4"
+    assert client.api_key == "sk-test"
 
 
-def test_select_falls_back_to_stub_when_provider_not_in_env():
-    """task_provider_id 不在 env configs 里 → 退回 stub，reason 不为 None。"""
-    configs = [LLMProviderConfig("openai", "https://api.openai.com", "sk-1", "gpt-4o-mini")]
-    llm, mode, reason = select_llm_for_task("deepseek", configs)
-    assert mode == "stub"
-    assert reason is not None
-    assert "deepseek" in reason.lower() or "not found" in reason.lower()
-    assert isinstance(llm, DevScriptedLLM)
+def test_select_raises_no_llm_configured_when_no_provider_no_configs():
+    with pytest.raises(NoLLMConfigured) as exc_info:
+        select_llm_for_task(task_provider_id=None, configs=[])
+    assert exc_info.value.reason_code == "no_provider"
+    assert "no llm provider configured" in str(exc_info.value).lower()
 
 
-def test_select_falls_back_to_stub_when_no_env_at_all():
-    """configs 为空且 task_provider_id 不为 None → 退回 stub，reason 提示未配置。"""
-    llm, mode, reason = select_llm_for_task("openai", [])
-    assert mode == "stub"
-    assert reason is not None
-    assert isinstance(llm, DevScriptedLLM)
+def test_select_raises_when_task_provider_set_but_no_configs():
+    with pytest.raises(NoLLMConfigured) as exc_info:
+        select_llm_for_task(task_provider_id="custom-api", configs=[])
+    assert exc_info.value.reason_code == "no_provider"
 
 
-def test_select_returns_stub_silently_when_task_provider_id_is_none():
-    """task_provider_id 为 None（用户没选）→ 直接 stub，reason 为 None。"""
-    llm, mode, reason = select_llm_for_task(None, [])
-    assert mode == "stub"
-    assert reason is None
-    assert isinstance(llm, DevScriptedLLM)
+def test_select_uses_requested_provider_when_present():
+    configs = [
+        _make_config("alpha", base_url="https://a.test/v1", api_key="sk-a"),
+        _make_config("beta", base_url="https://b.test/v1", api_key="sk-b"),
+    ]
+    client = select_llm_for_task(task_provider_id="beta", configs=configs)
+    assert client.base_url == "https://b.test"  # /v1 被 _normalize_base_url 剥掉
+    assert client.api_key == "sk-b"
 
 
-def test_select_uses_task_model_id_override():
-    """如果 task 显式指定 model_id，应覆盖 config 的 default_model。"""
-    configs = [LLMProviderConfig("openai", "https://api.openai.com", "sk-1", "gpt-4o-mini")]
-    llm, mode, _ = select_llm_for_task("openai", configs, task_model_id="gpt-4o")
-    assert mode == "real"
-    assert isinstance(llm, OpenAICompatibleLLMClient)
-    assert llm.model == "gpt-4o"
+def test_select_prefers_task_model_id_over_default_model():
+    configs = [_make_config(default_model="gpt-4")]
+    client = select_llm_for_task(
+        task_provider_id=None, configs=configs, task_model_id="deepseek-v3",
+    )
+    assert client.model == "deepseek-v3"
 
 
-# ========================
-# load_llm_configs(db) — DB 唯一数据源（env fallback 已移除）
-# ========================
+def test_select_raises_provider_not_found_when_id_missing():
+    configs = [_make_config("alpha")]
+    with pytest.raises(NoLLMConfigured) as exc_info:
+        select_llm_for_task(task_provider_id="beta", configs=configs)
+    assert exc_info.value.reason_code == "provider_not_found"
+    assert "beta" in str(exc_info.value)
+    assert "alpha" in str(exc_info.value)  # available 列表
 
 
-def test_load_llm_configs_db_empty_returns_empty(monkeypatch):
-    """DB 为空 → 返回 []（env fallback 已移除，统一 DB 唯一数据源）。"""
-    # 故意设 env：但因 DB 空，env 不应被读
-    monkeypatch.setenv("LLM_API_KEY", "sk-env-1")
-    monkeypatch.setenv("LLM_BASE_URL", "https://api.openai.com")
-    monkeypatch.setenv("LLM_MODEL", "gpt-4o-mini")
-
-    from app.database import Base, engine, SessionLocal
-    from app.models import LLMProviderConfig as Orm
-    Base.metadata.create_all(bind=engine)
-    with SessionLocal() as s:
-        s.query(Orm).delete()
-        s.commit()
-        configs = load_llm_configs(s)
-
-    assert configs == []
-
-
-def test_load_llm_configs_db_rows_override_env(monkeypatch):
-    """DB 有行 → 用 DB，env 完全被忽略。"""
-    monkeypatch.setenv("LLM_API_KEY", "sk-env-1")
-    monkeypatch.setenv("LLM_BASE_URL", "https://api.openai.com")
-    monkeypatch.setenv("LLM_MODEL", "gpt-4o-mini")
-
-    from app.database import Base, engine, SessionLocal
-    from app.models import ProviderConfig as Orm
-    Base.metadata.create_all(bind=engine)
-    with SessionLocal() as s:
-        s.query(Orm).delete()
-        s.add(Orm(
-            provider_id="deepseek",
-            base_url="https://api.deepseek.com",
-            api_key="sk-db-2",
-            default_model="deepseek-chat",
-            chat_models_json='["deepseek-chat"]',
-        ))
-        s.commit()
-        configs = load_llm_configs(s)
-
-    assert len(configs) == 1
-    assert configs[0].provider_id == "deepseek"
-    assert configs[0].api_key == "sk-db-2"  # DB 的 key，不是 env
-    assert configs[0].default_model == "deepseek-chat"
-
-
-def test_load_llm_configs_no_db_returns_empty(monkeypatch):
-    """db=None → 直接返回 []，不读 env。"""
-    monkeypatch.setenv("LLM_API_KEY", "sk-env-only")
-    monkeypatch.setenv("LLM_BASE_URL", "https://api.openai.com")
-    monkeypatch.setenv("LLM_MODEL", "gpt-4o-mini")
-
-    configs = load_llm_configs(None)
-    assert configs == []
+def test_select_message_mentions_api_settings_to_help_user():
+    """NoLLMConfigured 错误消息必须引导用户去 API 设置页配 provider。"""
+    with pytest.raises(NoLLMConfigured) as exc_info:
+        select_llm_for_task(task_provider_id=None, configs=[])
+    msg = str(exc_info.value).lower()
+    assert "api settings" in msg or "settings" in msg

@@ -63,8 +63,14 @@ def test_server_responsive_during_agent_runs(client):
     assert elapsed < 1.0, f"GET tools took {elapsed:.2f}s, server is stuck"
 
 
-def test_agents_actually_complete_in_background(client):
-    """创建 task 后等几秒，runtime 应当在后台跑完（不阻塞 endpoint）。"""
+def test_agents_actually_complete_in_background(client, seeded_provider):
+    """创建 task 后等几秒，runtime 应当在后台跑完（不阻塞 endpoint）。
+
+    Plan 5 删除 DevScriptedLLM 后，依赖 conftest.py 的 `seeded_provider` fixture
+    注入 NoOp LLM，让 runtime 跑通但只产出 1 步（finish_task）。
+    旧测试要求 6 步（create_plan → ... → finish_task）依赖 DevScriptedLLM 的剧本，
+    那是模拟数据，删除后不再要求。
+    """
     r = client.post("/api/agent/tasks", json={
         "user_goal": "后台跑完",
         "max_steps": 12,
@@ -83,12 +89,7 @@ def test_agents_actually_complete_in_background(client):
     task = r.json()
     assert task["status"] == "done", f"agent did not complete: {task}"
 
-    # 验证有 6 步
+    # 验证：至少 1 步（NoOp 跑 finish_task 一次就结束）
     r = client.get(f"/api/agent/tasks/{tid}/steps")
     steps = r.json()
-    assert len(steps) == 6
-    tool_names = [s["action"].get("tool") for s in steps]
-    assert tool_names == [
-        "create_plan", "generate_script", "extract_characters",
-        "extract_scenes", "extract_shots", "finish_task",
-    ]
+    assert len(steps) >= 1, f"expected >=1 step, got {len(steps)}"

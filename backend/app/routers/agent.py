@@ -22,7 +22,7 @@ from ..agent.memory import AgentMemory
 from ..agent.runtime import AgentRuntime
 from ..agent.tools import build_default_registry
 from ..agent.media_service import StubMediaService
-from ..agent.llm_factory import load_llm_configs, select_llm_for_task
+from ..agent.llm_factory import load_llm_configs, select_llm_for_task, NoLLMConfigured
 from ..agent.tools import list_tool_metadata
 
 logger = logging.getLogger(__name__)
@@ -263,16 +263,34 @@ async def _spawn_runtime(task_dict: dict) -> None:
     """
     task_id = task_dict["id"]
     try:
-        # 1. 选 LLM：DB 行（前端 ApiSettingsModal 配置）优先，env fallback
+        # 1. 选 LLM：必须从 DB 选真实 LLM，无 provider 配置时直接抛错
         # 任务在新的 DB 会话里跑，避免 asyncio.create_task 里持有 request-scoped session
         from ..database import SessionLocal
         with SessionLocal() as db:
             configs = load_llm_configs(db)
-        llm, llm_mode, llm_fallback_reason = select_llm_for_task(
-            task_provider_id=task_dict.get("llm_provider_id"),
-            configs=configs,
-            task_model_id=task_dict.get("llm_model_id"),
-        )
+        try:
+            llm = select_llm_for_task(
+                task_provider_id=task_dict.get("llm_provider_id"),
+                configs=configs,
+                task_model_id=task_dict.get("llm_model_id"),
+            )
+        except NoLLMConfigured as e:
+            reason = str(e)
+            reason_code = e.reason_code
+            logger.error("[spawn_runtime] task %s aborted: %s", task_id, reason)
+            # 推送 task_failed 事件，前端 UI 能看到
+            await event_bus.publish(AgentEvent(
+                task_id=task_id,
+                type=EventType.TASK_FAILED,
+                payload={
+                    "task_id": task_id,
+                    "error": reason,
+                    "reason_code": reason_code,
+                    "stage": "spawn",
+                },
+            ))
+            _update_task_status(task_id, "failed")
+            return
 
         # 2. 构造 memory
         memory = AgentMemory(user_goal=task_dict.get("user_goal") or "")
@@ -307,14 +325,12 @@ async def _spawn_runtime(task_dict: dict) -> None:
                 return
             _RUNNING_RUNTIMES[task_id] = runtime
 
-        # 7. 发 TASK_STARTED 事件（上报 llm_mode / reason）
+        # 7. 发 TASK_STARTED 事件
         await event_bus.publish(AgentEvent(
             task_id=task_id, type=EventType.TASK_STARTED,
             payload={
                 "task_id": task_id,
                 "user_goal": task_dict.get("user_goal"),
-                "llm_mode": llm_mode,
-                "llm_fallback_reason": llm_fallback_reason,
             },
         ))
 

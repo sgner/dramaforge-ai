@@ -19,11 +19,34 @@ from fastapi.testclient import TestClient
 
 from app import app
 from app.agent.events import event_bus, EventType
-from app.agent.dev_scripted_llm import DevScriptedLLM
+from app.agent.llm import LLMResponse
 from app.agent.runtime import AgentRuntime
 from app.agent.memory import AgentMemory
 from app.agent.tools import build_default_registry
 from app.agent.media_service import StubMediaService
+
+
+class _NoOpLLM:
+    """最小 LLM 客户端实现：直接返回 finish_task 决策，绕过真实 LLM。
+
+    本类只用于**事件总线重放机制**的单元测试 —— 我们只关心 event_bus
+    是否正确传递事件，不关心 LLM 决策内容。所以这里返回"让 agent 立即结束"
+    即可，避免依赖任何被删的 DevScriptedLLM。
+    """
+    model = "test-noop"
+
+    async def generate(self, messages, tools=None, temperature=0.7, max_tokens=4000):
+        return LLMResponse(
+            tool_name="finish_task",
+            tool_args={"summary": "replay test finished"},
+            cost_usd=0.0,
+            prompt_tokens=0,
+            completion_tokens=0,
+        )
+
+    async def generate_structured(self, messages, json_schema=None, temperature=0.7,
+                                  max_tokens=4000):
+        return await self.generate(messages)
 
 
 @pytest.fixture
@@ -33,7 +56,7 @@ def client():
 
 def _build_runtime(task_id: str, user_goal: str = "replay test") -> AgentRuntime:
     """构造与 _spawn_runtime 一样的 runtime 实例。"""
-    llm = DevScriptedLLM(user_goal=user_goal)
+    llm = _NoOpLLM()
     memory = AgentMemory(user_goal=user_goal)
     registry = build_default_registry()
     media = StubMediaService()
