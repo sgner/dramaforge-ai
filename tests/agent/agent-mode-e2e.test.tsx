@@ -25,8 +25,8 @@ vi.mock('@/services/apiClient', () => {
       listAgentTools: vi.fn(),
       respondAgent: vi.fn(),
       getAgentTask: vi.fn(),
-      // 新增：LLM provider 列表 — 测试里默认返回空，模拟"无 provider"
-      listLLMProviders: vi.fn().mockResolvedValue([]),
+      // 新增：provider 列表（Plan 5 统一 endpoint）— 测试里默认返回空
+      listProviders: vi.fn().mockResolvedValue([]),
     },
   };
 });

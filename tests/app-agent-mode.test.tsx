@@ -39,7 +39,7 @@ vi.mock('@/services/apiClient', () => ({
   api: {
     listAgentTasks: vi.fn().mockResolvedValue([]),
     listAgentTools: vi.fn().mockResolvedValue([]),
-    listLLMProviders: vi.fn().mockResolvedValue([]),
+    listProviders: vi.fn().mockResolvedValue([]),
     startAgent: vi.fn().mockResolvedValue({ id: 'mock-task' }),
     respondAgent: vi.fn().mockResolvedValue({ ok: true }),
     pauseAgent: vi.fn().mockResolvedValue({ ok: true }),

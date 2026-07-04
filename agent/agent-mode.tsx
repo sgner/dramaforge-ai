@@ -62,7 +62,7 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
   useEffect(() => {
     let mounted = true;
     setDbProvidersLoading(true);
-    api.listLLMProviders()
+    api.listProviders()
       .then((rows) => {
         if (!mounted) return;
         const list = (rows || []).map((r) => ({
