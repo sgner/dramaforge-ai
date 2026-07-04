@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 
 from app import app
 from app.database import Base, engine
-from app.models import LLMProviderConfig
+from app.models import ProviderConfig
 
 
 @pytest.fixture
@@ -23,7 +23,7 @@ def client():
     # 清空已有行
     from app.database import SessionLocal
     with SessionLocal() as s:
-        s.query(LLMProviderConfig).delete()
+        s.query(ProviderConfig).delete()
         s.commit()
     with TestClient(app) as c:
         yield c
@@ -109,9 +109,14 @@ def test_delete_404(client):
 
 
 def test_put_missing_field_returns_422(client):
-    """缺 api_key / base_url / default_model → 422 校验失败。"""
+    """缺 api_key / base_url → 422 校验失败（default_model 现在可选）。"""
     r = client.put("/api/llm-providers/openai", json={
         "base_url": "https://api.openai.com",
-        # 缺 api_key + default_model
+        # 缺 api_key → 422
     })
     assert r.status_code == 422
+    r2 = client.put("/api/llm-providers/openai", json={
+        "api_key": "sk-test",
+        # 缺 base_url → 422
+    })
+    assert r2.status_code == 422

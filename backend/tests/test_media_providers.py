@@ -18,17 +18,17 @@ from app.database import Base, engine  # noqa: E402
 def client():
     """每个测试用临时 in-memory DB。"""
     from app.database import SessionLocal
-    from app.models import MediaProviderConfig
+    from app.models import ProviderConfig
     Base.metadata.create_all(bind=engine)
     # 清空该表的已有行（不影响其它测试用到的表）
     with SessionLocal() as s:
-        s.query(MediaProviderConfig).delete()
+        s.query(ProviderConfig).delete()
         s.commit()
     with TestClient(app) as c:
         yield c
     # 测试结束后清空（避免影响其他测试）
     with SessionLocal() as s:
-        s.query(MediaProviderConfig).delete()
+        s.query(ProviderConfig).delete()
         s.commit()
 
 

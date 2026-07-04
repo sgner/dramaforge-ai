@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import MediaProviderConfig
+from ..models import ProviderConfig
 
 
 router = APIRouter()
@@ -35,6 +35,7 @@ class MediaProviderIn(BaseModel):
     api_key: str = Field(default="", max_length=4096)  # 允许空（仅改其他字段）
     protocol: str = Field(default="openai", max_length=32)
     enabled: bool = True
+    default_model: str = Field(default="", max_length=128)
     image_models: List[str] = Field(default_factory=list)
     chat_models: List[str] = Field(default_factory=list)
     video_models: List[str] = Field(default_factory=list)
@@ -48,6 +49,7 @@ class MediaProviderPatch(BaseModel):
     api_key: Optional[str] = None  # None 或空字符串 = 不变；非空 = 覆盖
     protocol: Optional[str] = None
     enabled: Optional[bool] = None
+    default_model: Optional[str] = None
     image_models: Optional[List[str]] = None
     chat_models: Optional[List[str]] = None
     video_models: Optional[List[str]] = None
@@ -62,6 +64,7 @@ class MediaProviderOut(BaseModel):
     api_key: str  # 脱敏后的
     protocol: str
     enabled: bool
+    default_model: str = ""
     image_models: List[str] = Field(default_factory=list)
     chat_models: List[str] = Field(default_factory=list)
     video_models: List[str] = Field(default_factory=list)
@@ -74,11 +77,11 @@ class MediaProviderOut(BaseModel):
 
 # ============ Helpers ============
 
-def _to_out(p: MediaProviderConfig) -> dict:
+def _to_out(p: ProviderConfig) -> dict:
     return p.to_dict(mask_key=True)
 
 
-def _apply_payload(row: MediaProviderConfig, payload: dict) -> None:
+def _apply_payload(row: ProviderConfig, payload: dict) -> None:
     """把 payload 字段写到 row。空 api_key 不覆盖（保留原值）。"""
     if "name" in payload and payload["name"] is not None:
         row.name = payload["name"]
@@ -90,6 +93,8 @@ def _apply_payload(row: MediaProviderConfig, payload: dict) -> None:
         row.protocol = payload["protocol"]
     if "enabled" in payload and payload["enabled"] is not None:
         row.enabled = bool(payload["enabled"])
+    if "default_model" in payload and payload["default_model"] is not None:
+        row.default_model = payload["default_model"]
     if "image_models" in payload and payload["image_models"] is not None:
         row.image_models_json = json.dumps(payload["image_models"])
     if "chat_models" in payload and payload["chat_models"] is not None:
@@ -105,13 +110,13 @@ def _apply_payload(row: MediaProviderConfig, payload: dict) -> None:
 @router.get("", response_model=List[MediaProviderOut])
 def list_media_providers(db: Session = Depends(get_db)):
     """列出所有 media provider 配置（api_key 脱敏）。"""
-    rows = db.query(MediaProviderConfig).order_by(MediaProviderConfig.provider_id).all()
+    rows = db.query(ProviderConfig).order_by(ProviderConfig.provider_id).all()
     return [_to_out(r) for r in rows]
 
 
 @router.get("/{provider_id}", response_model=MediaProviderOut)
 def get_media_provider(provider_id: str, db: Session = Depends(get_db)):
-    row = db.query(MediaProviderConfig).filter_by(provider_id=provider_id).first()
+    row = db.query(ProviderConfig).filter_by(provider_id=provider_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="provider not found")
     return _to_out(row)
@@ -124,17 +129,18 @@ def upsert_media_provider(
     db: Session = Depends(get_db),
 ):
     """创建或完整替换一个 provider 配置。"""
-    row = db.query(MediaProviderConfig).filter_by(provider_id=provider_id).first()
+    row = db.query(ProviderConfig).filter_by(provider_id=provider_id).first()
     if row:
         _apply_payload(row, body.model_dump())
     else:
-        row = MediaProviderConfig(
+        row = ProviderConfig(
             provider_id=provider_id,
             name=body.name or provider_id,
             base_url=body.base_url.rstrip("/"),
             api_key=body.api_key or "",
             protocol=body.protocol or "openai",
             enabled=body.enabled,
+            default_model=body.default_model,
             image_models_json=json.dumps(body.image_models or []),
             chat_models_json=json.dumps(body.chat_models or []),
             video_models_json=json.dumps(body.video_models or []),
@@ -153,7 +159,7 @@ def patch_media_provider(
     db: Session = Depends(get_db),
 ):
     """部分更新。api_key=None 或空字符串 = 不变；非空 = 覆盖。"""
-    row = db.query(MediaProviderConfig).filter_by(provider_id=provider_id).first()
+    row = db.query(ProviderConfig).filter_by(provider_id=provider_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="provider not found")
     payload = body.model_dump(exclude_unset=True)
@@ -165,7 +171,7 @@ def patch_media_provider(
 
 @router.delete("/{provider_id}")
 def delete_media_provider(provider_id: str, db: Session = Depends(get_db)):
-    row = db.query(MediaProviderConfig).filter_by(provider_id=provider_id).first()
+    row = db.query(ProviderConfig).filter_by(provider_id=provider_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="provider not found")
     db.delete(row)

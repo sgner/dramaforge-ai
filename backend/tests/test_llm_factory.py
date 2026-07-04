@@ -180,7 +180,7 @@ def test_load_llm_configs_db_rows_override_env(monkeypatch):
     monkeypatch.setenv("LLM_MODEL", "gpt-4o-mini")
 
     from app.database import Base, engine, SessionLocal
-    from app.models import LLMProviderConfig as Orm
+    from app.models import ProviderConfig as Orm
     Base.metadata.create_all(bind=engine)
     with SessionLocal() as s:
         s.query(Orm).delete()
@@ -189,6 +189,7 @@ def test_load_llm_configs_db_rows_override_env(monkeypatch):
             base_url="https://api.deepseek.com",
             api_key="sk-db-2",
             default_model="deepseek-chat",
+            chat_models_json='["deepseek-chat"]',
         ))
         s.commit()
         configs = load_llm_configs(s)
