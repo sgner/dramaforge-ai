@@ -44,8 +44,9 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
   // 空值表示回退到 scriptGeneration 步骤绑定 / stub
   const [selectedProviderId, setSelectedProviderId] = useState<string>('');
   const [selectedModelId, setSelectedModelId] = useState<string>('');
-  // LLM provider 列表 — 从后端 DB 拉取（与 ApiSettings 同步的"真"数据源）
-  // 而不是从 localStorage 的 apiConfig.providers（可能与 DB 不一致）
+  // LLM provider 列表 — 从后端统一 provider_configs 表拉取（Task 5 后 /api/llm-providers
+  // 返回真实数据，与 ApiSettings 共享同一张表，不再有 media/llm 两套数据源断层）
+  // 兜底用 localStorage 的 apiConfig.providers（基本不触发，保留作防御）
   const [dbProviders, setDbProviders] = useState<Array<{
     provider_id: string;
     name: string;
@@ -89,7 +90,7 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
     };
   }, [projectId]);
 
-  // 优先用 DB 里的 LLM provider 列表（数据源唯一：DB 才是真）
+  // 优先用 DB 里的 LLM provider 列表（数据源唯一：统一 provider_configs 表）
   // 兜底用 localStorage 的 apiConfig.providers
   const apiConfigFallback = useCanvasStore((s) => s.apiConfig);
   const availableProviders = (dbProviders.length > 0
