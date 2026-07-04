@@ -328,15 +328,28 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
   const [rhEditorActiveNodeId, setRhEditorActiveNodeId] = useState<string>('');
   const [rhEditorExpanded, setRhEditorExpanded] = useState<Record<string, boolean>>({});
 
-  // ---- 兼容 shims（Plan 5：旧 LLM/Media 双 section 已合并，下方画布媒体表单的 legacy 调用点） ----
-  // 旧 form-based 媒体编辑流的 syncProviderToDb / deleteProviderFromDb / setMediaSyncStatus 仍被引用，
-  // 改为 no-op（带 warning）。统一写入走下方的 renderProviderList + renderEditor。
-  const setMediaSyncStatus = (_s: any) => { /* no-op: 由 renderProviderList 走 cfg → 保存时统一处理 */ };
-  const syncProviderToDb = async (_p: Provider) => {
-    console.warn('[Plan5] syncProviderToDb 已废弃，请用 renderEditor 的统一表单');
+  // ---- 同步到后端 DB（Plan 5：renderEditor 保存时统一写入 /api/providers） ----
+  // 旧 form-based 媒体编辑流依赖这两个 shim；现在改为真实调用 api.upsertProvider。
+  // - apiKey 非空 → 覆盖
+  // - apiKey 空 + hasKey=true → 保留 DB 原 key
+  // - 删除：api.deleteProvider
+  const setMediaSyncStatus = (_s: any) => { /* 已废弃：status 改为在 handleSave 内直接管理 */ };
+  const syncProviderToDb = async (p: Provider) => {
+    await api.upsertProvider(p.id, {
+      name: p.name || p.id,
+      base_url: p.baseUrl,
+      api_key: p.apiKey || '',  // 空字符串 → 后端视为保留原值
+      default_model: p.defaultModel || '',
+      protocol: p.protocol,
+      enabled: p.enabled,
+      chat_models: p.chatModels || [],
+      image_models: p.imageModels || [],
+      video_models: p.videoModels || [],
+      extra_config: {},
+    });
   };
-  const deleteProviderFromDb = async (_providerId: string) => {
-    console.warn('[Plan5] deleteProviderFromDb 已废弃，请用 renderProviderList 的删除按钮');
+  const deleteProviderFromDb = async (providerId: string) => {
+    await api.deleteProvider(providerId);
   };
 
   // Sync config from parent
