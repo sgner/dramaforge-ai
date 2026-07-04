@@ -226,19 +226,20 @@ export const api = {
     return request<AgentTaskOut[]>(`/agent/tasks${q}`);
   },
 
-  // ---------- LLM Providers (Agent 用, key 写到后端 DB) ----------
-  listLLMProviders: () =>
-    request<LLMProviderOut[]>('/llm-providers'),
+  // ---------- Providers (统一 endpoint, Plan 5) ----------
+  // 合并 /api/llm-providers + /api/media-providers 为 /api/providers
+  listProviders: () =>
+    request<ProviderOut[]>('/providers'),
 
-  getLLMProvider: (providerId: string) =>
-    request<LLMProviderOut>(`/llm-providers/${encodeURIComponent(providerId)}`),
+  getProvider: (providerId: string) =>
+    request<ProviderOut>(`/providers/${encodeURIComponent(providerId)}`),
 
-  upsertLLMProvider: (
+  upsertProvider: (
     providerId: string,
     payload: {
       name?: string;
       base_url: string;
-      api_key: string;
+      api_key?: string;        // 传空字符串或不传 → 保留 DB 原 key
       default_model?: string;
       protocol?: string;
       enabled?: boolean;
@@ -248,45 +249,12 @@ export const api = {
       extra_config?: Record<string, any>;
     }
   ) =>
-    request<LLMProviderOut>(`/llm-providers/${encodeURIComponent(providerId)}`, {
+    request<ProviderOut>(`/providers/${encodeURIComponent(providerId)}`, {
       method: 'PUT',
       body: JSON.stringify(payload),
     }),
 
-  deleteLLMProvider: (providerId: string) =>
-    request<{ deleted: string }>(`/llm-providers/${encodeURIComponent(providerId)}`, {
-      method: 'DELETE',
-    }),
-
-  // ---------- Media Providers (画布图片/视频供应商, key 写到后端 DB) ----------
-  // 取代旧的 localStorage-based 供应商配置。所有 api_key 走 DB，前端不持有明文。
-  listMediaProviders: () =>
-    request<MediaProviderOut[]>('/media-providers'),
-
-  getMediaProvider: (providerId: string) =>
-    request<MediaProviderOut>(`/media-providers/${encodeURIComponent(providerId)}`),
-
-  upsertMediaProvider: (
-    providerId: string,
-    payload: {
-      name?: string;
-      base_url: string;
-      api_key?: string;        // 空字符串 = 不变（仅修改其他字段）
-      default_model?: string;
-      protocol?: string;
-      enabled?: boolean;
-      image_models?: string[];
-      chat_models?: string[];
-      video_models?: string[];
-      extra_config?: Record<string, any>;
-    }
-  ) =>
-    request<MediaProviderOut>(`/media-providers/${encodeURIComponent(providerId)}`, {
-      method: 'PUT',
-      body: JSON.stringify(payload),
-    }),
-
-  patchMediaProvider: (
+  patchProvider: (
     providerId: string,
     payload: Partial<{
       name: string;
@@ -295,19 +263,19 @@ export const api = {
       default_model: string;
       protocol: string;
       enabled: boolean;
-      image_models: string[];
       chat_models: string[];
+      image_models: string[];
       video_models: string[];
       extra_config: Record<string, any>;
     }>
   ) =>
-    request<MediaProviderOut>(`/media-providers/${encodeURIComponent(providerId)}`, {
+    request<ProviderOut>(`/providers/${encodeURIComponent(providerId)}`, {
       method: 'PATCH',
       body: JSON.stringify(payload),
     }),
 
-  deleteMediaProvider: (providerId: string) =>
-    request<{ deleted: string }>(`/media-providers/${encodeURIComponent(providerId)}`, {
+  deleteProvider: (providerId: string) =>
+    request<{ deleted: string }>(`/providers/${encodeURIComponent(providerId)}`, {
       method: 'DELETE',
     }),
 
