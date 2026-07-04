@@ -93,3 +93,94 @@ def test_get_provider_404(client):
     """不存在的 provider 返 404"""
     r = client.get("/api/providers/nonexistent")
     assert r.status_code == 404
+
+
+def test_upsert_provider_create(client):
+    """新建 provider"""
+    r = client.put("/api/providers/newone", json={
+        "name": "New One",
+        "base_url": "https://new.example.com",
+        "api_key": "sk-newkey",
+        "default_model": "new-model",
+        "protocol": "openai",
+        "enabled": True,
+        "chat_models": ["new-model"],
+        "image_models": [],
+        "video_models": [],
+    })
+    assert r.status_code == 200
+    data = r.json()
+    assert data["provider_id"] == "newone"
+    assert data["name"] == "New One"
+    assert data["default_model"] == "new-model"
+
+
+def test_upsert_provider_update_full(client, db_session):
+    """更新现有 provider 全部字段"""
+    db_session.add(ProviderConfig(
+        provider_id="custom-api", base_url="https://old.example.com",
+        api_key="sk-old", default_model="old-model", chat_models_json='["old"]',
+    ))
+    db_session.commit()
+    r = client.put("/api/providers/custom-api", json={
+        "name": "Updated",
+        "base_url": "https://new.example.com",
+        "api_key": "sk-new",
+        "default_model": "new-model",
+        "protocol": "openai",
+        "enabled": True,
+        "chat_models": ["new"],
+        "image_models": [],
+        "video_models": [],
+    })
+    assert r.status_code == 200
+    data = r.json()
+    assert data["name"] == "Updated"
+    assert data["default_model"] == "new-model"
+    assert data["chat_models"] == ["new"]
+
+
+def test_upsert_provider_preserves_api_key_when_omitted(client, db_session):
+    """api_key 不传 → 保留 DB 原 key（关键测试：用户编辑时没改 key）"""
+    db_session.add(ProviderConfig(
+        provider_id="custom-api", base_url="https://api.example.com",
+        api_key="sk-originalkey",
+    ))
+    db_session.commit()
+    r = client.put("/api/providers/custom-api", json={
+        "name": "Renamed",
+        "base_url": "https://api.example.com",
+        # api_key 不传
+        "default_model": "",
+        "protocol": "openai",
+        "enabled": True,
+    })
+    assert r.status_code == 200
+    # 重新查 DB 确认 key 未变
+    row = db_session.query(ProviderConfig).filter_by(provider_id="custom-api").first()
+    assert row.api_key == "sk-originalkey"
+
+
+def test_upsert_provider_preserves_api_key_when_empty_string(client, db_session):
+    """api_key 传空字符串 → 保留 DB 原 key（前端表单行为）"""
+    db_session.add(ProviderConfig(
+        provider_id="custom-api", base_url="https://api.example.com",
+        api_key="sk-originalkey",
+    ))
+    db_session.commit()
+    r = client.put("/api/providers/custom-api", json={
+        "name": "Renamed",
+        "base_url": "https://api.example.com",
+        "api_key": "",  # 空字符串视为不传
+        "default_model": "",
+        "enabled": True,
+    })
+    assert r.status_code == 200
+    row = db_session.query(ProviderConfig).filter_by(provider_id="custom-api").first()
+    assert row.api_key == "sk-originalkey"
+
+
+def test_upsert_provider_422_on_missing_base_url(client):
+    """缺 base_url 返 422"""
+    r = client.put("/api/providers/foo", json={"name": "no url"})
+    assert r.status_code == 422
