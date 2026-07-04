@@ -339,6 +339,12 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
     api_key: string;
     default_model: string;
     chat_models_text: string;
+    // 编辑时保留现有媒体字段，避免 PUT 全量替换 clobber 媒体配置
+    // 新建场景为 undefined → fallback 到空值
+    _preserve_image_models?: string[];
+    _preserve_video_models?: string[];
+    _preserve_protocol?: string;
+    _preserve_extra_config?: Record<string, any>;
   } | null>(null);
   const [llmEditSaving, setLlmEditSaving] = useState(false);
   const [llmEditError, setLlmEditError] = useState<string | null>(null);
@@ -468,6 +474,11 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
       api_key: '',  // 不回填明文 key（后端已脱敏）
       default_model: p.default_model,
       chat_models_text: (p.chat_models || []).join('\n'),
+      // 保留现有媒体字段，避免 PUT 全量替换时 clobber
+      _preserve_image_models: p.image_models || [],
+      _preserve_video_models: p.video_models || [],
+      _preserve_protocol: p.protocol || 'openai',
+      _preserve_extra_config: p.extra_config || {},
     });
     setLlmEditError(null);
   };
@@ -491,15 +502,15 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
         base_url: f.base_url.trim(),
         api_key: f.api_key,
         default_model: f.default_model.trim(),
-        protocol: 'openai',                // LLM 表单默认 openai 协议
+        protocol: f._preserve_protocol || 'openai',        // 编辑时保留现有协议，新建默认 openai
         enabled: true,                     // LLM 表单默认启用
         chat_models: f.chat_models_text
           .split('\n')
           .map((s) => s.trim())
           .filter(Boolean),
-        image_models: [],                  // LLM 表单不填媒体模型
-        video_models: [],
-        extra_config: {},
+        image_models: f._preserve_image_models || [],      // 编辑时保留现有媒体模型，新建默认空
+        video_models: f._preserve_video_models || [],
+        extra_config: f._preserve_extra_config || {},
       });
       setLlmEditForm(null);
       setStatus(t('canvasApiSettingsAgentLLMSaved'));

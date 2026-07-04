@@ -345,10 +345,18 @@ export const api = {
 export interface LLMProviderOut {
   id: number;
   provider_id: string;
+  name: string;
   base_url: string;
   api_key: string;       // 后端已脱敏（仅前 4 + 后 4）
   default_model: string;
+  protocol: string;      // openai / gemini / runninghub / volcengine
+  enabled: boolean;
   chat_models: string[];
+  image_models: string[];
+  video_models: string[];
+  extra_config: Record<string, any>;
+  has_key: boolean;
+  key_preview: string;
   created_at?: string;
   updated_at?: string;
 }
