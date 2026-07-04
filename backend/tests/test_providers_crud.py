@@ -205,6 +205,29 @@ def test_delete_provider_404(client):
     assert r.status_code == 404
 
 
+def test_upsert_provider_flips_enabled(client, db_session):
+    """PUT enabled=false 真的把 DB 改成 False（停用某 provider 场景）"""
+    db_session.add(ProviderConfig(
+        provider_id="custom-api", base_url="https://api.example.com",
+        api_key="sk-x", enabled=True,
+    ))
+    db_session.commit()
+    r = client.put("/api/providers/custom-api", json={
+        "name": "custom-api",
+        "base_url": "https://api.example.com",
+        "api_key": "sk-x",
+        "default_model": "",
+        "protocol": "openai",
+        "enabled": False,  # 关键：用户要停用
+        "chat_models": [],
+        "image_models": [],
+        "video_models": [],
+    })
+    assert r.status_code == 200
+    row = db_session.query(ProviderConfig).filter_by(provider_id="custom-api").first()
+    assert row.enabled is False  # DB 真的翻转为 False
+
+
 @pytest.mark.parametrize("method,path", [
     ("GET", "/api/llm-providers"),
     ("GET", "/api/llm-providers/custom-api"),

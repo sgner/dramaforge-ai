@@ -261,26 +261,6 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
-  patchProvider: (
-    providerId: string,
-    payload: Partial<{
-      name: string;
-      base_url: string;
-      api_key: string;
-      default_model: string;
-      protocol: string;
-      enabled: boolean;
-      chat_models: string[];
-      image_models: string[];
-      video_models: string[];
-      extra_config: Record<string, any>;
-    }>
-  ) =>
-    request<ProviderOut>(`/providers/${encodeURIComponent(providerId)}`, {
-      method: 'PATCH',
-      body: JSON.stringify(payload),
-    }),
-
   deleteProvider: (providerId: string) =>
     request<{ deleted: string }>(`/providers/${encodeURIComponent(providerId)}`, {
       method: 'DELETE',
@@ -316,26 +296,7 @@ export const api = {
     }),
 };
 
-// ============ LLM Provider ============
-export interface LLMProviderOut {
-  id: number;
-  provider_id: string;
-  name: string;
-  base_url: string;
-  api_key: string;       // 后端已脱敏（仅前 4 + 后 4）
-  default_model: string;
-  protocol: string;      // openai / gemini / runninghub / volcengine
-  enabled: boolean;
-  chat_models: string[];
-  image_models: string[];
-  video_models: string[];
-  extra_config: Record<string, any>;
-  has_key: boolean;
-  key_preview: string;
-  created_at?: string;
-  updated_at?: string;
-}
-
+// ============ Provider (统一 endpoint, Plan 5) ============
 /**
  * 后端 Pydantic ProviderOut schema（Plan 5 统一 endpoint）。
  * 字段顺序与 backend/app/routers/providers.py:ProviderOut 一致。
@@ -351,25 +312,6 @@ export interface ProviderOut {
   enabled: boolean;
   chat_models: string[];
   image_models: string[];
-  video_models: string[];
-  extra_config: Record<string, any>;
-  has_key: boolean;
-  key_preview: string;
-  created_at?: string;
-  updated_at?: string;
-}
-
-// ============ Media Provider ============
-export interface MediaProviderOut {
-  id: number;
-  provider_id: string;
-  name: string;
-  base_url: string;
-  api_key: string;       // 后端已脱敏
-  protocol: string;      // openai / gemini / runninghub / volcengine
-  enabled: boolean;
-  image_models: string[];
-  chat_models: string[];
   video_models: string[];
   extra_config: Record<string, any>;
   has_key: boolean;
