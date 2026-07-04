@@ -1,4 +1,8 @@
-"""测试 media_providers CRUD + media/generate/* 路由。"""
+"""测试 media.py 的 generate/* 路由 + _load_provider 直接调用（in-memory sqlite）。
+
+CRUD 测试已迁移到 tests/test_providers_crud.py（Plan 5 统一 endpoint）。
+本文件保留：generate 路由的 provider seed（用 /api/providers）+ _load_provider 单元测试。
+"""
 import json
 import os
 import sys
@@ -13,6 +17,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from app import app  # noqa: E402  (FastAPI instance lives in app/__init__.py)
 from app.database import Base, engine  # noqa: E402
 
+
+# ============ Generate (seed via unified /api/providers) ============
 
 @pytest.fixture
 def client():
@@ -32,97 +38,21 @@ def client():
         s.commit()
 
 
-# ============ CRUD ============
-
-def test_list_empty(client):
-    r = client.get("/api/media-providers")
-    assert r.status_code == 200
-    assert r.json() == []
-
-
-def test_upsert_create(client):
+def _seed_provider(client, provider_id: str, **kwargs):
+    """用统一 /api/providers endpoint 写入 provider（Plan 5）。"""
     body = {
-        "name": "OpenAI 官方",
-        "base_url": "https://api.openai.com/v1",
-        "api_key": "sk-test-12345678",
-        "protocol": "openai",
-        "enabled": True,
-        "image_models": ["dall-e-3"],
-        "chat_models": ["gpt-4o"],
-        "video_models": ["sora-1.0"],
+        "name": kwargs.get("name", provider_id),
+        "base_url": kwargs.get("base_url", "https://api.openai.com/v1"),
+        "api_key": kwargs.get("api_key", "sk-x"),
+        "protocol": kwargs.get("protocol", "openai"),
+        "enabled": kwargs.get("enabled", True),
+        "image_models": kwargs.get("image_models", []),
+        "chat_models": kwargs.get("chat_models", []),
+        "video_models": kwargs.get("video_models", []),
     }
-    r = client.put("/api/media-providers/openai", json=body)
-    assert r.status_code == 200
-    data = r.json()
-    assert data["provider_id"] == "openai"
-    assert data["name"] == "OpenAI 官方"
-    # api_key 脱敏
-    assert "sk-t***5678" == data["api_key"]
-    assert data["has_key"] is True
-    assert data["enabled"] is True
-    assert "dall-e-3" in data["image_models"]
+    r = client.put(f"/api/providers/{provider_id}", json=body)
+    assert r.status_code == 200, f"seed failed: {r.text}"
 
-
-def test_upsert_update_no_key(client):
-    """已有 provider，无 apiKey → 不覆盖原 key。"""
-    body = {
-        "base_url": "https://api.openai.com/v1",
-        "api_key": "sk-original-key-9999",
-    }
-    r = client.put("/api/media-providers/openai", json=body)
-    assert r.status_code == 200
-    assert r.json()["api_key"] == "sk-o***9999"
-
-    # 更新时不传 api_key
-    body2 = {
-        "base_url": "https://api.openai.com",
-        "image_models": ["dall-e-2"],
-    }
-    r2 = client.put("/api/media-providers/openai", json=body2)
-    assert r2.status_code == 200
-    assert r2.json()["api_key"] == "sk-o***9999"  # key 没变
-    assert "dall-e-2" in r2.json()["image_models"]
-    # base_url 末尾 / 被去掉
-    assert r2.json()["base_url"] == "https://api.openai.com"
-
-
-def test_patch_partial(client):
-    """PATCH 部分字段。"""
-    client.put(
-        "/api/media-providers/openai",
-        json={"base_url": "https://api.openai.com/v1", "api_key": "sk-1234567890"},
-    )
-    r = client.patch(
-        "/api/media-providers/openai",
-        json={"enabled": False, "image_models": ["dall-e-2"]},
-    )
-    assert r.status_code == 200
-    data = r.json()
-    assert data["enabled"] is False
-    assert data["image_models"] == ["dall-e-2"]
-    # api_key 不变
-    assert "sk-1***7890" == data["api_key"]
-
-
-def test_delete(client):
-    client.put(
-        "/api/media-providers/openai",
-        json={"base_url": "https://api.openai.com/v1", "api_key": "sk-test"},
-    )
-    r = client.delete("/api/media-providers/openai")
-    assert r.status_code == 200
-    assert r.json() == {"deleted": "openai"}
-    # 再次 GET 404
-    r2 = client.get("/api/media-providers/openai")
-    assert r2.status_code == 404
-
-
-def test_get_not_found(client):
-    r = client.get("/api/media-providers/unknown")
-    assert r.status_code == 404
-
-
-# ============ Generate ============
 
 def test_generate_image_unknown_provider(client):
     """未知 provider_id → 404。"""
@@ -135,10 +65,7 @@ def test_generate_image_unknown_provider(client):
 
 def test_generate_image_disabled(client):
     """disabled provider → 400。"""
-    client.put(
-        "/api/media-providers/dis",
-        json={"base_url": "https://api.openai.com/v1", "api_key": "sk-x", "enabled": False},
-    )
+    _seed_provider(client, "dis", base_url="https://api.openai.com/v1", api_key="sk-x", enabled=False)
     r = client.post(
         "/api/media/generate/image",
         json={"provider_id": "dis", "model": "dall-e-3", "prompt": "x"},
@@ -148,10 +75,10 @@ def test_generate_image_disabled(client):
 
 def test_generate_image_calls_upstream(client):
     """mock 掉 httpx，确认后端会拿 DB 里的 api_key 调上游。"""
-    # 准备 provider
-    client.put(
-        "/api/media-providers/openai",
-        json={"base_url": "https://api.openai.com/v1", "api_key": "sk-from-db-12345"},
+    # 准备 provider（用统一 endpoint）
+    _seed_provider(
+        client, "openai",
+        base_url="https://api.openai.com/v1", api_key="sk-from-db-12345",
     )
 
     # mock 掉 _openai_image 里的 httpx.AsyncClient.post
@@ -189,10 +116,7 @@ def test_generate_image_calls_upstream(client):
 
 def test_generate_image_base_url_v1_normalization(client):
     """base_url 带 /v1 也能正确调。"""
-    client.put(
-        "/api/media-providers/openai",
-        json={"base_url": "https://api.openai.com/v1", "api_key": "sk-x"},
-    )
+    _seed_provider(client, "openai", base_url="https://api.openai.com/v1", api_key="sk-x")
 
     class MockResp:
         status_code = 200
@@ -218,10 +142,7 @@ def test_generate_image_base_url_v1_normalization(client):
 
 def test_generate_video_fallback_on_404(client):
     """video 上游 404 时返回 dev fallback URL（不抛错）。"""
-    client.put(
-        "/api/media-providers/openai",
-        json={"base_url": "https://api.openai.com/v1", "api_key": "sk-x"},
-    )
+    _seed_provider(client, "openai", base_url="https://api.openai.com/v1", api_key="sk-x")
 
     class MockResp404:
         status_code = 404

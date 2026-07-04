@@ -111,3 +111,14 @@ def upsert_provider(
     db.commit()
     db.refresh(row)
     return row.to_dict(mask_key=True)
+
+
+@router.delete("/{provider_id}")
+def delete_provider(provider_id: str, db: Session = Depends(get_db)):
+    """删除一个 provider。"""
+    row = db.query(ProviderConfig).filter_by(provider_id=provider_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="provider not found")
+    db.delete(row)
+    db.commit()
+    return {"deleted": provider_id}

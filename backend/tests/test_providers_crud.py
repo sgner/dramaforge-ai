@@ -184,3 +184,40 @@ def test_upsert_provider_422_on_missing_base_url(client):
     """缺 base_url 返 422"""
     r = client.put("/api/providers/foo", json={"name": "no url"})
     assert r.status_code == 422
+
+
+def test_delete_provider_success(client, db_session):
+    """DELETE /api/providers/{id} → 200 + 真的从 DB 删了"""
+    db_session.add(ProviderConfig(
+        provider_id="todelete", base_url="https://x.com", api_key="k",
+    ))
+    db_session.commit()
+    r = client.delete("/api/providers/todelete")
+    assert r.status_code == 200
+    assert r.json() == {"deleted": "todelete"}
+    # 确认 DB 删了
+    assert db_session.query(ProviderConfig).filter_by(provider_id="todelete").first() is None
+
+
+def test_delete_provider_404(client):
+    """DELETE 不存在的 provider → 404"""
+    r = client.delete("/api/providers/nonexistent")
+    assert r.status_code == 404
+
+
+@pytest.mark.parametrize("method,path", [
+    ("GET", "/api/llm-providers"),
+    ("GET", "/api/llm-providers/custom-api"),
+    ("PUT", "/api/llm-providers/custom-api"),
+    ("DELETE", "/api/llm-providers/custom-api"),
+    ("GET", "/api/media-providers"),
+    ("GET", "/api/media-providers/custom-api"),
+    ("PUT", "/api/media-providers/custom-api"),
+    ("PATCH", "/api/media-providers/custom-api"),
+    ("DELETE", "/api/media-providers/custom-api"),
+])
+def test_old_endpoints_return_410(client, method, path):
+    """旧 endpoint 返 410 Gone（Plan 5 spec §3.1）"""
+    r = client.request(method, path, json={})
+    assert r.status_code == 410, f"{method} {path} got {r.status_code}, expected 410"
+    assert "moved to /api/providers" in r.json()["detail"]
