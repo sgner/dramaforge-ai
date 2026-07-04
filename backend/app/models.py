@@ -290,6 +290,72 @@ class MediaProviderConfig(Base):
         }
 
 
+class ProviderConfig(Base):
+    """统一 provider 配置（合并 LLMProviderConfig + MediaProviderConfig）。
+
+    agent runtime 和 canvas 媒体生成都读这张表，用户配一次即可在两处使用。
+    api_key 明文存储（dev 工具暂不加密；生产应改加密）。
+    GET 列表脱敏（前 4 + *** + 后 4）。
+    """
+    __tablename__ = "provider_configs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    provider_id = Column(String(64), nullable=False, unique=True)
+    name = Column(String(128), nullable=False, default="")
+    base_url = Column(String(512), nullable=False)
+    api_key = Column(Text, nullable=False, default="")
+    protocol = Column(String(32), nullable=False, default="openai")
+    enabled = Column(Boolean, default=True)
+    # agent LLM 默认模型（LLMProviderConfig 原有，MediaProviderConfig 没有）
+    default_model = Column(String(128), nullable=False, default="")
+    # 模型列表 JSON（按类别）
+    image_models_json = Column(Text, default="[]")
+    chat_models_json = Column(Text, default="[]")
+    video_models_json = Column(Text, default="[]")
+    extra_config_json = Column(Text, default="{}")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self, mask_key: bool = True) -> dict:
+        key = self.api_key or ""
+        masked = (key[:4] + "***" + key[-4:]) if (len(key) > 8 and mask_key) else key
+        return {
+            "id": self.id,
+            "provider_id": self.provider_id,
+            "name": self.name,
+            "base_url": self.base_url,
+            "api_key": masked,
+            "protocol": self.protocol,
+            "enabled": bool(self.enabled),
+            "default_model": self.default_model or "",
+            "image_models": _parse_json_list(self.image_models_json),
+            "chat_models": _parse_json_list(self.chat_models_json),
+            "video_models": _parse_json_list(self.video_models_json),
+            "extra_config": _parse_json_obj(self.extra_config_json),
+            "has_key": bool(self.api_key),
+            "key_preview": masked if masked and masked != key else "",
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+    def to_internal_dict(self) -> dict:
+        """含明文 api_key，供后端调供应商用。"""
+        return {
+            "id": self.id,
+            "provider_id": self.provider_id,
+            "name": self.name,
+            "base_url": self.base_url,
+            "api_key": self.api_key,
+            "protocol": self.protocol,
+            "enabled": bool(self.enabled),
+            "default_model": self.default_model or "",
+            "image_models": _parse_json_list(self.image_models_json),
+            "chat_models": _parse_json_list(self.chat_models_json),
+            "video_models": _parse_json_list(self.video_models_json),
+            "extra_config": _parse_json_obj(self.extra_config_json),
+        }
+
+
 def _parse_json_list(raw: str | None) -> list:
     if not raw:
         return []
