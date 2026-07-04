@@ -236,10 +236,16 @@ export const api = {
   upsertLLMProvider: (
     providerId: string,
     payload: {
+      name?: string;
       base_url: string;
       api_key: string;
-      default_model: string;
+      default_model?: string;
+      protocol?: string;
+      enabled?: boolean;
       chat_models?: string[];
+      image_models?: string[];
+      video_models?: string[];
+      extra_config?: Record<string, any>;
     }
   ) =>
     request<LLMProviderOut>(`/llm-providers/${encodeURIComponent(providerId)}`, {
@@ -266,6 +272,7 @@ export const api = {
       name?: string;
       base_url: string;
       api_key?: string;        // 空字符串 = 不变（仅修改其他字段）
+      default_model?: string;
       protocol?: string;
       enabled?: boolean;
       image_models?: string[];
@@ -285,6 +292,7 @@ export const api = {
       name: string;
       base_url: string;
       api_key: string;
+      default_model: string;
       protocol: string;
       enabled: boolean;
       image_models: string[];

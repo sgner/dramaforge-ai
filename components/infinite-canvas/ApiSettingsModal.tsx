@@ -412,6 +412,7 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
     const payload: Parameters<typeof api.upsertMediaProvider>[1] = {
       name: p.name,
       base_url: p.baseUrl,
+      default_model: '',                 // Provider 类型无 defaultModel 字段，传空（media 表单无此输入框）
       protocol: p.protocol,
       enabled: p.enabled !== false,
       image_models: p.imageModels,
@@ -486,13 +487,19 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
     setLlmEditError(null);
     try {
       await api.upsertLLMProvider(f.provider_id.trim(), {
+        name: f.provider_id.trim(),        // LLM 表单没有 name 输入框，用 provider_id 作 name
         base_url: f.base_url.trim(),
         api_key: f.api_key,
         default_model: f.default_model.trim(),
+        protocol: 'openai',                // LLM 表单默认 openai 协议
+        enabled: true,                     // LLM 表单默认启用
         chat_models: f.chat_models_text
           .split('\n')
           .map((s) => s.trim())
           .filter(Boolean),
+        image_models: [],                  // LLM 表单不填媒体模型
+        video_models: [],
+        extra_config: {},
       });
       setLlmEditForm(null);
       setStatus(t('canvasApiSettingsAgentLLMSaved'));
