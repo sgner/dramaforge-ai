@@ -189,10 +189,11 @@ async def test_runtime_max_steps_protection():
     assert is_done is False
     is_done = await runtime.step()
     assert is_done is False
-    # 第 4 次：_step_count=4 > max_steps=3，强制结束
+    # 第 4 次：_step_count=4 > max_steps=3，强制结束（状态为 FAILED 而非 DONE，
+    # 因为超限是一种失败，_run_runtime_loop 据此不发 TASK_DONE 覆盖 TASK_FAILED）
     is_done = await runtime.step()
     assert is_done is True
-    assert runtime.state == AgentState.DONE
+    assert runtime.state == AgentState.FAILED
 
 
 class TestRuntimeToolErrorRecovery:

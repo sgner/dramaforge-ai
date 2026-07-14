@@ -283,6 +283,13 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
         modelId,
       });
       setTask(t.id, 'running', projectId);
+      // 后端在 TASK_STARTED 事件里也会再发一次 llm_mode，但 SSE 推送有几十 ms 延迟，
+      // 提前把 store.llmMode 写成 'real'（只要选了 provider/model 就是真实 LLM），
+      // 避免 UI 闪一下"等待后端启动 runtime..."。
+      if (providerId) {
+        useAgentStore.getState().setStatus('running');
+        useAgentStore.setState({ llmMode: 'real', llmFallbackReason: null });
+      }
       setGoal('');
       // 创建后立刻打开 ThoughtStream，让用户立即看到 agent 进度
       setThoughtOpen(true);
@@ -334,211 +341,245 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
         <TaskList
           projectId={projectId}
           refreshTrigger={refreshTrigger}
-          onSelect={(id) => {
+          onSelect={async (id) => {
+            // 1. 切换 task：reset store 到 INITIAL + 写入新 taskId
+            //    （setTask 内部已 reset，避免上一个 task 的 thoughts/actions 残留）
             setTask(id, 'running', projectId);
             setThoughtOpen(true);
+            // 2. 异步 hydrate：从后端拉 task 的持久化状态（plan/artifacts/status/
+            //    成本/pending_response），立即让 UI 显示"非空"内容。
+            //    SSE 也会同时连接并重放历史 events（thought/action/observation），
+            //    两者互补：hydrate 来自 DB（永久），SSE replay 来自内存（短期）。
+            try {
+              const snapshot = await api.getAgentTask(id);
+              useAgentStore.getState().hydrate({
+                user_goal: snapshot.user_goal,
+                status: snapshot.status,
+                plan: snapshot.plan,
+                artifacts: (snapshot.artifacts as any) || {},
+                pending_response: snapshot.pending_response,
+                total_cost_usd: snapshot.total_cost_usd,
+                total_tokens: snapshot.total_tokens,
+                llm_provider_id: snapshot.llm_provider_id,
+                llm_model_id: snapshot.llm_model_id,
+              });
+              // 顶栏 goal 输入框：让用户能看到这个 task 当时的目标
+              if (typeof snapshot.user_goal === 'string' && snapshot.user_goal) {
+                setGoal(snapshot.user_goal);
+              }
+            } catch (e) {
+              // 静默失败：SSE 仍会重放 events，hydrate 缺失不影响最基本显示
+              // eslint-disable-next-line no-console
+              console.warn('[agent-mode] failed to hydrate task snapshot', e);
+            }
           }}
           selectedId={taskId}
         />
       </aside>
-      <main style={{ position: 'relative', overflow: 'hidden', background: 'var(--canvas-bg)' }}>
+      {/*
+        main 用 flex column 把 [topbar / llm-banner / progress / canvas] 垂直堆叠。
+        之前 topbar 是 position: absolute（继承自 .canvas-topbar），跟 position: relative
+        的 LLM banner 在同一个流里互怼，导致组件叠成一坨。
+        现在：topbar/banner 都是 flex 子项（position: relative），自然垂直排开；
+        canvas 用 flex:1 吃掉剩余空间，不再 absolute inset:0 压住上面那俩。
+      */}
+      <main
+        style={{
+          position: 'relative',
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+          background: 'var(--canvas-bg)',
+          minWidth: 0,
+        }}
+      >
+        {/* ===== 输入栏 — 2 行布局：第 1 行 LLM 选择，第 2 行 目标输入 + 视图按钮 ===== */}
         <div
           data-testid="agent-mode-input-bar"
-          className="canvas-topbar"
-          style={{ padding: '10px 14px', zIndex: 40, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}
+          className="agent-topbar"
+          style={{
+            padding: '8px 14px 10px',
+            zIndex: 40,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6,
+            position: 'relative',
+            flex: '0 0 auto',
+          }}
         >
-          {/* LLM provider/model 选择 — 黑白灰样式 */}
-          <div className="canvas-panel" style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '2px 6px' }}>
-            <span style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 600, marginRight: 4 }}>LLM</span>
-            <select
-              data-testid="agent-mode-llm-provider"
-              value={selectedProviderId}
-              onChange={(e) => {
-                setSelectedProviderId(e.target.value);
-                setSelectedModelId(''); // 切换 provider 后清空 model 选择
-              }}
-              title={availableProviders.length === 0
-                ? '⚠️ DB 里没有 LLM provider 配置 → agent 会用 DevScriptedLLM（假任务）'
-                : '选择 LLM 提供商（空 = 使用 scriptGeneration 步骤绑定）'}
-              style={{
-                height: 26,
-                fontSize: 11,
-                background: 'var(--bg)',
-                color: availableProviders.length === 0 ? 'var(--muted)' : 'var(--text)',
-                border: `1px solid ${availableProviders.length === 0 ? 'var(--line-strong)' : 'var(--line)'}`,
-                borderRadius: 4,
-                padding: '0 4px',
-                outline: 'none',
-              }}
-            >
-              <option value="">{dbProvidersLoading ? '加载中…' : '默认（步骤绑定）'}</option>
-              {availableProviders.map((p) => (
-                <option key={p.id} value={p.id}>{p.name || p.id}</option>
-              ))}
-            </select>
-            {selectedProviderId && (() => {
-              const p = availableProviders.find((x) => x.id === selectedProviderId);
-              const models = p?.chatModels || [];
-              if (!models.length) return null;
-              return (
-                <select
-                  data-testid="agent-mode-llm-model"
-                  value={selectedModelId}
-                  onChange={(e) => setSelectedModelId(e.target.value)}
-                  title="选择 LLM 模型"
-                  style={{
-                    height: 26,
-                    fontSize: 11,
-                    background: 'var(--bg)',
-                    color: 'var(--text)',
-                    border: '1px solid var(--line)',
-                    borderRadius: 4,
-                    padding: '0 4px',
-                    outline: 'none',
-                    maxWidth: 160,
-                  }}
-                >
-                  <option value="">默认模型</option>
-                  {models.map((m) => (
-                    <option key={m} value={m}>{m}</option>
-                  ))}
-                </select>
-              );
-            })()}
+          {/* Row 1: LLM provider / model */}
+          <div
+            data-testid="agent-mode-llm-row"
+            style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}
+          >
+            <div className="canvas-panel" style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '2px 6px' }}>
+              <span style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 600, marginRight: 4 }}>LLM</span>
+              <select
+                data-testid="agent-mode-llm-provider"
+                value={selectedProviderId}
+                onChange={(e) => {
+                  setSelectedProviderId(e.target.value);
+                  setSelectedModelId('');
+                }}
+                title={availableProviders.length === 0
+                  ? '⚠️ DB 里没有 LLM provider 配置 → agent 会用 DevScriptedLLM（假任务）'
+                  : '选择 LLM 提供商（空 = 使用 scriptGeneration 步骤绑定）'}
+                style={{
+                  height: 24,
+                  fontSize: 11,
+                  background: 'var(--bg)',
+                  color: availableProviders.length === 0 ? 'var(--muted)' : 'var(--text)',
+                  border: `1px solid ${availableProviders.length === 0 ? 'var(--line-strong)' : 'var(--line)'}`,
+                  borderRadius: 4,
+                  padding: '0 4px',
+                  outline: 'none',
+                }}
+              >
+                <option value="">{dbProvidersLoading ? '加载中…' : '默认（步骤绑定）'}</option>
+                {availableProviders.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name || p.id}</option>
+                ))}
+              </select>
+              {selectedProviderId && (() => {
+                const p = availableProviders.find((x) => x.id === selectedProviderId);
+                const models = p?.chatModels || [];
+                if (!models.length) return null;
+                return (
+                  <select
+                    data-testid="agent-mode-llm-model"
+                    value={selectedModelId}
+                    onChange={(e) => setSelectedModelId(e.target.value)}
+                    title="选择 LLM 模型"
+                    style={{
+                      height: 24,
+                      fontSize: 11,
+                      background: 'var(--bg)',
+                      color: 'var(--text)',
+                      border: '1px solid var(--line)',
+                      borderRadius: 4,
+                      padding: '0 4px',
+                      outline: 'none',
+                      maxWidth: 160,
+                    }}
+                  >
+                    <option value="">默认模型</option>
+                    {models.map((m) => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                  </select>
+                );
+              })()}
+            </div>
           </div>
-          <div className="canvas-panel" style={{ flex: 1, borderRadius: 999, padding: '4px 6px 4px 14px', display: 'flex', alignItems: 'center', gap: 8 }}>
-            <input
-              data-testid="agent-mode-input"
-              value={goal}
-              onChange={(e) => setGoal(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  onSubmit();
-                }
-              }}
-              placeholder="描述目标，例如：做一个 30 秒的雨夜短片"
-              style={{ flex: 1, border: 0, outline: 'none', background: 'transparent', color: 'var(--text)', fontSize: 13 }}
-            />
-            <button
-              data-testid="agent-mode-submit"
-              onClick={onSubmit}
-              disabled={submitting || !goal.trim()}
-              className="tool-btn"
-              style={{
-                height: 28,
-                padding: '0 12px',
-                background: submitting || !goal.trim() ? 'var(--soft)' : 'var(--text)',
-                color: submitting || !goal.trim() ? 'var(--muted)' : 'var(--panel)',
-                borderColor: 'var(--text)',
-                fontWeight: 700,
-              }}
-            >
-              {submitting ? '创建中…' : '创建任务'}
-            </button>
-          </div>
-          <div className="canvas-panel" style={{ padding: 4, display: 'flex', gap: 4 }}>
-            <button
-              data-testid="agent-mode-fit-view"
-              type="button"
-              onClick={() => {
-                const container = canvasContainerRef.current;
-                if (!container) return;
-                const r = container.getBoundingClientRect();
-                useCanvasStore.getState().fitAgentView(r.width, r.height);
-              }}
-              className="tool-btn"
-              title="缩放到完整时间线（自动 fit）"
-            >
-              ⊡
-            </button>
-            <button
-              data-testid="agent-mode-relayout"
-              type="button"
-              onClick={onRelayout}
-              className="tool-btn"
-              title="自动整理节点布局并缩放到完整时间线"
-            >
-              <RotateCw size={14} />
-            </button>
-            <button
-              data-testid="agent-mode-thought-toggle"
-              type="button"
-              onClick={() => setThoughtOpen((v) => !v)}
-              className={`tool-btn ${thoughtOpen ? 'active' : ''}`}
-              title="ThoughtStream"
-            >
-              💭
-            </button>
-            <button
-              data-testid="agent-mode-tool-drawer-toggle"
-              type="button"
-              onClick={() => setToolDrawerOpen((v) => !v)}
-              className={`tool-btn ${toolDrawerOpen ? 'active' : ''}`}
-              title="ToolPalette"
-            >
-              🔧
-            </button>
-            <button
-              data-testid="exit-agent-mode"
-              type="button"
-              onClick={() => {
-                // 通知 App 层退出：保留 taskId 在 store 里，后台继续订阅
-                window.dispatchEvent(new CustomEvent('agent-mode-exit'));
-              }}
-              className="tool-btn"
-              title="退出 Agent Mode（任务在后台继续）"
-            >
-              ← 退出
-            </button>
+
+          {/* Row 2: 目标输入 + 视图按钮 + 进度状态 */}
+          <div
+            data-testid="agent-mode-goal-row"
+            style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+          >
+            <div className="canvas-panel" style={{ flex: 1, borderRadius: 999, padding: '4px 6px 4px 14px', display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+              <input
+                data-testid="agent-mode-input"
+                value={goal}
+                onChange={(e) => setGoal(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    onSubmit();
+                  }
+                }}
+                placeholder="描述目标，例如：做一个 30 秒的雨夜短片"
+                style={{ flex: 1, border: 0, outline: 'none', background: 'transparent', color: 'var(--text)', fontSize: 13, minWidth: 0 }}
+              />
+              <button
+                data-testid="agent-mode-submit"
+                onClick={onSubmit}
+                disabled={submitting || !goal.trim()}
+                className="tool-btn"
+                style={{
+                  height: 26,
+                  padding: '0 12px',
+                  background: submitting || !goal.trim() ? 'var(--soft)' : 'var(--text)',
+                  color: submitting || !goal.trim() ? 'var(--muted)' : 'var(--panel)',
+                  borderColor: 'var(--text)',
+                  fontWeight: 700,
+                }}
+              >
+                {submitting ? '创建中…' : '创建任务'}
+              </button>
+            </div>
+            <div className="canvas-panel" style={{ padding: 3, display: 'flex', gap: 3 }}>
+              <button
+                data-testid="agent-mode-fit-view"
+                type="button"
+                onClick={() => {
+                  const container = canvasContainerRef.current;
+                  if (!container) return;
+                  const r = container.getBoundingClientRect();
+                  useCanvasStore.getState().fitAgentView(r.width, r.height);
+                }}
+                className="tool-btn"
+                title="缩放到完整时间线（自动 fit）"
+                style={{ padding: 6 }}
+              >
+                ⊡
+              </button>
+              <button
+                data-testid="agent-mode-relayout"
+                type="button"
+                onClick={onRelayout}
+                className="tool-btn"
+                title="自动整理节点布局并缩放到完整时间线"
+                style={{ padding: 6 }}
+              >
+                <RotateCw size={13} />
+              </button>
+              <button
+                data-testid="agent-mode-thought-toggle"
+                type="button"
+                onClick={() => setThoughtOpen((v) => !v)}
+                className={`tool-btn ${thoughtOpen ? 'active' : ''}`}
+                title="ThoughtStream"
+                style={{ padding: 6 }}
+              >
+                💭
+              </button>
+              <button
+                data-testid="agent-mode-tool-drawer-toggle"
+                type="button"
+                onClick={() => setToolDrawerOpen((v) => !v)}
+                className={`tool-btn ${toolDrawerOpen ? 'active' : ''}`}
+                title="ToolPalette"
+                style={{ padding: 6 }}
+              >
+                🔧
+              </button>
+              <button
+                data-testid="exit-agent-mode"
+                type="button"
+                onClick={() => {
+                  window.dispatchEvent(new CustomEvent('agent-mode-exit'));
+                }}
+                className="tool-btn"
+                title="退出 Agent Mode（任务在后台继续）"
+                style={{ padding: 6 }}
+              >
+                ←
+              </button>
+            </div>
           </div>
         </div>
-        {/* 进度提示条 — 让用户在不打开 ThoughtStream 的情况下也能看到 agent 在做什么 */}
-        {taskId && progressHint && (
-          <div
-            data-testid="agent-mode-progress"
-            className={`agent-mode-progress ${status}`}
-            onClick={() => setThoughtOpen(true)}
-          >
-            <span className={`agent-mode-progress-dot ${status}`} />
-            <span className="agent-mode-progress-text">{progressHint}</span>
-            <span className="agent-mode-progress-hint">点击查看详情</span>
-          </div>
-        )}
-        {/* LLM 模式横幅：明示当前 agent 是真实 LLM 还是 Dev 假任务 */}
-        {taskId && (
-          <div
-            data-testid="agent-llm-mode-banner"
-            className={`agent-llm-mode-banner ${llmMode || 'pending'}`}
-            title={llmFallbackReason || (llmMode === 'real' ? '已连接真实 LLM' : llmMode === 'stub' ? 'DevScriptedLLM 假任务' : '等待 task_started 事件上报 LLM 模式...')}
-          >
-            {llmMode === 'real' ? (
-              <>
-                <span className="agent-llm-mode-dot" />
-                <span>已连接真实 LLM — 正在调用供应商</span>
-              </>
-            ) : llmMode === 'stub' ? (
-              <>
-                <span className="agent-llm-mode-dot" />
-                <span>Dev 假任务（DevScriptedLLM）：去 API 设置里配置 LLM key 才会用真模型</span>
-              </>
-            ) : (
-              <>
-                <span className="agent-llm-mode-dot" />
-                <span>等待后端启动 runtime...</span>
-              </>
-            )}
-          </div>
-        )}
-        {error && (
-          <div
-            data-testid="agent-mode-error"
-            className="agent-mode-error"
-          >
-            {error}
-          </div>
-        )}
-        <div ref={canvasContainerRef} data-testid="agent-mode-canvas-container" style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}>
+
+        {/*
+          canvas 容器 — flex:1 吃掉 topbar 之后剩余的所有空间。
+          进度条 / LLM 横幅 / 错误提示都改成画布内的浮动覆盖层，
+          不再占用顶部垂直空间。
+        */}
+        <div
+          ref={canvasContainerRef}
+          data-testid="agent-mode-canvas-container"
+          style={{ position: 'relative', flex: '1 1 auto', minHeight: 0, overflow: 'hidden' }}
+        >
           <style>{`
             [data-testid="agent-mode-canvas-container"] .canvas-root {
               width: 100% !important;
@@ -547,6 +588,60 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
           `}</style>
           <InfiniteCanvas projectId={projectId} hideToolbar />
           <ErrorRecoveryCard />
+          <AskUserResponse />
+
+          {/* 浮动错误提示 — 画布顶部居中 */}
+          {error && (
+            <div
+              data-testid="agent-mode-error"
+              className="agent-mode-error"
+              style={{
+                position: 'absolute',
+                top: 10,
+                left: '50%',
+                transform: 'translateX(-50%)',
+                zIndex: 30,
+                maxWidth: 'min(480px, calc(100% - 28px))',
+              }}
+            >
+              {error}
+            </div>
+          )}
+
+          {/* 浮动状态栏 — 画布左下角，合并 LLM 模式 + 进度 */}
+          {taskId && (progressHint || llmMode) && (
+            <div
+              data-testid="agent-mode-progress"
+              className={`agent-mode-progress ${status}`}
+              onClick={() => setThoughtOpen(true)}
+              style={{
+                position: 'absolute',
+                bottom: 12,
+                left: 12,
+                zIndex: 30,
+                margin: 0,
+                alignSelf: 'auto',
+              }}
+            >
+              <span className={`agent-mode-progress-dot ${status}`} />
+              {progressHint && (
+                <span className="agent-mode-progress-text">{progressHint}</span>
+              )}
+              {/* LLM 模式指示器 — 内联在进度条里，不再单独占一行 */}
+              {llmMode === 'real' && (
+                <span className="agent-llm-badge real" title={llmFallbackReason || '已连接真实 LLM'}>LLM</span>
+              )}
+              {llmMode === 'stub' && (
+                <span className="agent-llm-badge stub" title="DevScriptedLLM 假任务">STUB</span>
+              )}
+              {llmMode === null && (
+                <span className="agent-llm-badge pending" title="等待 task_started 事件上报 LLM 模式">…</span>
+              )}
+              {progressHint && (
+                <span className="agent-mode-progress-hint">点击查看详情</span>
+              )}
+            </div>
+          )}
         </div>
 
         {/* 浮层 ThoughtStream */}
@@ -580,6 +675,166 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
           </div>
         </aside>
       </main>
+    </div>
+  );
+};
+
+/**
+ * AskUserResponse — agent 调用 ask_user 时显示输入卡。
+ * 让用户输入回复 → 调 respondAgent + resumeAgent，runtime 从 PAUSED 恢复。
+ *
+ * 设计要点：
+ * 1. 防御性去重 question 文本里的编号列表（"1. ... 2. ..."）——
+ *    即使 LLM 把选项也写进 question 字段，前端也不会和按钮重复展示。
+ * 2. option 按钮 onClick 必须 stopPropagation + preventDefault，
+ *    否则会被 InfiniteCanvas 的 board mousedown 当成"开始拖动画布"吃掉，
+ *    看起来要按 2 次才能发送。
+ * 3. 弹窗定位：右下方、不挡住画布中心的 agent_node 流程。
+ */
+const AskUserResponse: React.FC = () => {
+  const taskId = useAgentStore((s) => s.taskId);
+  const pendingQuestion = useAgentStore((s) => s.pendingQuestion);
+  const [answer, setAnswer] = React.useState('');
+  const [submitting, setSubmitting] = React.useState(false);
+
+  // 切换 pendingQuestion 时清空旧答案
+  React.useEffect(() => {
+    setAnswer('');
+  }, [pendingQuestion?.question]);
+
+  if (!taskId || !pendingQuestion) return null;
+
+  const onSubmit = async (text: string, e?: React.MouseEvent | React.KeyboardEvent) => {
+    e?.stopPropagation();
+    e?.preventDefault();
+    if (!text.trim() || submitting) return;
+    setSubmitting(true);
+    try {
+      // 1. 把用户响应写进 task.pending_response
+      await api.respondAgent(taskId, { response: text.trim() });
+      // 2. 触发后端从 PAUSED 恢复
+      await api.resumeAgent(taskId);
+    } catch (e) {
+      console.error('[ask-user] failed to respond', e);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // 选项归一化
+  const rawOptions = (pendingQuestion as any).options as any[] | undefined;
+  const options: string[] = Array.isArray(rawOptions)
+    ? rawOptions
+        .map((opt: any) => typeof opt === 'string' ? opt : (opt?.label ?? opt?.value ?? ''))
+        .filter((s) => s && String(s).trim())
+    : [];
+
+  // 防御性去重：如果 question 里也有 "1) ... 2) ..." 这种和 options 重叠的列表，
+  // 截到第一个 "1)" / "1." / "1、" 之前，避免和按钮重复展示
+  // （覆盖半角 1 / 全角 1、半角 ) / 全角 ） 、半角 . / 全角 。等常见编号形式）
+  const questionText = (() => {
+    const q = String(pendingQuestion.question || '');
+    if (options.length === 0) return q;
+    const m = q.match(/[\n\r;；]\s*[1-9１-９][.。)）:：、]\s*/);
+    return m && typeof m.index === 'number' ? q.slice(0, m.index).trim() : q;
+  })();
+
+  return (
+    <div
+      data-testid="ask-user-response"
+      onMouseDown={(e) => e.stopPropagation()}  // 防止画布把卡内点击当成拖动
+      style={{
+        position: 'absolute',
+        // 底部居中：避免被右下角的 ThoughtStream 抽屉遮挡
+        left: '50%',
+        bottom: 14,
+        transform: 'translateX(-50%)',
+        width: 'min(480px, calc(100vw - 28px))',
+        maxHeight: 'calc(100vh - 120px)',
+        background: 'var(--panel)',
+        border: '1px solid var(--line)',
+        borderRadius: 10,
+        boxShadow: '0 12px 32px rgba(0,0,0,0.18)',
+        padding: 12,
+        zIndex: 25,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+        overflow: 'auto',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ fontSize: 14 }}>❓</span>
+        <strong style={{ fontSize: 13 }}>agent 正在等你的回复</strong>
+      </div>
+      <div
+        data-testid="ask-user-question"
+        style={{ color: 'var(--text)', fontSize: 13, lineHeight: 1.5, whiteSpace: 'pre-wrap' }}
+      >
+        {questionText}
+      </div>
+      {/* 选项按钮（如果有） */}
+      {options.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {options.map((opt, i) => (
+            <button
+              key={i}
+              type="button"
+              data-testid={`ask-user-option-${i}`}
+              onMouseDown={(e) => e.stopPropagation()}  // 防止画布 onMouseDown 抢占点击
+              onClick={(e) => onSubmit(opt, e)}
+              disabled={submitting}
+              className="tool-btn"
+              style={{ padding: '5px 10px', fontSize: 12 }}
+            >
+              {opt}
+            </button>
+          ))}
+        </div>
+      )}
+      {/* 自由输入 */}
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+        <input
+          data-testid="ask-user-input"
+          value={answer}
+          onChange={(e) => setAnswer(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) onSubmit(answer, e);
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+          placeholder="或直接输入…"
+          disabled={submitting}
+          style={{
+            flex: 1,
+            padding: '6px 10px',
+            border: '1px solid var(--line)',
+            borderRadius: 6,
+            background: 'var(--bg)',
+            color: 'var(--text)',
+            fontSize: 12,
+            outline: 'none',
+            minWidth: 0,
+          }}
+        />
+        <button
+          data-testid="ask-user-submit"
+          type="button"
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => onSubmit(answer, e)}
+          disabled={submitting || !answer.trim()}
+          className="tool-btn"
+          style={{
+            padding: '6px 12px',
+            fontSize: 12,
+            background: submitting || !answer.trim() ? 'var(--soft)' : 'var(--text)',
+            color: submitting || !answer.trim() ? 'var(--muted)' : 'var(--panel)',
+            borderColor: 'var(--text)',
+            fontWeight: 700,
+          }}
+        >
+          {submitting ? '发送中…' : '发送'}
+        </button>
+      </div>
     </div>
   );
 };

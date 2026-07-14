@@ -9,21 +9,24 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, cleanup, act } from '@testing-library/react';
 import App from '@/App';
 
-const MOCK_PROJECT = {
-  id: 'proj-1',
-  name: 'Test Project',
-  style: 'cinematic-realistic',
-  language: 'zh',
-  mode: 'auto',
-  sourceType: 'idea',
-  createdAt: Date.now(),
-  status: 'idle',
-  stepStatus: 'idle',
-  progress: 0,
-  rawNovelText: '',
-  characters: [],
-  bigShots: [],
-};
+// 用 vi.hoisted 让 mock 工厂能访问 MOCK_PROJECT（vi.mock 会被 hoist 到文件顶部）
+const { MOCK_PROJECT } = vi.hoisted(() => ({
+  MOCK_PROJECT: {
+    id: 'proj-1',
+    name: 'Test Project',
+    style: 'cinematic-realistic',
+    language: 'zh',
+    mode: 'auto',
+    sourceType: 'idea',
+    createdAt: Date.now(),
+    status: 'idle',
+    stepStatus: 'idle',
+    progress: 0,
+    rawNovelText: '',
+    characters: [],
+    bigShots: [],
+  },
+}));
 
 // mock 掉 storageService / 持久化，预置一个项目让 InfiniteCanvas 可以打开
 vi.mock('@/services/storageService', () => ({
@@ -44,12 +47,27 @@ vi.mock('@/services/apiClient', () => ({
     respondAgent: vi.fn().mockResolvedValue({ ok: true }),
     pauseAgent: vi.fn().mockResolvedValue({ ok: true }),
     resumeAgent: vi.fn().mockResolvedValue({ ok: true }),
+    // 新版 DramaTask 走 api（替代 storageService.loadTasks）
+    listDramaTasks: vi.fn().mockResolvedValue([
+      {
+        id: 'proj-1',
+        name: 'Test Project',
+        deleted: false,
+        data: { ...MOCK_PROJECT },
+        created_at: '2025-01-01T00:00:00',
+        updated_at: '2025-01-01T00:00:00',
+      },
+    ]),
+    upsertDramaTask: vi.fn().mockResolvedValue({ ok: true }),
+    deleteDramaTask: vi.fn().mockResolvedValue({ ok: true }),
+    getUserPreference: vi.fn().mockResolvedValue({ value: null }),
+    setUserPreference: vi.fn().mockResolvedValue({ value: null }),
   },
 }));
 
 async function openCanvas() {
-  // 找到项目卡片并点击
-  const projectCard = screen.getByText('Test Project');
+  // 等待后端异步加载完成 + 卡片渲染
+  const projectCard = await screen.findByText('Test Project');
   await act(async () => {
     projectCard.click();
   });

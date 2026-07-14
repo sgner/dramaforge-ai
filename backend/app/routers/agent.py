@@ -18,8 +18,8 @@ from .. import schemas
 from ..database import SessionLocal, get_db
 from ..models import AgentTask, AgentStep
 from ..agent.events import event_bus, AgentEvent, EventType
-from ..agent.memory import AgentMemory
-from ..agent.runtime import AgentRuntime
+from ..agent.memory import AgentMemory, StepRecord
+from ..agent.runtime import AgentRuntime, AgentState
 from ..agent.tools import build_default_registry
 from ..agent.media_service import StubMediaService
 from ..agent.llm_factory import load_llm_configs, select_llm_for_task, NoLLMConfigured
@@ -252,14 +252,14 @@ async def user_respond(task_id: str, body: schemas.AgentUserResponse, db: Sessio
 # ========================
 
 async def _spawn_runtime(task_dict: dict) -> None:
-    """异步启动 AgentRuntime 主循环。
+    """异步启动 AgentRuntime 主循环（首次创建任务时调用）。
 
+    流程：
     1. 构造 memory / registry / llm / runtime
     2. 注入 StubMediaService 到所有媒体工具
     3. 注册到 _RUNNING_RUNTIMES
-    4. 跑 step() 循环
-    5. 持久化每步到数据库
-    6. 完成后清理注册表
+    4. 跑主循环（见 _run_runtime_loop）
+    5. 完成后清理注册表
     """
     task_id = task_dict["id"]
     try:
@@ -326,34 +326,29 @@ async def _spawn_runtime(task_dict: dict) -> None:
             _RUNNING_RUNTIMES[task_id] = runtime
 
         # 7. 发 TASK_STARTED 事件
+        #    llm_mode / llm_fallback_reason 必须带 — 前端 store 的 task_started
+        #    handler 据此切 llmMode 状态、隐藏"等待 runtime..."占位横幅。
+        #    当前 LLMFactory.select_llm_for_task 要么返回真实 LLM，要么抛错，
+        #    所以跑到这里一定是 'real'（'stub' 路径已不存在）。
+        llm_mode = "real"
+        llm_fallback_reason: str | None = None
+        if task_dict.get("llm_provider_id"):
+            llm_mode = "real"
         await event_bus.publish(AgentEvent(
             task_id=task_id, type=EventType.TASK_STARTED,
             payload={
                 "task_id": task_id,
                 "user_goal": task_dict.get("user_goal"),
+                "llm_mode": llm_mode,
+                "llm_fallback_reason": llm_fallback_reason,
             },
         ))
 
         # 8. 更新 task 状态到 running
         _update_task_status(task_id, "running")
 
-        # 9. 主循环
-        for _ in range(int(runtime.max_steps) + 5):
-            done = await runtime.step()
-            # 把每步的 memory 写入数据库
-            _persist_steps(task_id, memory, runtime)
-            # 同步 plan / artifacts / cost
-            _sync_task_artifacts(task_id, memory)
-            if done:
-                break
-
-        # 10. 任务完成
-        final_status = "done" if runtime.state.value == "done" else "failed"
-        _update_task_status(task_id, final_status)
-        await event_bus.publish(AgentEvent(
-            task_id=task_id, type=EventType.TASK_DONE if final_status == "done" else EventType.TASK_FAILED,
-            payload={"summary": f"agent finished with {len(memory.short_term)} steps"},
-        ))
+        # 9. 跑主循环
+        await _run_runtime_loop(task_id, runtime, memory)
 
     except Exception as e:  # noqa: BLE001
         logger.exception("runtime for task %s failed", task_id)
@@ -369,6 +364,187 @@ async def _spawn_runtime(task_dict: dict) -> None:
         async with _RUNNING_LOCK:
             _RUNNING_RUNTIMES.pop(task_id, None)
             _RUNNING_TASKS.pop(task_id, None)
+
+
+async def _continue_runtime(task_id: str) -> None:
+    """从 PAUSED 恢复 runtime（用 DB 里的 step 重建 memory）。
+
+    流程：
+    1. 从 DB 重新构造 memory（plan / short_term / artifacts）
+    2. 重新选 LLM
+    3. 用 task.pending_response 调用 runtime.resume() 注入用户响应
+    4. 跑主循环直到完成 / 下次暂停
+    """
+    from ..database import SessionLocal
+    from ..models import AgentStep
+
+    try:
+        # 1. 读 task + steps 重建 memory
+        with SessionLocal() as db:
+            task_row = db.query(AgentTask).filter_by(id=task_id).first()
+            if not task_row:
+                logger.error("[continue_runtime] task %s not found", task_id)
+                return
+            task_dict = {
+                "id": task_row.id,
+                "user_goal": task_row.user_goal,
+                "llm_provider_id": task_row.llm_provider_id,
+                "llm_model_id": task_row.llm_model_id,
+                "max_steps": task_row.max_steps or 30,
+                "skip_confirm": task_row.skip_confirm,
+                "project_id": task_row.project_id,
+                "pending_response": task_row.pending_response or {},
+                "plan": list(task_row.plan or []),
+                "artifacts": dict(task_row.artifacts or {}),
+            }
+            steps = db.query(AgentStep).filter_by(task_id=task_id).order_by(AgentStep.step_number).all()
+            memory = AgentMemory(user_goal=task_dict["user_goal"], plan=task_dict["plan"])
+            memory.artifacts = task_dict["artifacts"]
+            for s in steps:
+                memory.short_term.append(StepRecord(
+                    step_number=s.step_number,
+                    thought=s.thought or "",
+                    action=s.action or {},
+                    observation=s.observation or {},
+                    status=s.status or "success",
+                    cost_usd=s.cost_usd or 0.0,
+                    tokens=s.tokens or 0,
+                ))
+
+        # 2. 重新选 LLM
+        with SessionLocal() as db:
+            configs = load_llm_configs(db)
+        try:
+            llm = select_llm_for_task(
+                task_provider_id=task_dict.get("llm_provider_id"),
+                configs=configs,
+                task_model_id=task_dict.get("llm_model_id"),
+            )
+        except NoLLMConfigured as e:
+            logger.error("[continue_runtime] task %s no LLM: %s", task_id, e)
+            await event_bus.publish(AgentEvent(
+                task_id=task_id, type=EventType.TASK_FAILED,
+                payload={"error": str(e), "reason_code": e.reason_code},
+            ))
+            _update_task_status(task_id, "failed")
+            return
+
+        # 3. 构造 registry + 注入 media service
+        registry = build_default_registry()
+        media = StubMediaService()
+        for tool in registry.list():
+            if tool.category in ("image", "video", "audio"):
+                try:
+                    tool._media_service = media
+                except Exception:
+                    pass
+
+        # 4. 构造 runtime，从 PAUSED 状态启动以匹配 pending_request
+        runtime = AgentRuntime(
+            task_id=task_id,
+            llm=llm,
+            memory=memory,
+            registry=registry,
+            project_id=task_dict.get("project_id"),
+            max_steps=task_dict["max_steps"],
+            skip_confirm=task_dict["skip_confirm"],
+        )
+        # 恢复 step_count 与 state：基于 memory 现有 step 数量
+        runtime._step_count = len(memory.short_term)
+        # 找出最近一个 ask_user 步（status=pending），重建 pending_request
+        last_pending = next(
+            (s for s in reversed(memory.short_term) if s.status == "pending"),
+            None,
+        )
+        if last_pending is not None and last_pending.action.get("tool") == "ask_user":
+            params = last_pending.action.get("params", {}) or {}
+            runtime.pending_request = {
+                "type": "ask_user",
+                "question": params.get("question", ""),
+                "options": params.get("options", []),
+            }
+            runtime.state = AgentState.PAUSED
+        elif task_dict.get("pending_response", {}).get("recovery_action"):
+            # Spec B: 工具失败恢复路径
+            runtime.pending_request = {
+                "type": "tool_error",
+                "recovery_action": task_dict["pending_response"].get("recovery_action"),
+                "new_model_id": task_dict["pending_response"].get("new_model_id"),
+            }
+            runtime.state = AgentState.PAUSED
+
+        # 5. 注册
+        async with _RUNNING_LOCK:
+            if task_id in _RUNNING_RUNTIMES:
+                logger.warning("runtime for task %s already running", task_id)
+                return
+            _RUNNING_RUNTIMES[task_id] = runtime
+
+        # 6. 注入用户响应
+        user_response = (task_dict.get("pending_response") or {}).get("response")
+        if runtime.state == AgentState.PAUSED and user_response is not None:
+            # resume() 会把 user_response 注入 memory 并跑一步；后续主循环会接管
+            await runtime.resume(user_response)
+            # 把刚 step 出来的 step 落库
+            _persist_steps(task_id, memory, runtime)
+            _sync_task_artifacts(task_id, memory)
+
+        # 7. 跑主循环
+        _update_task_status(task_id, "running")
+        await _run_runtime_loop(task_id, runtime, memory)
+
+    except Exception as e:  # noqa: BLE001
+        logger.exception("continue_runtime for task %s failed", task_id)
+        _update_task_status(task_id, "failed")
+        try:
+            await event_bus.publish(AgentEvent(
+                task_id=task_id, type=EventType.TASK_FAILED,
+                payload={"error": str(e)},
+            ))
+        except Exception:
+            pass
+    finally:
+        async with _RUNNING_LOCK:
+            _RUNNING_RUNTIMES.pop(task_id, None)
+            _RUNNING_TASKS.pop(task_id, None)
+
+
+async def _run_runtime_loop(task_id: str, runtime: AgentRuntime, memory: AgentMemory) -> None:
+    """共享的主循环：每轮检查 PAUSED 状态避免空转，跑完所有步或遇 PAUSED 退出。"""
+    from ..agent.runtime import AgentState
+
+    for _ in range(int(runtime.max_steps) + 5):
+        # 如果 runtime 进入 PAUSED（ask_user / plan 审核 / 工具失败恢复等），
+        # 不要继续空跑；让出循环等用户响应。
+        if runtime.state == AgentState.PAUSED:
+            logger.info("[runtime loop] task %s paused; waiting for user input", task_id)
+            _update_task_status(task_id, "paused")
+            return
+        done = await runtime.step()
+        # 把每步的 memory 写入数据库
+        _persist_steps(task_id, memory, runtime)
+        # 同步 plan / artifacts / cost
+        _sync_task_artifacts(task_id, memory)
+        if done:
+            break
+
+    # 任务完成
+    if runtime.state == AgentState.PAUSED:
+        # step() 把状态切到 PAUSED，跳出循环后单独走 paused 路径
+        _update_task_status(task_id, "paused")
+        return
+    if runtime.state == AgentState.FAILED:
+        # step() 内部已发 TASK_FAILED 事件（如超 max_steps），
+        # 这里只更新 DB 状态，不再重复发事件。
+        _update_task_status(task_id, "failed")
+        return
+    final_status = "done" if runtime.state.value == "done" else "failed"
+    _update_task_status(task_id, final_status)
+    await event_bus.publish(AgentEvent(
+        task_id=task_id,
+        type=EventType.TASK_DONE if final_status == "done" else EventType.TASK_FAILED,
+        payload={"summary": f"agent finished with {len(memory.short_term)} steps"},
+    ))
 
 
 def _update_task_status(task_id: str, status: str) -> None:
@@ -455,17 +631,23 @@ async def pause_task(task_id: str, db: Session = Depends(get_db)):
 
 @router.post("/tasks/{task_id}/resume")
 async def resume_task(task_id: str, db: Session = Depends(get_db)):
-    """恢复任务。"""
+    """恢复已暂停的任务。
+
+    必须先调用 /tasks/{id}/respond 把用户输入写入 task.pending_response，
+    本接口读出 pending_response → 重新构造 runtime → 从 PAUSED 继续执行。
+    """
     task = db.query(AgentTask).filter_by(id=task_id).first()
     if not task:
         raise HTTPException(404, f"Task {task_id} not found")
     if task.status != "paused":
         raise HTTPException(400, f"Cannot resume task in status {task.status}")
-    task.status = "running"
-    db.commit()
-    runtime = _RUNNING_RUNTIMES.get(task_id)
-    if runtime is not None:
-        from ..agent.runtime import AgentState
-        runtime.state = AgentState.RUNNING
+    if not task.pending_response:
+        raise HTTPException(
+            400, "task has no pending_response; call /respond first"
+        )
     await event_bus.publish(AgentEvent(task_id=task_id, type=EventType.TASK_RESUMED, payload={}))
-    return {"ok": True}
+    # 用独立 asyncio task 跑 continue（不能 await 在请求 handler 里，否则会阻塞响应）
+    async def _spawn() -> None:
+        await _continue_runtime(task_id)
+    asyncio.create_task(_spawn())
+    return {"ok": True, "task_id": task_id, "status": "resuming"}

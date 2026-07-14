@@ -81,6 +81,21 @@ export interface AgentState {
   // actions
   setTask: (taskId: string, status: AgentStatus, projectId?: string | null) => void;
   setStatus: (status: AgentStatus) => void;
+  /**
+   * 把后端持久化的 task 快照投影到 store（重开历史任务时用）。
+   * 不会清空当前 state；只覆盖被提供的字段。
+   */
+  hydrate: (snapshot: {
+    user_goal?: string | null;
+    status?: string;
+    plan?: any[];
+    artifacts?: Record<string, ArtifactItem[]>;
+    pending_response?: any;
+    total_cost_usd?: number;
+    total_tokens?: number;
+    llm_provider_id?: string | null;
+    llm_model_id?: string | null;
+  }) => void;
   applyEvent: (event: AgentEventLike) => void;
   clearPendingQuestion: () => void;
   clearErrorRecovery: () => void;
@@ -133,9 +148,72 @@ export const useAgentStore = create<AgentState>((set) => ({
   ...INITIAL,
 
   setTask: (taskId, status, projectId = null) =>
-    set({ taskId, status, projectId }),
+    // 切任务时必须先 reset 到 INITIAL，否则上一个任务的 events/thoughts/actions
+    // 还会留在 store 里，SSE 重放的新事件会附加到旧数据后面，导致
+    // "重开历史任务显示 0 想法 0 动作"（events 被清空后被新 task 的 replay 覆盖），
+    // 或者更糟：两个 task 的数据混在一起。
+    set({ ...INITIAL, taskId, status, projectId }),
 
   setStatus: (status) => set({ status }),
+
+  /**
+   * 把后端持久化的 task 快照投影到 store。
+   * 用于重开历史任务：把 DB 里的 plan/artifacts/status/成本 立即显示，
+   * 这样在 SSE 还没重放到 events 之前，UI 已经能看到"非空"的初始状态。
+   * 调用方应已在 setTask 中重置过 store。
+   */
+  hydrate: (snapshot: {
+    user_goal?: string | null;
+    status?: string;
+    plan?: any[];
+    artifacts?: Record<string, ArtifactItem[]>;
+    pending_response?: any;
+    total_cost_usd?: number;
+    total_tokens?: number;
+    llm_provider_id?: string | null;
+    llm_model_id?: string | null;
+  }) =>
+    set((state) => {
+      // 推断 llmMode：当前后端已无 stub 路径，task 一旦有 llm_provider_id 就是 real。
+      // 旧任务可能是 LLMFactory 重构前的"stub"残留，但前端不再使用 stub 文案，
+      // 统一回退到 'real' 横幅（"已连接真实 LLM — 正在调用供应商"）。
+      let mode: 'real' | 'stub' | null = state.llmMode;
+      if (snapshot.llm_provider_id || snapshot.llm_model_id) {
+        mode = 'real';
+      }
+      return {
+        status: (snapshot.status as AgentStatus) || state.status,
+        plan: Array.isArray(snapshot.plan) ? snapshot.plan : state.plan,
+        artifacts:
+          snapshot.artifacts && typeof snapshot.artifacts === 'object'
+            ? (snapshot.artifacts as Record<string, ArtifactItem[]>)
+            : state.artifacts,
+        totalCostUsd:
+          typeof snapshot.total_cost_usd === 'number'
+            ? snapshot.total_cost_usd
+            : state.totalCostUsd,
+        totalTokens:
+          typeof snapshot.total_tokens === 'number'
+            ? snapshot.total_tokens
+            : state.totalTokens,
+        llmMode: mode,
+        // pending_response 可能是 ask_user 的 question（response 还没填），
+        // 也可能是用户已 respond 完等待 runtime resume 的载荷。
+        // 只有前者才需要恢复成 pendingQuestion；后者由 SSE 的
+        // user_input_received / task_resumed 事件处理。
+        pendingQuestion:
+          snapshot.pending_response &&
+          typeof snapshot.pending_response === 'object' &&
+          !('response' in snapshot.pending_response) &&
+          typeof (snapshot.pending_response as any).question === 'string'
+            ? {
+                question: (snapshot.pending_response as any).question,
+                options: (snapshot.pending_response as any).options,
+                ...snapshot.pending_response,
+              }
+            : state.pendingQuestion,
+      };
+    }),
 
   applyEvent: (event) =>
     set((state) => {

@@ -99,7 +99,7 @@ class AgentRuntime:
 
         if self._step_count > self.max_steps:
             await self._emit(EventType.TASK_FAILED, {"error": f"超过最大步数 {self.max_steps}"})
-            self.state = AgentState.DONE
+            self.state = AgentState.FAILED
             return True
 
         # 1. think
@@ -232,10 +232,24 @@ class AgentRuntime:
 
     def _build_messages(self) -> list[dict]:
         """构造发给 LLM 的消息列表。"""
-        tool_summaries = [
-            {"name": t.name, "description": t.description}
-            for t in self.registry.list()
-        ]
+        # 把每个工具的 parameters 也带过去，让 LLM 知道准确的参数名
+        # （避免 LLM 自己瞎猜参数名 → 工具 validate 失败 → 进入死循环）
+        tool_summaries = []
+        for t in self.registry.list():
+            params = [
+                {
+                    "name": p.name,
+                    "type": p.type,
+                    "description": p.description,
+                    "required": bool(getattr(p, "required", True)),
+                }
+                for p in (t.parameters or [])
+            ]
+            tool_summaries.append({
+                "name": t.name,
+                "description": t.description,
+                "parameters": params,
+            })
         recent = [
             {
                 "step_number": s.step_number,

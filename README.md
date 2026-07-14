@@ -28,6 +28,22 @@
 
 ## 图片画廊
 
+### Agent 模式
+
+Agent 模式是 DramaForge AI 的核心创新，基于 ReAct（Reasoning + Acting）模式实现 AI 自主决策创作：
+
+- **AI 自主创作**：输入目标后，Agent 自主拆解任务、调用 18 个工具完成全流程
+- **实时可视化**：无限画布实时展示 Agent 的思考、动作和产出
+- **人机协作**：随时暂停、介入、调整方向，Agent 等待你的指令后继续
+
+<div align="center">
+
+| Agent 执行中 | Agent 执行结果 |
+|:---:|:---:|
+| ![Agent 执行中](docs/屏幕截图%202026-07-14%20105107.png) | ![Agent 执行结果](docs/屏幕截图%202026-07-14%20105546.png) |
+
+</div>
+
 ### 界面展示
 
 <div align="center">

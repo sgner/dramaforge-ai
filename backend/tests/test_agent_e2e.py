@@ -331,8 +331,9 @@ async def test_e2e_total_steps_match_max_steps(task_id, media_service):
             break
 
     assert last_done is True
-    # 任务因超过 max_steps 而结束
-    assert runtime.state.value == "done"
+    # 任务因超过 max_steps 而结束 — 状态为 failed（不是 done），
+    # 因为超限是失败，避免 _run_runtime_loop 再发 TASK_DONE 覆盖 TASK_FAILED
+    assert runtime.state.value == "failed"
 
 
 @pytest.mark.asyncio

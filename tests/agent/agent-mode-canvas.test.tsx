@@ -26,23 +26,32 @@ describe('<AgentMode /> canvas integration', () => {
     expect(screen.queryByTestId('agent-mode-canvas-placeholder')).toBeNull();
   });
 
-  it('projects agent store events into canvas nodes via addAgentNodes', () => {
+  it('projects agent artifacts as image nodes on the canvas (reuses existing image type)', () => {
     render(<AgentMode projectId="p1" />);
     useAgentStore.setState({
       taskId: 't-1',
       status: 'running',
       thoughts: [],
-      actions: [
-        { type: 'action', payload: { tool: 'parse_user_goal' }, timestamp: 1 } as any,
-        { type: 'action', payload: { tool: 'create_plan' }, timestamp: 2 } as any,
-      ],
+      actions: [],
       observations: [],
-      plan: [{ tool: 'a' }],
-      artifacts: {},
+      plan: [],
+      artifacts: {
+        character: [
+          { id: 'c1', kind: 'image', name: 'A', url: 'u1' },
+          { id: 'c2', kind: 'image', name: 'B', url: 'u2' },
+        ],
+        scene: [{ id: 's1', kind: 'image', name: 'Rain', url: 'u3' }],
+      },
       pendingQuestion: null,
     });
-    const actionNodes = useCanvasStore.getState().nodes.filter((n) => n._agentTaskType === 'action');
-    expect(actionNodes.length).toBeGreaterThanOrEqual(2);
+    // 3 个资产 → 3 个 image 节点（不是自定义 agent_node）
+    const imgNodes = useCanvasStore.getState().nodes.filter((n) => n.type === 'image');
+    expect(imgNodes.length).toBe(3);
+    // 没有自定义 timeline 节点
+    expect(useCanvasStore.getState().nodes.filter((n) => n.type === 'agent_node')).toHaveLength(0);
+    // 2 个分类 header
+    const headers = useCanvasStore.getState().nodes.filter((n) => n.type === 'prompt');
+    expect(headers.length).toBe(2);
   });
 
   it('renders ToolPalette as a toggleable drawer', () => {
@@ -62,18 +71,85 @@ describe('<AgentMode /> canvas integration', () => {
   it('clears agent nodes on projectId change', () => {
     const { rerender } = render(<AgentMode projectId="p1" />);
     useCanvasStore.getState().addAgentNodes({
-      userGoal: 'x',
+      userGoal: '',
       plan: [],
       actions: [],
       observations: [],
-      artifacts: {},
+      artifacts: { character: [{ id: 'c1', url: 'u' }] } as any,
       pendingQuestion: null,
     });
-    expect(useCanvasStore.getState().nodes.some((n) => n.type === 'agent_node')).toBe(true);
+    // addAgentNodes 现在创建 'image' 和 'prompt'（按 id 前缀 'agent-' 过滤）
+    expect(
+      useCanvasStore.getState().nodes.some((n) => n.id.startsWith('agent-')),
+    ).toBe(true);
     rerender(<AgentMode projectId="p2" />);
     return waitFor(() => {
-      expect(useCanvasStore.getState().nodes.some((n) => n.type === 'agent_node')).toBe(false);
+      expect(
+        useCanvasStore.getState().nodes.some((n) => n.id.startsWith('agent-')),
+      ).toBe(false);
     });
+  });
+
+  it('selecting a task hydrates the store from the persisted snapshot', async () => {
+    // 1. 先填一些 task-A 的事件到 store
+    useAgentStore.getState().setTask('t-A', 'running');
+    useAgentStore.getState().applyEvent({ type: 'thought', payload: { text: 'A 的想法' }, timestamp: 1 });
+    useAgentStore.getState().applyEvent({ type: 'action', payload: { tool: 'a_tool' }, timestamp: 2 });
+
+    // 2. mock 列表 + snapshot
+    vi.spyOn(api, 'listAgentTasks').mockResolvedValue([
+      { id: 't-B', user_goal: 'B 的目标', status: 'paused' } as any,
+    ]);
+    vi.spyOn(api, 'getAgentTask').mockResolvedValue({
+      id: 't-B',
+      user_goal: 'B 的目标',
+      status: 'paused',
+      plan: [{ tool: 'b1' }, { tool: 'b2' }],
+      artifacts: { character: [{ id: 'c1', kind: 'image', url: 'u' }] },
+      pending_response: { question: 'B 在问什么？', options: ['a', 'b'] },
+      total_cost_usd: 0.5,
+      total_tokens: 123,
+    } as any);
+
+    render(<AgentMode projectId="p1" />);
+
+    // 3. 等任务列表出现，点击 t-B
+    const row = await waitFor(() => screen.getByTestId('task-list-row-t-B'));
+    fireEvent.click(row);
+
+    // 4. 等 hydrate 跑完
+    await waitFor(() => {
+      const s = useAgentStore.getState();
+      expect(s.taskId).toBe('t-B');
+      // 旧 task A 的 events 必须被清掉
+      expect(s.thoughts).toEqual([]);
+      expect(s.actions).toEqual([]);
+      // snapshot 里的 plan/artifacts/pendingQuestion 应当被恢复
+      expect(s.plan).toEqual([{ tool: 'b1' }, { tool: 'b2' }]);
+      expect((s.artifacts as any).character).toHaveLength(1);
+      expect(s.pendingQuestion?.question).toBe('B 在问什么？');
+      expect(s.totalCostUsd).toBe(0.5);
+      expect(s.totalTokens).toBe(123);
+    });
+  });
+
+  it('selecting a task fetches snapshot and falls back gracefully if API fails', async () => {
+    vi.spyOn(api, 'listAgentTasks').mockResolvedValue([
+      { id: 't-C', user_goal: 'C', status: 'running' } as any,
+    ]);
+    vi.spyOn(api, 'getAgentTask').mockRejectedValue(new Error('network'));
+
+    render(<AgentMode projectId="p1" />);
+    const row = await waitFor(() => screen.getByTestId('task-list-row-t-C'));
+    fireEvent.click(row);
+
+    // 即使 hydrate 失败，setTask 仍应把 taskId 切到 t-C
+    await waitFor(() => {
+      expect(useAgentStore.getState().taskId).toBe('t-C');
+    });
+    // store 仍应是 INITIAL 状态（除了 taskId）
+    expect(useAgentStore.getState().plan).toEqual([]);
+    expect(useAgentStore.getState().artifacts).toEqual({});
   });
 
   it('renders ErrorRecoveryCard when pendingErrorRecovery is set', async () => {
@@ -95,7 +171,7 @@ describe('<AgentMode /> canvas integration', () => {
     });
   });
 
-  it('shows LLM mode banner with stub warning when task_started reports stub mode', async () => {
+  it('shows LLM mode badge with stub warning when task_started reports stub mode', async () => {
     render(<AgentMode projectId="p1" />);
     useAgentStore.setState({ taskId: 't-1', status: 'running' });
     useAgentStore.getState().applyEvent({
@@ -104,14 +180,15 @@ describe('<AgentMode /> canvas integration', () => {
       timestamp: 1,
     });
     await waitFor(() => {
-      const banner = screen.getByTestId('agent-llm-mode-banner');
-      expect(banner).toBeInTheDocument();
-      expect(banner.className).toContain('stub');
-      expect(banner.textContent || '').toMatch(/DevScriptedLLM/);
+      const progress = screen.getByTestId('agent-mode-progress');
+      expect(progress).toBeInTheDocument();
+      const badge = progress.querySelector('.agent-llm-badge.stub');
+      expect(badge).not.toBeNull();
+      expect((badge as HTMLElement).title).toMatch(/DevScriptedLLM/);
     });
   });
 
-  it('shows LLM mode banner in real mode when LLM is configured', async () => {
+  it('shows LLM mode badge in real mode when LLM is configured', async () => {
     render(<AgentMode projectId="p1" />);
     useAgentStore.setState({ taskId: 't-2', status: 'running' });
     useAgentStore.getState().applyEvent({
@@ -120,38 +197,41 @@ describe('<AgentMode /> canvas integration', () => {
       timestamp: 1,
     });
     await waitFor(() => {
-      const banner = screen.getByTestId('agent-llm-mode-banner');
-      expect(banner.className).toContain('real');
-      expect(banner.textContent || '').toMatch(/真实 LLM/);
+      const progress = screen.getByTestId('agent-mode-progress');
+      const badge = progress.querySelector('.agent-llm-badge.real');
+      expect(badge).not.toBeNull();
+      expect((badge as HTMLElement).title).toMatch(/真实 LLM/);
     });
   });
 
   it('relayout button clears drag overrides and re-snaps nodes to grid', () => {
     useCanvasStore.setState({ projectId: 'p1' });
     useCanvasStore.getState().addAgentNodes({
-      userGoal: '短片',
-      plan: [{ tool: 'a' }],
-      actions: [
-        { type: 'action', payload: { tool: 't1' }, timestamp: 1 } as any,
-        { type: 'action', payload: { tool: 't2' }, timestamp: 2 } as any,
-      ],
+      userGoal: '',
+      plan: [],
+      actions: [],
       observations: [],
-      artifacts: {},
+      artifacts: {
+        character: [{ id: 'c1', url: 'u' }] as any,
+        scene: [{ id: 's1', url: 'u' }] as any,
+      },
       pendingQuestion: null,
     });
-    // 模拟用户拖动 goal 节点产生 override
+    // 模拟用户拖动 character header 产生 override
+    const characterHeaderId = 'agent-cat-character-p1';
     useCanvasStore.setState({
-      nodeOverrides: { 'agent-goal-p1': { dx: 999, dy: 999 } },
+      nodeOverrides: { [characterHeaderId]: { dx: 999, dy: 999 } },
     });
-    // 验证 override 存在
-    expect(useCanvasStore.getState().nodeOverrides['agent-goal-p1']).toEqual({ dx: 999, dy: 999 });
+    expect(useCanvasStore.getState().nodeOverrides[characterHeaderId]).toEqual({ dx: 999, dy: 999 });
     // 触发重排
     useCanvasStore.getState().relayoutAgentNodes();
-    // override 应清空，goal 节点回到默认 colX=0
-    const goal = useCanvasStore.getState().nodes.find((n) => n._agentTaskType === 'goal');
-    expect(goal).toBeDefined();
-    expect(goal!.x).toBe(0);
-    expect(goal!.y).toBe(0);
-    expect(useCanvasStore.getState().nodeOverrides['agent-goal-p1']).toBeUndefined();
+    // override 应清空，character header 回到默认 (0, 0)
+    const characterHeader = useCanvasStore.getState().nodes.find(
+      (n) => n.id === characterHeaderId,
+    );
+    expect(characterHeader).toBeDefined();
+    expect(characterHeader!.x).toBe(0);
+    expect(characterHeader!.y).toBe(0);
+    expect(useCanvasStore.getState().nodeOverrides[characterHeaderId]).toBeUndefined();
   });
 });
