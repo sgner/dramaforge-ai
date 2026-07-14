@@ -23,9 +23,10 @@ describe('agent_node types & layout (horizontal timeline)', () => {
     expect(AGENT_NODE_H_TALL).toBeGreaterThan(AGENT_NODE_H);
   });
 
-  it('AGENT_ROW_GAP and AGENT_COL_GAP are tight (16 px) for compact timeline', () => {
-    expect(AGENT_ROW_GAP).toBe(16);
-    expect(AGENT_COL_GAP).toBe(16);
+  it('AGENT_ROW_GAP and AGENT_COL_GAP give node spacing for readability (>= 32 px)', () => {
+    // 节点间距离必须 > 节点自身内容边界，留出空间给端口和连接线
+    expect(AGENT_ROW_GAP).toBeGreaterThanOrEqual(32);
+    expect(AGENT_COL_GAP).toBeGreaterThanOrEqual(32);
   });
 
   it('AGENT_GRID_COLS is 5 for horizontal timeline (5 events per row)', () => {

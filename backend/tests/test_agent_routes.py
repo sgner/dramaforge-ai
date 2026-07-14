@@ -19,6 +19,18 @@ def db_session():
     try:
         yield session
     finally:
+        # 清理测试数据：硬编码 id (t-rec-1/2/3...) 跨测试复用，结束后必须删
+        # 用独立 session 避免主 session 的 identity map 缓存
+        try:
+            from app.models import AgentTask, AgentStep
+            from app.database import SessionLocal as _SL
+            with _SL() as cleanup_db:
+                for tid in ("t-rec-1", "t-rec-2", "t-rec-3"):
+                    cleanup_db.query(AgentStep).filter_by(task_id=tid).delete()
+                    cleanup_db.query(AgentTask).filter_by(id=tid).delete()
+                cleanup_db.commit()
+        except Exception:
+            pass
         session.close()
 
 

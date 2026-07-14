@@ -319,6 +319,68 @@ class MediaProviderConfig(Base):
         }
 
 
+class DramaTask(Base):
+    """DramaTask — 旧的"项目/任务"实体（带 pipeline 产物）。
+
+    关键设计：
+    - DramaTask 拥有完整的 pipeline 数据（characters / bigShots / sceneAssets / props ...），
+      结构复杂且类型持续演进 → 用 data_json 整体序列化，不强行拆列。
+    - 与 Project（画布）的对应关系：DramaTask.id === Project.id。
+      前端打开 DramaTask 时把 id 当作 projectId 进 InfiniteCanvas。
+    - 删除 DramaTask 时**不**自动删 Project / Asset（两边独立管理，
+      软删 DramaTask → 软删 Project；硬删两边都用 DELETE）。
+    """
+    __tablename__ = "drama_tasks"
+
+    id = Column(String, primary_key=True)
+    name = Column(String, nullable=False, default="Untitled")
+    # 软删除：前端用 trash 功能时标 True；硬删走 DELETE
+    deleted = Column(Boolean, default=False, nullable=False)
+    data_json = Column(Text, default="{}")  # 整个 DramaTask 的 JSON 字符串
+    created_at = Column(DateTime, default=_now)
+    updated_at = Column(DateTime, default=_now, onupdate=_now)
+
+    def to_dict(self) -> dict:
+        import json as _json
+        try:
+            data = _json.loads(self.data_json) if self.data_json else {}
+        except Exception:
+            data = {}
+        return {
+            "id": self.id,
+            "name": self.name,
+            "deleted": bool(self.deleted),
+            "data": data,
+            "created_at": _iso(self.created_at),
+            "updated_at": _iso(self.updated_at),
+        }
+
+
+class UserPreference(Base):
+    """用户偏好 key-value 存储（替代散落在 localStorage 的小数据）。
+
+    key 形如："language" / "current_canvas_id" / "deleted_canvas_ids" /
+    "canvas_emoji" / "step_bindings"。value 是任意 JSON 字符串。
+    """
+    __tablename__ = "user_preferences"
+
+    key = Column(String, primary_key=True)
+    value_json = Column(Text, default="null")
+    updated_at = Column(DateTime, default=_now, onupdate=_now)
+
+    def to_dict(self) -> dict:
+        import json as _json
+        try:
+            value = _json.loads(self.value_json) if self.value_json is not None else None
+        except Exception:
+            value = None
+        return {
+            "key": self.key,
+            "value": value,
+            "updated_at": _iso(self.updated_at),
+        }
+
+
 class ProviderConfig(Base):
     """统一 provider 配置（合并 LLMProviderConfig + MediaProviderConfig）。
 

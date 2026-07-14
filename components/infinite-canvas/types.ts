@@ -53,8 +53,8 @@ export const AGENT_TYPE_META: Record<TaskType, { label: string; color: string; i
 export const AGENT_NODE_W = 220;
 export const AGENT_NODE_H = 120;
 export const AGENT_NODE_H_TALL = 168; // 计划 / 资产 / 询问 节点较高
-export const AGENT_ROW_GAP = 16;
-export const AGENT_COL_GAP = 16;
+export const AGENT_ROW_GAP = 40;       // 节点间垂直距离加大（16 → 40）
+export const AGENT_COL_GAP = 60;       // 节点间水平距离加大（16 → 60）
 // 每行节点数（横向时间线流：默认 5 个/行，超出换行）
 export const AGENT_GRID_COLS = 5;
 // 画布上 agent_node 总数上限：超出后合并最旧的 observation 节点，避免页面卡顿

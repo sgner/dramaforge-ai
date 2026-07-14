@@ -199,6 +199,48 @@ class AssetUpdate(BaseModel):
     extra: Optional[Dict[str, Any]] = None
 
 
+# ============ DramaTask ============
+class DramaTaskOut(BaseModel):
+    """DramaTask 全量数据。data 字段是完整 JSON 对象。"""
+    id: str
+    name: str = "Untitled"
+    deleted: bool = False
+    data: Dict[str, Any] = Field(default_factory=dict)
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class DramaTaskUpsert(BaseModel):
+    """DramaTask 写入载荷：前端传整个 DramaTask 的 JSON。"""
+    name: Optional[str] = None
+    deleted: Optional[bool] = None
+    data: Dict[str, Any] = Field(default_factory=dict)
+
+
+class DramaTaskPatch(BaseModel):
+    """DramaTask 局部更新。data 走 deep-merge，其它字段直接覆盖。"""
+    name: Optional[str] = None
+    deleted: Optional[bool] = None
+    data: Optional[Dict[str, Any]] = None
+
+
+# ============ UserPreference ============
+class UserPreferenceItem(BaseModel):
+    key: str
+    value: Any = None
+    updated_at: Optional[str] = None
+
+
+class UserPreferenceUpsert(BaseModel):
+    """单个偏好写入。value 是任意可序列化对象。"""
+    value: Any = None
+
+
+class UserPreferencesBatchUpsert(BaseModel):
+    """批量写入偏好（一次 POST 多个 key）。"""
+    items: Dict[str, Any]  # key → value
+
+
 # ============ Full project snapshot (load/save) ============
 class ProjectSnapshot(BaseModel):
     project: ProjectOut

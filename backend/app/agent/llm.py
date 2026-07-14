@@ -136,8 +136,19 @@ def build_react_prompt(
         parts.append("【最近步骤（最近 10 步）】\n" + "\n".join(step_lines))
 
     # 工具列表
+    # 把每个工具的 name / description / parameters（参数名 + 类型 + 必填 + 说明）都列出来。
+    # 否则 LLM 只能看到 name + description，会瞎猜参数名（如把 user_input 写成 user_text），
+    # 工具 validate 失败 → 死循环。
     if tool_summaries:
-        tool_lines = [f"- {t['name']}: {t['description']}" for t in tool_summaries]
+        tool_lines: list[str] = []
+        for t in tool_summaries:
+            tool_lines.append(f"- {t['name']}: {t['description']}")
+            params = t.get("parameters") or []
+            for p in params:
+                req = "必填" if p.get("required", True) else "可选"
+                ptype = p.get("type", "string")
+                pdesc = p.get("description", "")
+                tool_lines.append(f"    · {p['name']} ({ptype}, {req}): {pdesc}")
         parts.append("【可用工具】\n" + "\n".join(tool_lines))
 
     return "\n\n".join(parts)

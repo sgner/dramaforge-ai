@@ -266,6 +266,48 @@ export const api = {
       method: 'DELETE',
     }),
 
+  // ---------- DramaTask (项目/任务) ----------
+  // 替代前端 localStorage 的 dramaforge_tasks 持久化。
+  // 整个 DramaTask 的所有字段（characters/bigShots/...）打包在 data 字段里。
+  listDramaTasks: (opts: { includeDeleted?: boolean } = {}) => {
+    const q = opts.includeDeleted ? '?include_deleted=true' : '';
+    return request<DramaTaskApiOut[]>(`/drama-tasks${q}`);
+  },
+  getDramaTask: (taskId: string) =>
+    request<DramaTaskApiOut>(`/drama-tasks/${encodeURIComponent(taskId)}`),
+  /** 整体写入：name + 完整 data。id 不存在则创建。 */
+  upsertDramaTask: (taskId: string, payload: { name?: string; deleted?: boolean; data: Record<string, any> }) =>
+    request<DramaTaskApiOut>(`/drama-tasks/${encodeURIComponent(taskId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  /** 局部更新：data 走 deep-merge（不会覆盖未提供的 pipeline 字段）。 */
+  patchDramaTask: (taskId: string, payload: { name?: string; deleted?: boolean; data?: Record<string, any> }) =>
+    request<DramaTaskApiOut>(`/drama-tasks/${encodeURIComponent(taskId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  deleteDramaTask: (taskId: string) =>
+    request<{ ok: boolean; deleted: string }>(`/drama-tasks/${encodeURIComponent(taskId)}`, {
+      method: 'DELETE',
+    }),
+
+  // ---------- UserPreference (用户偏好) ----------
+  // 替代散落在 localStorage 的小数据：language / current_canvas_id /
+  // deleted_canvas_ids / canvas_emoji / step_bindings。
+  getUserPreference: (key: string) =>
+    request<UserPreferenceItem>(`/user-preferences/${encodeURIComponent(key)}`),
+  setUserPreference: (key: string, value: any) =>
+    request<UserPreferenceItem>(`/user-preferences/${encodeURIComponent(key)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ value }),
+    }),
+  batchSetUserPreferences: (items: Record<string, any>) =>
+    request<UserPreferenceItem[]>(`/user-preferences/_batch`, {
+      method: 'POST',
+      body: JSON.stringify({ items }),
+    }),
+
   // ---------- Media Generation (后端代理供应商调用) ----------
   // 取代前端直连供应商。所有图片/视频由后端用 DB 里的 api_key 调。
   generateImage: (payload: {
@@ -317,5 +359,26 @@ export interface ProviderOut {
   has_key: boolean;
   key_preview: string;
   created_at?: string;
+  updated_at?: string;
+}
+
+// ============ DramaTask (替代 localStorage 的 dramaforge_tasks) ============
+/**
+ * 后端 DramaTaskOut — 整个 DramaTask 在 data 字段里。
+ * 前端拿到后直接 setTasks([...data, ...]) 即可。
+ */
+export interface DramaTaskApiOut {
+  id: string;
+  name: string;
+  deleted: boolean;
+  data: Record<string, any>;
+  created_at?: string;
+  updated_at?: string;
+}
+
+// ============ UserPreference (替代散落的 localStorage) ============
+export interface UserPreferenceItem {
+  key: string;
+  value: any;
   updated_at?: string;
 }

@@ -1652,6 +1652,20 @@ const AgentNodeBody: React.FC<{ node: CanvasNode }> = React.memo(({ node }) => {
   const isQuestion = taskType === 'question';
   const isImage = isArtifact && payload.kind === 'image' && typeof payload.url === 'string';
   const isText = isArtifact && payload.kind === 'text' && typeof payload.snippet === 'string';
+  // 资产分类画廊：addAgentNodes 把同类资产打包成一个节点，payload.kind='category'
+  const isCategory = isArtifact && payload.kind === 'category' && Array.isArray(payload.items);
+  const categoryItems: any[] = isCategory ? payload.items : [];
+  // 4 个缩略图格子（2x2），超出显示 +N more
+  const thumbs = categoryItems.slice(0, 4);
+  const moreCount = Math.max(0, categoryItems.length - thumbs.length);
+
+  // 分类图标（与 kindLabel 同步）：character=👤, prop=🎁, scene=🏞, storyboard=🎬, novel=📖, script=📜
+  const kindIcons: Record<string, string> = {
+    character: '👤', prop: '🎁', scene: '🏞', storyboard: '🎬', novel: '📖', script: '📜',
+  };
+  const categoryIcon = isCategory && payload.asset_kind
+    ? kindIcons[String(payload.asset_kind)] || '◆'
+    : null;
 
   // 严格黑白灰：左边框细线 + 节点 type icon，去掉一切彩色
   return (
@@ -1697,8 +1711,8 @@ const AgentNodeBody: React.FC<{ node: CanvasNode }> = React.memo(({ node }) => {
             letterSpacing: 0.2,
           }}
         >
-          <span style={{ fontSize: 11 }}>{meta.icon}</span>
-          {meta.label}
+          <span style={{ fontSize: 11 }}>{categoryIcon || meta.icon}</span>
+          {isCategory ? String(payload.asset_kind || meta.label) : meta.label}
         </span>
         <AgentStatusBadge status={status} />
       </div>
@@ -1724,6 +1738,89 @@ const AgentNodeBody: React.FC<{ node: CanvasNode }> = React.memo(({ node }) => {
           alt={label}
           style={{ width: '100%', height: 56, objectFit: 'cover', borderRadius: 4, marginTop: 2, display: 'block', background: 'var(--soft, rgba(0,0,0,0.04))' }}
         />
+      )}
+      {isCategory && (
+        <div
+          data-testid="task-graph-node-category-grid"
+          style={{
+            display: 'grid',
+            gridTemplateColumns: '1fr 1fr',
+            gridTemplateRows: '1fr 1fr',
+            gap: 3,
+            flex: 1,
+            minHeight: 0,
+            marginTop: 2,
+          }}
+        >
+          {thumbs.map((it: any, i: number) => {
+            const url = typeof it?.url === 'string' ? it.url : null;
+            const isLastWithMore = i === thumbs.length - 1 && moreCount > 0;
+            return (
+              <div
+                key={(it?.id as string) || i}
+                data-testid={`task-graph-node-category-thumb-${i}`}
+                style={{
+                  position: 'relative',
+                  background: 'var(--soft, rgba(0,0,0,0.04))',
+                  borderRadius: 4,
+                  overflow: 'hidden',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  minHeight: 0,
+                  color: 'var(--muted, #94a3b8)',
+                  fontSize: 9,
+                }}
+              >
+                {url ? (
+                  <img
+                    src={url}
+                    alt={it?.name || ''}
+                    style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                    onError={(e) => {
+                      // 缩略图加载失败 → 用 emoji 图标占位，避免空白
+                      (e.currentTarget as HTMLImageElement).style.display = 'none';
+                    }}
+                  />
+                ) : (
+                  <span style={{ fontSize: 14, opacity: 0.55 }}>
+                    {categoryIcon || (it?.kind === 'text' ? '📄' : '◆')}
+                  </span>
+                )}
+                {isLastWithMore && (
+                  <span
+                    data-testid="task-graph-node-category-more"
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      background: 'rgba(15, 23, 42, 0.55)',
+                      color: '#fff',
+                      fontSize: 11,
+                      fontWeight: 600,
+                    }}
+                  >
+                    +{moreCount}
+                  </span>
+                )}
+              </div>
+            );
+          })}
+          {/* 缩略图不足 4 个时补空格保持 2x2 形状 */}
+          {Array.from({ length: Math.max(0, 4 - thumbs.length) }).map((_, i) => (
+            <div
+              key={`empty-${i}`}
+              data-testid={`task-graph-node-category-empty-${i}`}
+              style={{
+                background: 'var(--soft, rgba(0,0,0,0.02))',
+                borderRadius: 4,
+                border: '1px dashed var(--line, rgba(0,0,0,0.08))',
+              }}
+            />
+          ))}
+        </div>
       )}
       {isText && (
         <div

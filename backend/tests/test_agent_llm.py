@@ -100,6 +100,43 @@ def test_build_react_prompt_includes_recent_steps():
     assert "success" in p.lower()
 
 
+def test_build_react_prompt_includes_tool_parameter_schema():
+    """ReAct prompt 必须把工具参数名 / 类型 / 必填告诉 LLM，
+    否则 LLM 会瞎猜参数名（如把 user_input 写成 user_text），工具 validate 失败 → 死循环。
+    """
+    p = build_react_prompt(
+        user_goal="长相思",
+        plan=[],
+        artifacts={},
+        recent_steps=[],
+        tool_summaries=[
+            {
+                "name": "parse_user_goal",
+                "description": "解析用户原话为结构化目标",
+                "parameters": [
+                    {
+                        "name": "user_text",
+                        "type": "string",
+                        "description": "用户原话",
+                        "required": True,
+                    },
+                ],
+            },
+        ],
+    )
+    # 工具名 / 描述
+    assert "parse_user_goal" in p
+    assert "解析用户原话" in p
+    # 参数名（关键！缺这个 LLM 会猜错）
+    assert "user_text" in p
+    # 参数类型
+    assert "string" in p
+    # 必填标记
+    assert "必填" in p
+    # 参数描述
+    assert "用户原话" in p
+
+
 # ========================
 # LLMClient 协议测试
 # ========================

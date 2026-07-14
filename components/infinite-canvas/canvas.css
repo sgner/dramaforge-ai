@@ -236,9 +236,13 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity: 0 !imp
   border-radius: 12px;
 }
 
-/* ===== Agent Canvas Node (agent 事件节点) — 紧凑、黑白灰、避免 178px 最小高度 ===== */
+/* ===== Agent Canvas Node (agent 事件节点) — 紧凑、黑白灰、避免 178px 最小高度 =====
+ * 设计要点：
+ * - 不要 width: auto !important：会覆盖内联 style 的 width=220，导致 AgentNodeBody 的 width:100%
+ *   相对 content-sized 父元素变成 0，整个卡片塌成 1 行。
+ * - 端口 (port-in/port-out) 默认半透明可见，hover/selected 时变实心并放大。
+ * - 节点 background 由 AgentNodeBody 自己画（白底 + 左边框），wrapper 保持透明让端口能溢出。 */
 .image-node.agent-canvas-node {
-  width: auto !important;
   min-height: 0 !important;
   background: transparent !important;
   border: 0 !important;
@@ -251,10 +255,19 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity: 0 !imp
 }
 .image-node.agent-canvas-node:active { cursor: grabbing; }
 .image-node.agent-canvas-node .node-hint,
-.image-node.agent-canvas-node .node-port,
 .image-node.agent-canvas-node .node-resize-handle,
 .image-node.agent-canvas-node .run-time-pill,
 .image-node.agent-canvas-node .cascade-status-badge { display: none !important; }
+/* agent 节点显示端口：覆盖 base 的 display:none */
+.image-node.agent-canvas-node .node-port {
+  display: block !important;
+  opacity: 0.55;
+  pointer-events: auto;
+}
+.image-node.agent-canvas-node:hover .node-port,
+.image-node.agent-canvas-node.selected .node-port {
+  opacity: 1;
+}
 .image-node.agent-canvas-node.selected {
   outline: 0 !important;
   box-shadow: 0 0 0 2px var(--strong) !important;

@@ -22,12 +22,16 @@ import { useTaskActions } from './hooks/useTaskActions';
 import { I18nProvider, useI18n } from './i18n';
 import { AgentMode } from './agent/agent-mode';
 import { useAgentStore } from './agent/use-agent-store';
+import { api } from './services/apiClient';
 // 引入全局 SSE 管理器：模块加载即启动，自动监听 useAgentStore.taskId
 import './agent/agent-stream-manager';
 
-const STORAGE_KEY_TASKS = 'dramaforge_tasks';
 const STORAGE_KEY_LANG = 'dramaforge_language';
-const STORAGE_KEY_API_CONFIG = 'dramaforge_apiconfig';
+// ⚠️ dramaforge_tasks / dramaforge_tasks_backup 全部已迁移到后端（/api/drama-tasks），
+// 切浏览器不会丢。stepBindings 是后端 key-value（/api/user-preferences），
+// localStorage 只作为后端不可用时的兜底。
+const STORAGE_KEY_STEP_BINDINGS = 'dramaforge_step_bindings';
+const STORAGE_KEY_API_CONFIG_LEGACY = 'dramaforge_apiconfig';
 
 const LOGICAL_STEPS = [
   TaskStatus.PREPROCESSING,
@@ -179,56 +183,236 @@ function AppContent() {
   }, []);
 
   useEffect(() => {
-    const savedTasks = storageService.loadTasks();
-    if (savedTasks && savedTasks.length > 0) {
-      setTasks(savedTasks);
-    } else {
-      const backupTasks = storageService.loadFromBackup();
-      if (backupTasks && backupTasks.length > 0) {
-        setTasks(backupTasks);
-      }
-    }
-    const savedConfig = localStorage.getItem(STORAGE_KEY_API_CONFIG);
-    if (savedConfig) {
-        try {
+    // 1) 异步从后端加载 DramaTask（不再用 localStorage 的 dramaforge_tasks）。
+    //    老 localStorage 的任务作为一次性迁移：如果后端为空且 localStorage 有，
+    //    把 localStorage 里的任务上传到后端后再清空 localStorage。
+    //    失败时回落到 localStorage 旧数据（兜底）。
+    let cancelled = false;
+    api.listDramaTasks()
+      .then(async (rows) => {
+        if (cancelled) return;
+        if (rows && rows.length > 0) {
+          // 后端有数据 → 直接用
+          const tasksFromBackend: DramaTask[] = rows.map((r) => {
+            // data 里就是完整 DramaTask JSON；与 r.id / r.name 合并
+            const { id, name, ...rest } = (r.data || {}) as DramaTask & { id?: string; name?: string };
+            return { ...(rest as DramaTask), id: r.id, name: r.name || name || 'Untitled' };
+          });
+          setTasks(tasksFromBackend);
+          return;
+        }
+        // 后端为空 → 尝试从 localStorage 迁移
+        const legacyRaw = localStorage.getItem('dramaforge_tasks');
+        if (legacyRaw) {
+          try {
+            const legacyTasks: DramaTask[] = JSON.parse(legacyRaw).tasks || JSON.parse(legacyRaw);
+            if (Array.isArray(legacyTasks) && legacyTasks.length > 0) {
+              // 上传到后端
+              for (const t of legacyTasks) {
+                try {
+                  await api.upsertDramaTask(t.id, { name: t.name, data: t as any });
+                } catch (e) {
+                  console.warn('[App] migrate legacy task failed', t.id, e);
+                }
+              }
+              if (!cancelled) {
+                setTasks(legacyTasks);
+                // 迁移成功后清掉 localStorage（避免下次再迁一次）
+                try { localStorage.removeItem('dramaforge_tasks'); } catch {}
+                // 同步清掉备份（避免备份里的老数据"复活"）
+                try {
+                  for (let i = localStorage.length - 1; i >= 0; i--) {
+                    const k = localStorage.key(i);
+                    if (k && (k.startsWith('dramaforge_tasks_backup') || k === 'dramaforge_tasks_autobackup')) {
+                      localStorage.removeItem(k);
+                    }
+                  }
+                } catch {}
+                console.info(`[App] migrated ${legacyTasks.length} legacy tasks from localStorage to backend`);
+              }
+              return;
+            }
+          } catch (e) {
+            console.warn('[App] parse legacy localStorage tasks failed', e);
+          }
+        }
+        // 都没有 → 空数组
+        setTasks([]);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        console.error('[App] listDramaTasks failed, falling back to localStorage', e);
+        // 后端不可用：兜底用 localStorage
+        const savedTasks = storageService.loadTasks();
+        if (savedTasks && savedTasks.length > 0) {
+          setTasks(savedTasks);
+        } else {
+          const backupTasks = storageService.loadFromBackup();
+          if (backupTasks && backupTasks.length > 0) {
+            setTasks(backupTasks);
+          }
+        }
+      })
+      .finally(() => {
+        // 标记后端加载完成（不论成功/失败/迁移）；prevTaskIdsRef 那个 effect
+        // 看到 tasksLoadedFromBackendRef.current=false 会初始化 lastSyncedRef。
+        // 失败时 prevTaskIdsRef 也会被填充为当前的 tasks（可能为空或兜底值），
+        // 避免后续 setTasks 误把所有 task 标记成"已删除" → DELETE 后端。
+        if (!cancelled) tasksLoadedFromBackendRef.current = true;
+      });
+    // 2) 异步从后端加载 LLM providers（不再用 localStorage）
+    //    失败时回落到默认配置 + 提示，但用户已在后端配的 provider 不会丢
+    api.listProviders()
+      .then((rows: any[]) => {
+        if (cancelled) return;
+        // rows 来自后端 ProviderOut（api_key 脱敏），转成前端 Provider
+        const providers: any[] = (rows || []).map((r) => ({
+          id: r.provider_id,
+          name: r.name || r.provider_id,
+          baseUrl: r.base_url || '',
+          protocol: r.protocol || 'openai',
+          enabled: r.enabled !== false,
+          apiKey: r.api_key || '',   // 后端只返脱敏后的；前端 edit 时用 hasKey 判断是否要重新填
+          hasKey: r.has_key || false,
+          keyPreview: r.key_preview || '',
+          defaultModel: r.default_model || '',
+          chatModels: r.chat_models || [],
+          imageModels: r.image_models || [],
+          videoModels: r.video_models || [],
+        }));
+        // 2) stepBindings：后端是主存，localStorage 兜底
+        api.getUserPreference('step_bindings')
+          .then((backend) => {
+            if (Array.isArray(backend?.value)) {
+              setApiConfig({ providers, stepBindings: backend.value });
+            } else {
+              let local: any[] = [];
+              try {
+                const raw = localStorage.getItem(STORAGE_KEY_STEP_BINDINGS);
+                if (raw) local = JSON.parse(raw);
+              } catch {}
+              setApiConfig({ providers, stepBindings: local });
+            }
+          })
+          .catch(() => {
+            let local: any[] = [];
+            try {
+              const raw = localStorage.getItem(STORAGE_KEY_STEP_BINDINGS);
+              if (raw) local = JSON.parse(raw);
+            } catch {}
+            setApiConfig({ providers, stepBindings: local });
+          });
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        console.error('[App] listProviders failed, falling back to localStorage legacy', e);
+        // 后端不可用时回落到老 localStorage（含 geminiKey / 旧格式自动迁移）
+        const savedConfig = localStorage.getItem(STORAGE_KEY_API_CONFIG_LEGACY);
+        if (savedConfig) {
+          try {
             const parsed = JSON.parse(savedConfig);
             if (parsed.providers && parsed.models && parsed.stepBindings) {
-                setApiConfig(parsed);
+              setApiConfig(parsed);
             } else if (parsed.geminiKey !== undefined) {
-                const migrated = createDefaultApiConfig();
-                const geminiProvider = migrated.providers.find(p => p.id === 'google-gemini');
-                const nanoProvider = migrated.providers.find(p => p.id === 'nanobanana');
-                const soraProvider = migrated.providers.find(p => p.id === 'sora');
-                if (geminiProvider) {
-                    geminiProvider.apiKey = parsed.geminiKey || '';
-                    geminiProvider.baseUrl = parsed.geminiBaseUrl || 'https://generativelanguage.googleapis.com';
-                }
-                if (nanoProvider) {
-                    nanoProvider.apiKey = parsed.nanobananaKey || '';
-                    nanoProvider.baseUrl = parsed.nanobananaBaseUrl || 'https://api.nanobanana.com';
-                }
-                if (soraProvider) {
-                    soraProvider.apiKey = parsed.soraKey || '';
-                    soraProvider.baseUrl = parsed.soraBaseUrl || 'https://api.sora.com';
-                }
-                setApiConfig(migrated);
-                localStorage.setItem(STORAGE_KEY_API_CONFIG, JSON.stringify(migrated));
+              const migrated = createDefaultApiConfig();
+              const geminiProvider = migrated.providers.find((p: any) => p.id === 'google-gemini');
+              const nanoProvider = migrated.providers.find((p: any) => p.id === 'nanobanana');
+              const soraProvider = migrated.providers.find((p: any) => p.id === 'sora');
+              if (geminiProvider) {
+                geminiProvider.apiKey = parsed.geminiKey || '';
+                geminiProvider.baseUrl = parsed.geminiBaseUrl || 'https://generativelanguage.googleapis.com';
+              }
+              if (nanoProvider) {
+                nanoProvider.apiKey = parsed.nanobananaKey || '';
+                nanoProvider.baseUrl = parsed.nanobananaBaseUrl || 'https://api.nanobanana.com';
+              }
+              if (soraProvider) {
+                soraProvider.apiKey = parsed.soraKey || '';
+                soraProvider.baseUrl = parsed.soraBaseUrl || 'https://api.sora.com';
+              }
+              setApiConfig(migrated);
             }
-        } catch (e) {
-            console.error("Failed to parse saved api config", e);
+          } catch (e) {
+            console.error('Failed to parse saved api config', e);
+          }
         }
-    }
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
+
+  // 用 ref 跟踪 tasks 状态（避免 effect 重入 + 启动后第一次不重写回后端）
+  const tasksRef = useRef<DramaTask[]>(tasks);
+  useEffect(() => { tasksRef.current = tasks; }, [tasks]);
+  // 后端已加载完成标记：首屏 listDramaTasks 完成后才允许写后端
+  const tasksLoadedFromBackendRef = useRef(false);
+  // 已删除的 taskIds（用于触发 DELETE /api/drama-tasks/{id}）
+  const deletedTaskIdsRef = useRef<Set<string>>(new Set());
+  // 跟踪上一次后端同步过的 taskId → JSON（避免无效 PUT）
+  const lastSyncedRef = useRef<Map<string, string>>(new Map());
 
   const saveTasksTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
+    // 没从后端加载完之前不写（避免刚 setTasks 回来又被原样回写）
+    if (!tasksLoadedFromBackendRef.current) return;
     if (saveTasksTimerRef.current) clearTimeout(saveTasksTimerRef.current);
     saveTasksTimerRef.current = setTimeout(() => {
-      storageService.saveTasks(tasks);
+      const cur = tasksRef.current;
+      // 1) 处理删除（deletedTaskIdsRef 里的需要 DELETE）
+      for (const id of Array.from(deletedTaskIdsRef.current)) {
+        if (cur.some((t) => t.id === id)) {
+          // 任务又回来了 → 不删
+          deletedTaskIdsRef.current.delete(id);
+          continue;
+        }
+        api.deleteDramaTask(id).catch((e) => {
+          console.warn(`[App] deleteDramaTask ${id} failed`, e);
+        });
+        lastSyncedRef.current.delete(id);
+        deletedTaskIdsRef.current.delete(id);
+      }
+      // 2) 处理新增/更新（PUT 整段 data）
+      for (const t of cur) {
+        const json = JSON.stringify(t);
+        if (lastSyncedRef.current.get(t.id) === json) continue;
+        api.upsertDramaTask(t.id, { name: t.name, data: t as any })
+          .then(() => {
+            lastSyncedRef.current.set(t.id, json);
+          })
+          .catch((e) => {
+            console.warn(`[App] upsertDramaTask ${t.id} failed`, e);
+          });
+      }
+      // 3) 兜底：localStorage 备份（后端挂了时还能恢复）
+      try { storageService.saveTasks(cur); } catch {}
     }, 500);
     return () => {
       if (saveTasksTimerRef.current) clearTimeout(saveTasksTimerRef.current);
     };
+  }, [tasks]);
+
+  // 监听 setTasks 的 diff，把被移除的 taskId 加到 deletedTaskIdsRef。
+  // 实现：维护一个 prev tasks id 集合，每次 setTasks 时对比。
+  const prevTaskIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!tasksLoadedFromBackendRef.current) {
+      // 第一次 tasks 变更就是从后端加载完的那次：初始化 prevTaskIdsRef
+      prevTaskIdsRef.current = new Set(tasks.map((t) => t.id));
+      // 同步 lastSyncedRef（这样加载回来的数据不会被立刻重写）
+      for (const t of tasks) {
+        lastSyncedRef.current.set(t.id, JSON.stringify(t));
+      }
+      tasksLoadedFromBackendRef.current = true;
+      return;
+    }
+    const curIds = new Set(tasks.map((t) => t.id));
+    for (const id of prevTaskIdsRef.current) {
+      if (!curIds.has(id)) {
+        deletedTaskIdsRef.current.add(id);
+      }
+    }
+    prevTaskIdsRef.current = curIds;
   }, [tasks]);
 
   useEffect(() => {
@@ -248,10 +432,57 @@ function AppContent() {
     });
   }, [tasks, addToast, triggerCelebration, t]);
 
-  const handleSaveConfig = (newConfig: ApiConfig) => {
+  const handleSaveConfig = async (newConfig: ApiConfig) => {
+    // 1) stepBindings 写后端（key-value 偏好表）— 后端是主存，localStorage 兜底
+    try {
+      localStorage.setItem(STORAGE_KEY_STEP_BINDINGS, JSON.stringify(newConfig.stepBindings || []));
+    } catch {}
+    api.setUserPreference('step_bindings', newConfig.stepBindings || [])
+      .catch((e) => console.warn('[App] setUserPreference(step_bindings) failed', e));
+    // 2) providers 走后端（不再写整个 localStorage，避免 key 漂移）
+    //    对每个 provider 调 upsertProvider：apiKey 改动才覆盖（用 hasKey 检测）
+    //    后端在 ProviderIn 上有保留语义：apiKey 为空 → 保留原 key
+    const prev = apiConfig.providers;
+    const next = newConfig.providers;
+    const byId = new Map(prev.map((p) => [p.id, p] as const));
     setApiConfig(newConfig);
-    localStorage.setItem(STORAGE_KEY_API_CONFIG, JSON.stringify(newConfig));
     setIsSettingsOpen(false);
+    // 异步批量同步：失败时打 warning，不阻塞 UI
+    const tasks: Promise<any>[] = [];
+    for (const p of next) {
+      const prevP = byId.get(p.id);
+      const apiKeyChanged = !prevP || (prevP.apiKey || '') !== (p.apiKey || '');
+      // baseUrl / 模型列表等总是同步；apiKey 只在变化或后端没存时传
+      const payload: any = {
+        name: p.name,
+        base_url: p.baseUrl,
+        default_model: p.defaultModel,
+        protocol: p.protocol,
+        enabled: p.enabled !== false,
+        chat_models: p.chatModels,
+        image_models: p.imageModels,
+        video_models: p.videoModels,
+        // 如果之前有 key 且这次没改 key（用户没在 UI 里改 key 字段），就传 None → 后端保留
+        api_key: apiKeyChanged ? (p.apiKey || '') : null,
+      };
+      tasks.push(
+        api.upsertProvider(p.id, payload).catch((e) => {
+          console.warn(`[App] upsertProvider ${p.id} failed`, e);
+        }),
+      );
+    }
+    // 处理删除（next 里没有但 prev 有的 provider）
+    for (const prevP of prev) {
+      if (!next.find((p) => p.id === prevP.id)) {
+        tasks.push(
+          api.deleteProvider(prevP.id).catch((e) => {
+            console.warn(`[App] deleteProvider ${prevP.id} failed`, e);
+          }),
+        );
+      }
+    }
+    // 不 await：UI 已经反映在 state 上；后端失败只打 warning
+    void Promise.allSettled(tasks);
   };
 
   const updateTask = useCallback((taskId: string, updates: Partial<DramaTask>) => {

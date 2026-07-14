@@ -8,7 +8,6 @@ class StorageService {
   private readonly STORAGE_KEY_TASKS = 'dramaforge_tasks';
   private readonly STORAGE_KEY_BACKUP = 'dramaforge_tasks_backup';
   private readonly STORAGE_KEY_AUTO_BACKUP = 'dramaforge_tasks_autobackup';
-  private readonly STORAGE_KEY_NODE_POSITIONS = 'dramaforge_node_positions';
   private readonly MAX_RETRIES = 3;
   private readonly STORAGE_QUOTA_WARNING = 0.8;
 
@@ -204,39 +203,11 @@ class StorageService {
     this.clearOldBackups();
   }
 
-  saveNodePositions(taskId: string, positions: Record<string, { x: number; y: number }>): void {
-    try {
-      const allPositions = this.loadAllNodePositions();
-      allPositions[taskId] = positions;
-      localStorage.setItem(this.STORAGE_KEY_NODE_POSITIONS, JSON.stringify(allPositions));
-    } catch (e) {
-      console.error('[StorageService] Failed to save node positions:', e);
-    }
-  }
-
-  loadNodePositions(taskId: string): Record<string, { x: number; y: number }> | null {
-    try {
-      const allPositions = this.loadAllNodePositions();
-      return allPositions[taskId] || null;
-    } catch (e) {
-      return null;
-    }
-  }
-
-  private loadAllNodePositions(): Record<string, Record<string, { x: number; y: number }>> {
-    try {
-      const data = localStorage.getItem(this.STORAGE_KEY_NODE_POSITIONS);
-      return data ? JSON.parse(data) : {};
-    } catch {
-      return {};
-    }
-  }
-
   getStorageInfo(): { used: number; total: number; tasksCount: number } {
     const used = this.getStorageSize();
     const tasksData = localStorage.getItem(this.STORAGE_KEY_TASKS);
     const tasksCount = tasksData ? JSON.parse(tasksData).tasks?.length || 0 : 0;
-    
+
     return {
       used,
       total: 5 * 1024 * 1024,

@@ -30,8 +30,12 @@ class ParseUserGoalTool(BaseTool):
     estimated_time_sec = 3.0
     idempotent = True
     parameters = [
+        # 命名用 user_text 而不是 user_input：
+        # build_react_prompt 不会把 schema 全列给 LLM，LLM 会自然用 user_text
+        # （与 ask_user 的 question 是同一类语义的"用户原话"）。
+        # 这里同时兼容历史调用里的 user_input，避免破坏已有 LLM prompt 缓存。
         ToolParameter(
-            name="user_input",
+            name="user_text",
             type="string",
             description="用户原话，可能含主题 / 时长 / 风格 / 角色数量等线索。",
             required=True,
@@ -39,16 +43,20 @@ class ParseUserGoalTool(BaseTool):
     ]
 
     async def validate(self, ctx: ToolContext, params: dict) -> str | None:
-        if not params.get("user_input") or not str(params["user_input"]).strip():
-            return "user_input 不能为空"
+        # 兼容两种命名
+        text = params.get("user_text") or params.get("user_input")
+        if not text or not str(text).strip():
+            return "user_text 不能为空"
         return None
 
     async def execute(self, ctx: ToolContext, params: dict) -> dict:
         if not ctx.llm_client:
             raise RuntimeError("parse_user_goal 需要 ctx.llm_client")
+        # 兼容旧字段名
+        text = params.get("user_text") or params.get("user_input")
         messages = [
             {"role": "system", "content": PARSE_GOAL_SYSTEM_PROMPT},
-            {"role": "user", "content": str(params["user_input"])},
+            {"role": "user", "content": str(text)},
         ]
         resp = await ctx.llm_client.generate(messages, temperature=0.4, max_tokens=600)
         return _coerce_json(resp.content) or {}
@@ -115,7 +123,11 @@ class AskUserTool(BaseTool):
     name = "ask_user"
     description = (
         "当必须让用户决策时（澄清目标 / 选择方向 / 确认高成本操作），"
-        "调用此工具。runtime 会暂停并推送 request_user_input 事件。"
+        "调用此工具。runtime 会暂停并推送 request_user_input 事件。\n"
+        "**重要**：\n"
+        "- `question` 字段只写问题本身，不要包含候选答案列表\n"
+        "- 候选答案（如果有）必须放在 `options` 数组里（每项是 string）\n"
+        "- 如果用户只能自由回答，`options` 留空数组 []"
     )
     category = "planning"
     requires_approval = False

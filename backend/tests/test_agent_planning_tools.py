@@ -21,7 +21,7 @@ def test_parse_user_goal_has_metadata():
     assert t.description
     assert t.category == "planning"
     param_names = {p.name for p in t.parameters}
-    assert "user_input" in param_names
+    assert "user_text" in param_names
 
 
 @pytest.mark.asyncio
@@ -45,21 +45,41 @@ async def test_parse_user_goal_calls_llm_and_returns_structured():
 
     ctx = ToolContext(task_id="t1", llm_client=_StubLLM())
     tool = ParseUserGoalTool()
-    result = await tool.call(ctx, {"user_input": "我想做一个一分钟的现代都市短剧"})
+    result = await tool.call(ctx, {"user_text": "我想做一个一分钟的现代都市短剧"})
     assert result["title"] == "短剧1"
     assert result["genre"] == "现代都市"
     assert result["duration_sec"] == 60
 
 
 @pytest.mark.asyncio
-async def test_parse_user_goal_validation_requires_user_input():
-    """缺少 user_input 应抛 ToolValidationError。"""
+async def test_parse_user_goal_validation_requires_user_text():
+    """缺少 user_text 应抛 ToolValidationError。"""
     from app.agent.tools.base import ToolValidationError
 
     ctx = ToolContext(task_id="t1")
     tool = ParseUserGoalTool()
     with pytest.raises(ToolValidationError):
         await tool.call(ctx, {})
+
+
+@pytest.mark.asyncio
+async def test_parse_user_goal_accepts_legacy_user_input():
+    """兼容历史 LLM 缓存：仍接受 user_input 字段。"""
+    from app.agent.tools.base import ToolValidationError
+
+    captured = {}
+
+    class _StubLLM:
+        async def generate(self, messages, tools=None, **kwargs):
+            from app.agent.llm import LLMResponse
+            captured["content"] = messages[-1]["content"]
+            return LLMResponse(content='{"title": "ok"}')
+
+    ctx = ToolContext(task_id="t1", llm_client=_StubLLM())
+    tool = ParseUserGoalTool()
+    result = await tool.call(ctx, {"user_input": "长相思"})
+    assert result["title"] == "ok"
+    assert captured["content"] == "长相思"
 
 
 # ========================

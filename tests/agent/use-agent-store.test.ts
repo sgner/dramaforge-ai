@@ -31,6 +31,71 @@ describe('useAgentStore', () => {
     expect(after.status).toBe('running');
   });
 
+  it('setTask resets previous task state (no event leakage when switching tasks)', () => {
+    // 模拟先跑 task A：往 store 里塞一些 events
+    useAgentStore.getState().setTask('t-A', 'running');
+    useAgentStore.getState().applyEvent({ type: 'thought', payload: { text: 'A 的想法' }, timestamp: 1 });
+    useAgentStore.getState().applyEvent({ type: 'action', payload: { tool: 'a_tool' }, timestamp: 2 });
+    useAgentStore.getState().applyEvent({ type: 'observation', payload: { ok: true }, timestamp: 3 });
+    expect(useAgentStore.getState().thoughts).toHaveLength(1);
+    expect(useAgentStore.getState().actions).toHaveLength(1);
+    expect(useAgentStore.getState().observations).toHaveLength(1);
+
+    // 切到 task B：setTask 应当把 events 全清掉
+    useAgentStore.getState().setTask('t-B', 'paused');
+
+    const after = useAgentStore.getState();
+    expect(after.taskId).toBe('t-B');
+    expect(after.status).toBe('paused');
+    expect(after.thoughts).toEqual([]);
+    expect(after.actions).toEqual([]);
+    expect(after.observations).toEqual([]);
+    expect(after.plan).toEqual([]);
+    expect(after.artifacts).toEqual({});
+  });
+
+  it('hydrate restores plan / artifacts / status / cost from persisted snapshot', () => {
+    useAgentStore.getState().setTask('t-1', 'paused');
+    useAgentStore.getState().hydrate({
+      status: 'done',
+      plan: [{ tool: 'a' }, { tool: 'b' }],
+      artifacts: { character: [{ id: 'c1', kind: 'image', url: 'http://x' }] },
+      total_cost_usd: 0.0123,
+      total_tokens: 4567,
+    });
+    const after = useAgentStore.getState();
+    expect(after.status).toBe('done');
+    expect(after.plan).toEqual([{ tool: 'a' }, { tool: 'b' }]);
+    expect(after.artifacts.character).toHaveLength(1);
+    expect(after.totalCostUsd).toBe(0.0123);
+    expect(after.totalTokens).toBe(4567);
+  });
+
+  it('hydrate restores pendingQuestion when pending_response is an unanswered ask_user payload', () => {
+    useAgentStore.getState().setTask('t-2', 'paused');
+    useAgentStore.getState().hydrate({
+      status: 'paused',
+      pending_response: {
+        question: '你想要的题材是？',
+        options: ['科幻', '悬疑'],
+      },
+    });
+    const after = useAgentStore.getState();
+    expect(after.pendingQuestion).not.toBeNull();
+    expect(after.pendingQuestion!.question).toBe('你想要的题材是？');
+    expect(after.pendingQuestion!.options).toEqual(['科幻', '悬疑']);
+  });
+
+  it('hydrate ignores pending_response that already has a response (already answered)', () => {
+    useAgentStore.getState().setTask('t-3', 'paused');
+    useAgentStore.getState().hydrate({
+      status: 'paused',
+      pending_response: { response: '科幻', approved: true },
+    });
+    // 不应当把已 answered 的 pending_response 还原成 pendingQuestion
+    expect(useAgentStore.getState().pendingQuestion).toBeNull();
+  });
+
   it('applyEvent adds thought to thoughts list', () => {
     const s = useAgentStore.getState();
     s.setTask('t-1', 'running');
