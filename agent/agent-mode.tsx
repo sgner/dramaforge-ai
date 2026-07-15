@@ -28,6 +28,7 @@ import { AskUserResponse } from './ask-user-response';
 import { api } from '@/services/apiClient';
 import { InfiniteCanvas } from '@/components/infinite-canvas/InfiniteCanvas';
 import { useCanvasStore } from '@/components/infinite-canvas/use-canvas-store';
+import { resolveModelId } from './model-selection';
 import './agent.css';
 
 export interface AgentModeProps {
@@ -76,7 +77,10 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
         // 自动选第一个 provider（让用户不手动选也能跑真实 LLM，避免无脑走 DevScriptedLLM 假任务）
         if (list.length > 0) {
           setSelectedProviderId(list[0].provider_id);
-          setSelectedModelId(list[0].default_model || '');
+          setSelectedModelId(resolveModelId('', {
+            defaultModel: list[0].default_model,
+            chatModels: list[0].chat_models,
+          }) || '');
         }
       })
       .catch(() => {
@@ -224,6 +228,9 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
           modelId = modelId || llmBinding?.modelId || undefined;
         }
       }
+
+      const selectedProvider = availableProviders.find((provider) => provider.id === providerId);
+      modelId = resolveModelId(modelId, selectedProvider);
 
       // Defensive sync: 如果选中的 provider 还在 localStorage 但已不在 DB，
       // 先把它的 baseUrl / apiKey / models 推回 DB，避免后端 load_llm_configs
@@ -397,7 +404,8 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
                 value={selectedProviderId}
                 onChange={(e) => {
                   setSelectedProviderId(e.target.value);
-                  setSelectedModelId('');
+                  const provider = availableProviders.find((item) => item.id === e.target.value);
+                  setSelectedModelId(resolveModelId('', provider) || '');
                 }}
                 title={availableProviders.length === 0
                   ? '⚠️ DB 里没有 LLM provider 配置 → agent 会用 DevScriptedLLM（假任务）'
