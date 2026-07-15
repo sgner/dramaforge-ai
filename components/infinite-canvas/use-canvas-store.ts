@@ -11,15 +11,6 @@ import {
   DEFAULT_NODE_SIZES,
   TaskAssetRef,
   TaskAssetKind,
-  TaskType,
-  AGENT_NODE_W,
-  AGENT_NODE_H,
-  AGENT_NODE_H_TALL,
-  AGENT_ROW_GAP,
-  AGENT_COL_GAP,
-  AGENT_GRID_COLS,
-  MAX_AGENT_NODES,
-  MAX_AGENT_NODES_PER_TYPE,
 } from './types';
 import {
   ApiConfig,
@@ -407,10 +398,10 @@ interface CanvasStore {
     observations: AgentEventLite[];
     artifacts: Record<string, ArtifactLite[]>;
     pendingQuestion: QuestionLite | null;
+    status?: string;
   }) => void;
   clearAgentNodes: () => void;
-  recordAgentNodeDrag: (nodeId: string, x: number, y: number) => void;
-  relayoutAgentNodes: () => void;
+
   /** 自动缩放 viewport 以容纳所有 agent_node + 一些 padding，让用户一眼看到完整时间线 */
   fitAgentView: (boardW: number, boardH: number) => void;
 }
@@ -1561,7 +1552,8 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
         const headerId = `agent-cat-${bucket.kind}-${projectId}`;
         const existingHeader = otherNodes.find((n) => n.id === headerId);
         const headerOverride = state.nodeOverrides[headerId] || { dx: 0, dy: 0 };
-        newAgentNodes.push({
+        // 分类标题不再创建节点；资产直接复用普通 image 节点。
+        if (false) newAgentNodes.push({
           id: headerId,
           type: 'prompt' as const,
           x: 0 + headerOverride.dx,
@@ -1571,14 +1563,13 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
           title: `${bucket.label} (${bucket.items.length})`,
           text: `${bucket.label} · ${bucket.items.length} 个资产\n\nagent 已生成 ${bucket.items.length} 个「${bucket.label}」类资产。点击下方任一图片可继续编辑 / 上传 / 基于此图继续生成。`,
           // 标记：用于区分 agent header 与用户画的 prompt
-          _agentTaskType: 'goal' as TaskType, // 仅作标记，无渲染副作用
           _agentLabel: bucket.label,
           _assetKind: bucket.kind,
           ...(existingHeader?.id ? {} : {}),
         } as CanvasNode);
 
         // 3.2) 这个分类下的每个 image 节点
-        const imageX = HEADER_W + COL_GAP_X;
+        const imageX = 0;
         bucket.items.forEach((item, i) => {
           const assetId = (item.id as string) || `${bucket.kind}-${i}`;
           const imgNodeId = `agent-asset-${bucket.kind}-${projectId}-${assetId}`;
@@ -1605,7 +1596,6 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
             _assetProviderName: itemProviderName,
             _assetModelId: itemModelId,
             _assetKind: bucket.kind,
-            _groupId: headerId, // 把 image 关联到分类 header（用于联动 / 全选 / 折叠）
             // 保留用户拖动过的其他字段
             ...(existingImg ? { running: existingImg.running } : {}),
           } as CanvasNode);
@@ -1617,7 +1607,8 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
       }
 
       return {
-        nodes: [...otherNodes, ...newAgentNodes],
+        // AgentMode 只允许资产进入画布；agent 过程由 ThoughtStream 展示。
+        nodes: [...otherNodes, ...newAgentNodes.filter((node) => node.type === 'image')],
         connections: otherConns,
       };
     });
@@ -1626,13 +1617,19 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
   clearAgentNodes: () =>
     // 按 id 前缀过滤：所有 'agent-' 开头的节点都是 agent 投影出来的
     // （包括 image / prompt header / 旧的 agent_node timeline）
-    set((s) => ({
-      nodes: s.nodes.filter((n) => !n.id.startsWith('agent-')),
-    })),
+    set((s) => {
+      const removed = new Set(s.nodes.filter((n) => n.id.startsWith('agent-')).map((n) => n.id));
+      return {
+        nodes: s.nodes.filter((n) => !removed.has(n.id)),
+        connections: s.connections.filter((c) => !removed.has(c.from) && !removed.has(c.to)),
+        selected: new Set([...s.selected].filter((id) => !removed.has(id))),
+      };
+    }),
 
   // 用户拖动 agent 节点时记录偏移。适用所有 id 以 'agent-' 开头的节点
   // （image / prompt header / 旧 agent_node）。根据节点类型用对应基准尺寸。
-  recordAgentNodeDrag: (nodeId, x, y) =>
+  /* legacy agent timeline drag handling removed */
+  /* recordAgentNodeDrag: (nodeId, x, y) =>
     set((s) => {
       const node = s.nodes.find((n) => n.id === nodeId);
       if (!node || !node.id.startsWith('agent-')) return s;
@@ -1648,10 +1645,10 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
       return {
         nodeOverrides: { ...s.nodeOverrides, [nodeId]: { dx: x - baseX, dy: y - baseY } },
       };
-    }),
+    }), */
 
   // 重新整理 agent 节点布局：按所属 _groupId 分组、按 y→x 排序、清空 override
-  relayoutAgentNodes: () =>
+  /* relayoutAgentNodes: () =>
     set((s) => {
       const agentNodes = s.nodes.filter((n) => n.id.startsWith('agent-'));
       if (!agentNodes.length) return s;
@@ -1698,7 +1695,7 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
         connections: s.connections,
         nodeOverrides: {},
       };
-    }),
+    }), */
 
   // 自动缩放 viewport 让用户一眼看到完整 agent 时间线
   // 算法：取所有 id 以 'agent-' 开头的节点（image 资产 + prompt header）的
@@ -1713,8 +1710,8 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
     for (const n of agents) {
       minX = Math.min(minX, n.x);
       minY = Math.min(minY, n.y);
-      maxX = Math.max(maxX, n.x + (n.w || AGENT_NODE_W));
-      maxY = Math.max(maxY, n.y + (n.h || AGENT_NODE_H));
+      maxX = Math.max(maxX, n.x + (n.w || 260));
+      maxY = Math.max(maxY, n.y + (n.h || 178));
     }
     // padding：四周各留 32px
     const PADDING = 32;

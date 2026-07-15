@@ -3,7 +3,7 @@ import json
 import pytest
 
 from app.agent.tools.base import ToolContext, ToolValidationError
-from app.agent.media_service import MediaRequest, MediaResult, StubMediaService
+from app.agent.media_service import MediaRequest, MediaResult, StubMediaService, MediaServiceError, get_default_media_service
 from app.agent.tools.image_tools import (
     GenerateCharacterPortraitTool,
     GeneratePropImageTool,
@@ -16,6 +16,12 @@ from app.agent.tools.audio_tools import GenerateVoiceoverTool, GenerateBgmTool
 
 def _stub_ctx():
     return ToolContext(task_id="t1", media_service=StubMediaService())
+
+
+@pytest.mark.asyncio
+async def test_default_media_service_does_not_return_test_data():
+    with pytest.raises(MediaServiceError, match="media provider"):
+        await get_default_media_service().generate(MediaRequest(kind="image", prompt="x"))
 
 
 # ========================

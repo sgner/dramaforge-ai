@@ -488,11 +488,6 @@ export const InfiniteCanvas: React.FC<{
         setDragging(false);
         // 记录 agent_node 拖动偏移，供后续 addAgentNodes 使用
         // 使用 getState() 读取最新 nodes，避免 useEffect 闭包内可能存在的 stale nodes 风险
-        const liveNodes = useCanvasStore.getState().nodes;
-        const draggedNode = liveNodes.find((n) => n.id === draggedId);
-        if (draggedNode && draggedNode.type === 'agent_node') {
-          useCanvasStore.getState().recordAgentNodeDrag(draggedId, draggedNode.x, draggedNode.y);
-        }
       }
 
       if (resizeRef.current) {
@@ -878,7 +873,6 @@ export const InfiniteCanvas: React.FC<{
             const resize = (resizeRef.current && resizeRef.current.id === n.id);
             if (drag || resize) return true;
             // agent_node 一律显示（它们通常聚集在小区域内，不参与 culling 收益）
-            if (n.type === 'agent_node') return true;
             const w = n.w || 200;
             const h = n.h || 160;
             return !(n.x + w < visX0 || n.x > visX1 || n.y + h < visY0 || n.y > visY1);

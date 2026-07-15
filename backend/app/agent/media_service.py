@@ -79,9 +79,10 @@ _default_service: MediaService | None = None
 
 
 def get_default_media_service() -> MediaService:
-    global _default_service
     if _default_service is None:
-        _default_service = StubMediaService()
+        raise MediaServiceError(
+            "media provider is not configured; configure a provider before generating media"
+        )
     return _default_service
 
 

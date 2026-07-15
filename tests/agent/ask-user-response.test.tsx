@@ -20,11 +20,17 @@ describe('AskUserResponse', () => {
     vi.restoreAllMocks();
   });
 
-  function makePendingQuestion(question: string, options: string[]) {
+  function makePendingQuestion(question: string, options: string[], extra: Record<string, any> = {}) {
     useAgentStore.setState({
       taskId: 't-ask-1',
       status: 'paused',
-      pendingQuestion: { question, options, context: {} } as any,
+      pendingQuestion: {
+        question,
+        options: options.map((label, i) => ({ id: `option-${i}`, label })),
+        selection_mode: options.length ? 'single' : 'text',
+        context: {},
+        ...extra,
+      } as any,
     });
   }
 
@@ -53,13 +59,16 @@ describe('AskUserResponse', () => {
     expect(screen.getByTestId('ask-user-question').textContent).toBe(longQ);
   });
 
-  it('option button click triggers respond + resume with single click', async () => {
+  it('single-select requires explicit confirmation before respond + resume', async () => {
     makePendingQuestion('选一个', ['A', 'B']);
     const respondSpy = vi.spyOn(api, 'respondAgent').mockResolvedValue({ ok: true } as any);
     const resumeSpy = vi.spyOn(api, 'resumeAgent').mockResolvedValue({ ok: true } as any);
     render(<AgentMode projectId="p1" />);
 
     fireEvent.click(screen.getByTestId('ask-user-option-0'));
+
+    expect(respondSpy).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('ask-user-submit'));
 
     await waitFor(() => {
       expect(respondSpy).toHaveBeenCalledWith('t-ask-1', { response: 'A' });
@@ -69,15 +78,86 @@ describe('AskUserResponse', () => {
     expect(respondSpy).toHaveBeenCalledTimes(1);
   });
 
-  it('positions popup at bottom-center (left:50% + translateX(-50%)) so ThoughtStream cannot occlude', () => {
+  it('allows free-text answers even when selectable options are present', async () => {
+    makePendingQuestion('请描述你想做的短剧', ['现代都市爱情', '古装悬疑']);
+    const respondSpy = vi.spyOn(api, 'respondAgent').mockResolvedValue({ ok: true } as any);
+    vi.spyOn(api, 'resumeAgent').mockResolvedValue({ ok: true } as any);
+    render(<AgentMode projectId="p1" />);
+
+    const input = screen.getByTestId('ask-user-input');
+    fireEvent.change(input, { target: { value: '两分钟校园喜剧，三位角色，结尾反转' } });
+    expect(screen.getByTestId('ask-user-submit')).not.toBeDisabled();
+    fireEvent.click(screen.getByTestId('ask-user-submit'));
+
+    await waitFor(() => {
+      expect(respondSpy).toHaveBeenCalledWith('t-ask-1', {
+        response: '两分钟校园喜剧，三位角色，结尾反转',
+      });
+    });
+  });
+
+  it('multiple-select submits selected values and custom text together', async () => {
+    makePendingQuestion('选择风格', ['古风', '悬疑', '现代'], {
+      selection_mode: 'multiple',
+      allow_custom: true,
+      min_selections: 2,
+      max_selections: 2,
+    });
+    const respondSpy = vi.spyOn(api, 'respondAgent').mockResolvedValue({ ok: true } as any);
+    vi.spyOn(api, 'resumeAgent').mockResolvedValue({ ok: true } as any);
+    render(<AgentMode projectId="p1" />);
+
+    fireEvent.click(screen.getByTestId('ask-user-option-0'));
+    fireEvent.click(screen.getByTestId('ask-user-option-1'));
+    fireEvent.change(screen.getByTestId('ask-user-custom-input'), { target: { value: '节奏偏快' } });
+    fireEvent.click(screen.getByTestId('ask-user-submit'));
+
+    await waitFor(() => {
+      expect(respondSpy).toHaveBeenCalledWith('t-ask-1', {
+        response: ['古风', '悬疑'],
+        custom_text: '节奏偏快',
+      });
+    });
+  });
+
+  it('infers multiple-select when the question asks for multiple choices', async () => {
+    makePendingQuestion('请至少选择题材、时长和风格三项。', ['悬疑', '爱情', '科幻', '喜剧'], {
+      selection_mode: undefined,
+    });
+    const respondSpy = vi.spyOn(api, 'respondAgent').mockResolvedValue({ ok: true } as any);
+    vi.spyOn(api, 'resumeAgent').mockResolvedValue({ ok: true } as any);
+    render(<AgentMode projectId="p1" />);
+
+    fireEvent.click(screen.getByTestId('ask-user-option-0'));
+    fireEvent.click(screen.getByTestId('ask-user-option-1'));
+    fireEvent.click(screen.getByTestId('ask-user-option-2'));
+    fireEvent.click(screen.getByTestId('ask-user-submit'));
+
+    await waitFor(() => {
+      expect(respondSpy).toHaveBeenCalledWith('t-ask-1', {
+        response: ['悬疑', '爱情', '科幻'],
+      });
+    });
+  });
+
+  it('blocks multiple-select submit until the minimum selection count is met', () => {
+    makePendingQuestion('选择风格', ['古风', '悬疑'], {
+      selection_mode: 'multiple',
+      min_selections: 1,
+    });
+    render(<AgentMode projectId="p1" />);
+    expect(screen.getByTestId('ask-user-submit')).toBeDisabled();
+    fireEvent.click(screen.getByTestId('ask-user-option-0'));
+    expect(screen.getByTestId('ask-user-submit')).not.toBeDisabled();
+  });
+
+  it('uses the dedicated bottom overlay class so ThoughtStream cannot occlude', () => {
     makePendingQuestion('选一个', ['A']);
     render(<AgentMode projectId="p1" />);
     const popup = screen.getByTestId('ask-user-response') as HTMLElement;
-    const style = popup.getAttribute('style') || '';
     // 底部居中：用 left:50% + transform:translateX(-50%) 居中，
     // 不再用 right（避免与右下角 ThoughtStream 抽屉重叠被遮挡）
-    expect(style).toMatch(/left:\s*50%/);
-    expect(style).toMatch(/translateX\(-50%\)/);
-    expect(style).not.toMatch(/right:\s*\d+/);
+    expect(popup.className).toContain('ask-user-response-card');
+    expect(popup.getAttribute('style')).toBeNull();
   });
 });

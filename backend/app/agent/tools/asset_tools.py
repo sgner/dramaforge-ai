@@ -56,7 +56,17 @@ class SaveAssetTool(BaseTool):
     async def execute(self, ctx: ToolContext, params: dict) -> dict:
         if ctx.db is None:
             # 没有 db 上下文：返回 id 占位即可（v1 演示用）
-            return {"ok": True, "id": _gen_id(), "note": "no db, asset not persisted"}
+            return {
+                "ok": True,
+                "id": _gen_id(),
+                "kind": params["kind"],
+                "asset_kind": params.get("asset_kind"),
+                "name": params.get("name") or "",
+                "title": params.get("title") or "",
+                "url": params.get("url"),
+                "prompt": params.get("prompt"),
+                "note": "no db, asset not persisted",
+            }
 
         # 延迟导入避免循环
         from app import models  # noqa: F401
@@ -84,8 +94,15 @@ class SaveAssetTool(BaseTool):
             "ok": True,
             "id": asset_id,
             "kind": params["kind"],
-            "name": params.get("name"),
+            "asset_kind": params.get("asset_kind"),
+            "name": params.get("name") or "",
+            "title": params.get("title") or "",
             "url": params.get("url"),
+            "prompt": params.get("prompt"),
+            "provider_id": params.get("provider_id"),
+            "provider_name": params.get("provider_name"),
+            "model_id": params.get("model_id"),
+            "extra": params.get("extra") or {},
         }
 
 

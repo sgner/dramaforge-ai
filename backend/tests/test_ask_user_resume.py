@@ -107,8 +107,13 @@ def test_task_pauses_on_ask_user_and_resumes_via_respond(client, askuser_llm):
     assert ask_event.payload.get("question") == "想做什么方向？"
 
     # 4. 用户调 respond
-    r = client.post(f"/api/agent/tasks/{task_id}/respond", json={"response": "A"})
+    r = client.post(f"/api/agent/tasks/{task_id}/respond", json={
+        "response": ["A"], "custom_text": "节奏偏快",
+    })
     assert r.status_code == 200
+    received = [e for e in event_bus.get_replay(task_id) if e.type == EventType.USER_INPUT_RECEIVED]
+    assert received[-1].payload["response"] == ["A"]
+    assert received[-1].payload["custom_text"] == "节奏偏快"
     # 任务在 respond 后仍应是 paused（直到 /resume 重新拉起 runtime）
     r = client.get(f"/api/agent/tasks/{task_id}")
     assert r.json()["status"] == "paused"

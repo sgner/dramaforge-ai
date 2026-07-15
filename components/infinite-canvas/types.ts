@@ -15,15 +15,6 @@ export interface Viewport {
   scale: number;
 }
 
-export type TaskType =
-  | 'goal'
-  | 'plan'
-  | 'action'
-  | 'observation'
-  | 'artifact'
-  | 'question'
-  | 'done';
-
 export type NodeType =
   | 'image'
   | 'prompt'
@@ -34,12 +25,12 @@ export type NodeType =
   | 'pipeline'
   | 'novel'
   | 'script'
-  | 'agent_node';
+  ;
 
 // 单条横向时间线：所有事件按发生顺序一字排开，超出一行后换行。
 // 目标：用户一眼看到完整 agent 进展，无需上下滚动。
 // 黑白灰风格：去掉彩色边框，只保留"节点类型 icon"作为视觉区分。
-export const AGENT_TYPE_META: Record<TaskType, { label: string; color: string; icon: string }> = {
+export const AGENT_TYPE_META: Record<string, { label: string; color: string; icon: string }> = {
   goal: { label: '目标', color: 'var(--text, #0f172a)', icon: '◎' },
   plan: { label: '计划', color: 'var(--text, #0f172a)', icon: '▤' },
   action: { label: '动作', color: 'var(--text, #0f172a)', icon: '▶' },
@@ -50,18 +41,10 @@ export const AGENT_TYPE_META: Record<TaskType, { label: string; color: string; i
 };
 
 // 紧凑节点尺寸（横向时间线）
-export const AGENT_NODE_W = 220;
-export const AGENT_NODE_H = 120;
-export const AGENT_NODE_H_TALL = 168; // 计划 / 资产 / 询问 节点较高
-export const AGENT_ROW_GAP = 40;       // 节点间垂直距离加大（16 → 40）
-export const AGENT_COL_GAP = 60;       // 节点间水平距离加大（16 → 60）
 // 每行节点数（横向时间线流：默认 5 个/行，超出换行）
-export const AGENT_GRID_COLS = 5;
 // 画布上 agent_node 总数上限：超出后合并最旧的 observation 节点，避免页面卡顿
 // 实际经验：12 个紧凑节点占 3 行 × 5 列 = 1100×440 px，缩放后单屏可看完整时间线
-export const MAX_AGENT_NODES = 12;
 // 同类型节点在画布上保留的最大数量（超过时合并）
-export const MAX_AGENT_NODES_PER_TYPE = 5;
 
 export interface CanvasNode {
   id: string;
@@ -204,7 +187,6 @@ export const DEFAULT_NODE_SIZES: Record<string, { w: number; h?: number }> = {
   pipeline: { w: 360, h: 420 },
   novel: { w: 420, h: 480 },
   script: { w: 480, h: 420 },
-  agent_node: { w: 220, h: 120 },
 };
 
 export function uid(prefix = 'n'): string {

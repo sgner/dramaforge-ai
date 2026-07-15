@@ -41,4 +41,16 @@ describe('clearAgentNodes', () => {
       'agent-cat-character-p1': { dx: 10, dy: 20 },
     });
   });
+
+  it('removes connections attached to projected asset nodes', () => {
+    useCanvasStore.setState({
+      nodes: [
+        { id: 'agent-asset-1', type: 'image', x: 0, y: 0, w: 260 } as any,
+        { id: 'user-image-1', type: 'image', x: 300, y: 0, w: 260 } as any,
+      ],
+      connections: [{ id: 'c1', from: 'agent-asset-1', to: 'user-image-1' }],
+    });
+    useCanvasStore.getState().clearAgentNodes();
+    expect(useCanvasStore.getState().connections).toEqual([]);
+  });
 });

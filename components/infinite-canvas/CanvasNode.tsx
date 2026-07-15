@@ -1,6 +1,6 @@
 import React, { useCallback, useRef, useState } from 'react';
 import { Loader2, Play, Check, X, Square, RotateCcw, BookOpen, FileText, Sparkles, Wand2, Save, Edit3, Eye, User, Mountain, Clapperboard, Theater } from 'lucide-react';
-import { CanvasNode, NodeType, TaskType, AGENT_TYPE_META } from './types';
+import { CanvasNode, NodeType } from './types';
 import { useCanvasStore } from './use-canvas-store';
 import { estimatedNodeRect } from './engine';
 import { useI18n } from '../../i18n';
@@ -103,7 +103,7 @@ export const CanvasNodeComponent: React.FC<NodeProps> = React.memo(
     );
 
     // ===== 参考项目智能画布节点分类逻辑 =====
-    const isPrompt = node.type === 'prompt';
+    const isPrompt = node.type === 'prompt' || node.type === 'promptGroup';
     const isLoop = node.type === 'loop';
     const isGroupType = node.type === 'group';
     const isVideoNode = node.type === 'video';
@@ -122,7 +122,6 @@ export const CanvasNodeComponent: React.FC<NodeProps> = React.memo(
     // 参考项目类名逻辑
     const nodeClass = [
       'image-node',
-      node.type === 'agent_node' ? 'agent-canvas-node' : '',
       isGroupType ? 'group-container-node' : '',
       isVideoNode ? 'video-node' : '',
       isPipelineNode ? 'pipeline-node' : '',
@@ -215,8 +214,9 @@ const NodeBody: React.FC<{
   onOpenTemplate?: (nodeId: string) => void;
 }> = React.memo(({ node, onOpenTemplate }) => {
   if (node.type === 'group') return <GroupNodeBody node={node} />;
-  if (node.type === 'agent_node') return <AgentNodeBody node={node} />;
-  if (node.type === 'prompt') return <PromptNodeBody node={node} onOpenTemplate={onOpenTemplate} />;
+  if (node.type === 'prompt' || node.type === 'promptGroup') {
+    return <PromptNodeBody node={node} onOpenTemplate={onOpenTemplate} />;
+  }
   if (node.type === 'loop') return <LoopNodeBody node={node} />;
   if (node.type === 'video') return <VideoNodeBody node={node} />;
   if (node.type === 'pipeline') return <PipelineNodeBody node={node} />;
@@ -1642,11 +1642,11 @@ ScriptNodeBody.displayName = 'ScriptNodeBody';
 /* ===== Agent Node (agent 事件节点) ===== */
 
 const AgentNodeBody: React.FC<{ node: CanvasNode }> = React.memo(({ node }) => {
-  const taskType = (node._agentTaskType as TaskType) || 'goal';
+  const taskType = (node._agentTaskType as string) || 'goal';
   const status = (node._agentStatus as string) || 'pending';
   const label = (node._agentLabel as string) || '';
   const payload = (node._agentPayload as Record<string, any>) || {};
-  const meta = AGENT_TYPE_META[taskType] || AGENT_TYPE_META.goal;
+  const meta = { label: taskType, icon: '•' };
   const isArtifact = taskType === 'artifact';
   const isPlan = taskType === 'plan';
   const isQuestion = taskType === 'question';
@@ -1863,6 +1863,11 @@ const AgentNodeBody: React.FC<{ node: CanvasNode }> = React.memo(({ node }) => {
           }}
         >
           等待用户回答
+        </div>
+      )}
+      {isQuestion && Array.isArray(payload.options) && payload.options.length > 0 && (
+        <div data-testid="agent-node-question-options" style={{ fontSize: 9, color: 'var(--muted, #475569)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {payload.options.slice(0, 4).map((option: any) => typeof option === 'string' ? option : (option?.label || option?.value || '')).filter(Boolean).join(' · ')}
         </div>
       )}
     </div>

@@ -23,6 +23,7 @@ export const TaskList: React.FC<TaskListProps> = ({
   const [tasks, setTasks] = useState<AgentTaskOut[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const [actionTaskId, setActionTaskId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -56,6 +57,20 @@ export const TaskList: React.FC<TaskListProps> = ({
   // 用 ref 转发以避免 setState
   const loadRef = useRef(load);
   loadRef.current = load;
+
+  const runAction = async (taskId: string, action: 'resume' | 'stop' | 'retry') => {
+    setActionTaskId(taskId);
+    try {
+      if (action === 'resume') await api.resumeAgent(taskId);
+      if (action === 'stop') await api.stopAgent(taskId);
+      if (action === 'retry') await api.retryAgent(taskId);
+      await loadRef.current();
+    } catch (e) {
+      console.warn(`TaskList: failed to ${action} task`, e);
+    } finally {
+      setActionTaskId(null);
+    }
+  };
 
   const headerBar = (
     <div className="task-list-head" data-testid="task-list-head">
@@ -114,6 +129,20 @@ export const TaskList: React.FC<TaskListProps> = ({
             <span className="task-list-goal">{t.user_goal || '(空目标)'}</span>
             <span className="task-list-time">
               {formatRelative(t.updated_at || t.created_at)}
+            </span>
+            <span className="task-list-actions" onClick={(e) => e.stopPropagation()}>
+              {t.status === 'paused' && (
+                <button type="button" data-testid={`task-list-resume-${t.id}`} className="tool-btn task-list-action"
+                  disabled={actionTaskId === t.id} onClick={() => void runAction(t.id, 'resume')}>继续</button>
+              )}
+              {(t.status === 'pending' || t.status === 'running') && (
+                <button type="button" data-testid={`task-list-stop-${t.id}`} className="tool-btn task-list-action"
+                  disabled={actionTaskId === t.id} onClick={() => void runAction(t.id, 'stop')}>停止</button>
+              )}
+              {t.status === 'failed' && (
+                <button type="button" data-testid={`task-list-retry-${t.id}`} className="tool-btn task-list-action"
+                  disabled={actionTaskId === t.id} onClick={() => void runAction(t.id, 'retry')}>重试</button>
+              )}
             </span>
           </div>
         ))}

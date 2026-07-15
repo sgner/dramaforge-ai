@@ -1,244 +1,147 @@
 # DramaForge AI
 
-<div align="center">
+DramaForge AI 是一个面向短剧创作的 React + FastAPI 工作台。它把用户目标、Agent 推理、资产生成和画布编辑放在同一条工作流中：Agent 的思考与状态显示在 ThoughtStream，画布只展示可编辑的资产节点。
 
-**一站式 AI 短剧制作平台**
+![React](https://img.shields.io/badge/React-19-blue.svg)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.8-blue.svg)
+![Vite](https://img.shields.io/badge/Vite-6-blue.svg)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688.svg)
 
-集成 Gemini、Nanobanana 和 Sora 2，实现从脚本到视频的自动化生成
+## 当前能力
 
-[![React](https://img.shields.io/badge/React-19.2.3-blue.svg)](https://react.dev/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.8-blue.svg)](https://www.typescriptlang.org/)
-[![Vite](https://img.shields.io/badge/Vite-6.2-purple.svg)](https://vitejs.dev/)
+- Agent 模式：输入创作目标，Agent 通过 ReAct 工具链解析目标、规划步骤并生成资产。
+- ThoughtStream：集中展示思考、动作、观察、工具错误和用户交互，不在画布中创建过程节点。
+- 资产画布：复用普通画布节点展示脚本、角色、场景、道具、图片、音频和视频等资产。
+- 人机协作：Agent 可以暂停并向用户提问；选项支持单选、多选和自由输入。
+- 任务控制：支持查看任务、暂停等待、继续、主动停止和失败重试。
+- 资产持久化：`save_asset` 写入后端数据库，并通过 `artifact_created` 事件同步到前端。
+- Provider 管理：LLM 和媒体 provider 统一从后端配置读取；未配置时会明确报错，不使用固定测试动作或假数据。
+- 普通画布流程：支持起始、上传、提示词、循环和视频生成等节点，并可继续手动编辑和运行。
 
-</div>
+## 界面预览
 
-## 功能特性
-
-- **脚本生成**：使用 Google Gemini AI 从小说或创意想法生成专业短剧脚本
-- **角色设计**：使用 Nanobanana API 创建详细的角色参考图（三视图设计）
-- **分镜制作**：为每个场景生成 6 格分镜图
-- **视频生成**：使用 Sora 2 API 制作高质量视频
-- **多种艺术风格**：动画（2D）、电影写实、赛博朋克、水彩、3D 卡通
-- **多语言支持**：中文（简体）、英语、日语、韩语
-- **双模式操作**：
-  - 自动模式：从输入到视频的全自动化流程
-  - 手动模式：逐步控制，支持编辑功能
-- **实时进度跟踪**：监控每个阶段的生成状态
-- **交互式编辑**：修改提示词、重新生成场景、调整角色分配
-
-## 图片画廊
-
-### Agent 模式
-
-Agent 模式是 DramaForge AI 的核心创新，基于 ReAct（Reasoning + Acting）模式实现 AI 自主决策创作：
-
-- **AI 自主创作**：输入目标后，Agent 自主拆解任务、调用 18 个工具完成全流程
-- **实时可视化**：无限画布实时展示 Agent 的思考、动作和产出
-- **人机协作**：随时暂停、介入、调整方向，Agent 等待你的指令后继续
+以下截图对应当前版本的 Agent 画布和资产节点布局。Agent 过程位于右侧 ThoughtStream，画布区域只保留资产节点。
 
 <div align="center">
 
-| Agent 执行中 | Agent 执行结果 |
-|:---:|:---:|
-| ![Agent 执行中](docs/屏幕截图%202026-07-14%20105107.png) | ![Agent 执行结果](docs/屏幕截图%202026-07-14%20105546.png) |
+<img src="docs/屏幕截图%202026-07-14%20105107.png" alt="Agent 资产画布" width="780" />
 
-</div>
-
-### 界面展示
-
-<div align="center">
-
-| 主界面 | 任务卡片 | 角色编辑 |
-|:---:|:---:|:---:|
-| ![主界面](https://github.com/sgner/images/blob/main/%E5%B1%8F%E5%B9%95%E6%88%AA%E5%9B%BE%202026-01-27%20192758.png) | ![任务卡片](https://github.com/sgner/images/blob/main/%E5%B1%8F%E5%B9%95%E6%88%AA%E5%9B%BE%202026-01-27%20192750.png) | ![角色编辑](https://github.com/sgner/images/blob/main/%E5%B1%8F%E5%B9%95%E6%88%AA%E5%9B%BE%202026-01-27%20194111.png) |
-
-</div>
-
-### 生成效果展示
-
-<div align="center">
-
-
-![项目详情](https://github.com/sgner/images/blob/main/%E5%B1%8F%E5%B9%95%E6%88%AA%E5%9B%BE%202026-01-27%20194515.png) 
-![角色登场](https://github.com/sgner/images/blob/main/%E5%B1%8F%E5%B9%95%E6%88%AA%E5%9B%BE%202026-01-27%20201515.png)
-
-</div>
-
-### 流程
-
-<div align="center">
-
-| 脚本生成 | 提示词优化 | 最终效果 |
-|:---:|:---:|:---:|
-| ![脚本生成](https://github.com/sgner/images/blob/main/%E5%B1%8F%E5%B9%95%E6%88%AA%E5%9B%BE%202026-01-27%20200719.png) | ![提示词优化](https://github.com/sgner/images/blob/main/%E5%B1%8F%E5%B9%95%E6%88%AA%E5%9B%BE%202026-01-27%20201046.png) | ![最终效果](https://github.com/sgner/images/blob/main/%E5%B1%8F%E5%B9%95%E6%88%AA%E5%9B%BE%202026-01-27%20201453.png) |
+<img src="docs/屏幕截图%202026-07-14%20105546.png" alt="普通画布节点面板" width="560" />
 
 </div>
 
 ## 技术栈
 
-- **前端框架**：React 19.2.3 + TypeScript
-- **构建工具**：Vite 6.2
-- **AI 服务**：
-  目前使用的是[贞贞的AI工坊](https://ai.t8star.cn/)提供的服务，其它接口可能不兼容
-  - Google Gemini 3 Pro（脚本生成与优化）
-  - Nanobanana API（角色设计与分镜生成）
-  - Sora 2 API（视频生成）
-- **HTTP 客户端**：Axios
-- **图标库**：Lucide React
+### 前端
 
-## 安装
+- React 19
+- TypeScript 5.8
+- Vite 6
+- Zustand
+- Lucide React
+- Vitest + Testing Library
 
-**前置要求**：Node.js（推荐 v18 或更高版本）
+### 后端
 
-1. 克隆仓库：
-   ```bash
-   git clone https://github.com/yourusername/dramaforge-ai.git
-   cd dramaforge-ai
-   ```
+- Python 3.12+
+- FastAPI
+- SQLAlchemy
+- SQLite（开发环境默认）
+- OpenAI-compatible LLM client
+- SSE / replay buffer 用于 Agent 事件流
 
-2. 安装依赖：
-   ```bash
-   npm install
-   ```
+## 本地运行
 
-3. 配置 API 密钥：
-   - 启动应用并点击 API 密钥配置按钮
-   - 输入您的 API 密钥：
-     - Google Gemini API
-     - Nanobanana API
-     - Sora API
-   - 如果使用代理服务，可选择配置自定义基础 URL
+### 1. 安装前端依赖
 
-4. 运行开发服务器：
-   ```bash
-   npm run dev
-   ```
+```bash
+npm install
+```
 
-5. 在浏览器中打开 `http://localhost:5173`
+### 2. 安装后端依赖
 
-## 使用指南
+```bash
+cd backend
+uv sync
+```
 
-### 创建新任务
+如果没有安装 `uv`，也可以使用 Python 3.12 虚拟环境安装项目依赖。
 
-1. 点击"新建任务"按钮
-2. 选择输入类型：
-   - **小说**：粘贴小说文本
-   - **创意**：输入创意想法（将扩展为完整故事）
-3. 选择艺术风格和语言
-4. 选择模式（自动或手动）
-5. 点击"创建"开始生成流程
+### 3. 启动后端
 
-### 流程阶段
+在 `backend` 目录执行：
 
-应用遵循以下逻辑步骤：
+```bash
+uv run uvicorn app:app --reload --port 8000
+```
 
-1. **预处理**：分段和分析输入文本
-2. **脚本生成**：将文本转换为结构化脚本场景
-3. **角色设计**：生成角色参考图
-4. **分镜制作**：为每个场景创建 6 格分镜
-5. **提示词优化**：优化 Sora 视频生成的提示词
-6. **视频生成**：为每个场景制作最终视频
-7. **完成**：所有资源准备就绪，可导出
+后端 API 默认位于 `http://localhost:8000`，健康检查地址为 `http://localhost:8000/api/health`。
 
-### 手动模式功能
+### 4. 启动前端
 
-在手动模式下，您可以：
-- 编辑角色信息并重新生成设计
-- 修改分镜提示词并重新生成图像
-- 调整 Sora 提示词并重新生成视频
-- 为特定场景分配角色
-- 下载单个资源（图像、视频）
+在项目根目录执行：
 
-### 导出功能
+```bash
+npm run dev
+```
 
-- 将分镜下载为 PNG 图像
-- 将视频下载为 MP4 文件
-- 导出角色设计图
+打开 <http://localhost:5173>。Vite 会把 `/api` 请求代理到本地后端。
+
+## 使用 Agent 模式
+
+1. 先在 Provider 设置中配置一个可用的 LLM provider；需要生成图片、视频或音频时，同时配置对应的媒体 provider。
+2. 在 Agent 输入框输入目标，例如“制作一个关于郑成功的三分钟历史短剧”。
+3. Agent 会在 ThoughtStream 中展示当前步骤，并在需要补充信息时暂停提问。
+4. 用户可以点击选项、进行多选，或直接输入自己的描述后提交。
+5. 生成的资产会持久化并出现在画布中；Agent 的思考和状态不会被绘制成画布节点。
+6. 任务运行期间可以主动停止。停止后后台任务和过期的 LLM 动作都会被取消，不会继续执行旧动作。
+
+## 常用命令
+
+```bash
+# 前端开发
+npm run dev
+
+# 前端测试
+npm test
+
+# 前端生产构建
+npm run build
+
+# 后端测试
+cd backend
+uv run pytest
+```
 
 ## 项目结构
 
-```
+```text
 dramaforge-ai/
-├── components/           # React 组件
-│   ├── ApiKeyModal.tsx
-│   ├── ConfirmModal.tsx
-│   ├── EditCharacterModal.tsx
-│   ├── ImageLightbox.tsx
-│   ├── NewTaskModal.tsx
-│   └── TaskCard.tsx
-├── services/           # API 服务层
-│   ├── geminiService.ts      # Gemini AI 集成
-│   ├── mediaService.ts       # Nanobanana & Sora 集成
-│   └── mockExternalServices.ts
-├── App.tsx             # 主应用组件
-├── types.ts            # TypeScript 类型定义
-├── constants.ts        # 常量和提示词
-├── locales.ts          # 国际化
-├── index.html
-├── index.tsx
-├── package.json
-├── tsconfig.json
-└── vite.config.ts
+├── agent/                      # Agent UI、ThoughtStream、任务控制
+├── components/infinite-canvas/ # 普通资产画布和节点运行逻辑
+├── services/                   # 前端 API client 和媒体服务
+├── backend/app/agent/          # Agent runtime、LLM、工具和事件
+├── backend/app/routers/        # FastAPI 路由
+├── backend/app/models.py       # 数据库模型
+├── backend/tests/              # 后端回归测试
+├── tests/                      # 前端组件和画布测试
+└── docs/                       # 当前设计文档和界面截图
 ```
 
-## API 配置
+## 事件与数据流
 
-### Gemini API
-- 模型：`gemini-3-pro-preview`
-- 用途：脚本生成、提示词优化、故事扩展、预处理
-- 获取 API 密钥：https://ai.google.dev/
-
-### Nanobanana API
-- 用途：角色设计生成、分镜生成
-- 支持：文本生成图像和图像生成图像
-- 获取 API 密钥：https://nanobanana.com/
-
-### Sora API
-- 用途：最终视频生成
-- 获取 API 密钥：https://openai.com/sora
-
-## 开发
-
-### 可用脚本
-
-```bash
-npm run dev      # 启动开发服务器
-npm run build    # 构建生产版本
-npm run preview  # 预览生产构建
+```text
+用户目标
+  → startAgent
+  → AgentRuntime / LLM
+  → ThoughtStream（思考、动作、观察、提问）
+  → save_asset + artifact_created
+  → Agent store
+  → 普通资产节点
 ```
 
-### 生产构建
+Agent 任务、步骤和资产都由后端持久化。用户回复会作为下一轮 LLM 的 observation 重新注入上下文；停止、继续和重试也都通过后端任务状态驱动。
 
-```bash
-npm run build
-```
+## 许可证
 
-构建文件将位于 `dist` 目录中。
-
-## 功能详情
-
-### 脚本生成
-- 将小说或想法转换为包含对话、动作和情绪的结构化脚本
-- 分析情节、氛围和角色关系
-- 支持长文本自动分段
-
-### 角色设计
-- 生成三视图角色表（正面、侧面、背面）
-- 支持从用户上传的参考图进行图像生成图像
-- 跨场景保持角色外观一致性
-
-### 分镜制作
-- 为每个场景创建 6 格分镜
-- 可视化镜头角度、角色位置和环境
-- 可编辑提示词用于重新生成
-
-### 视频生成
-- 使用优化的提示词以获得最佳效果
-- 实时进度跟踪
-- 失败重试机制
-
-## 浏览器支持
-
-- Chrome/Edge（推荐）
-- Firefox
-- Safari。
+项目当前处于持续开发阶段。使用第三方模型或媒体 provider 时，请遵守对应服务商的条款和使用限制。

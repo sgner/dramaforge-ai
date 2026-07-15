@@ -102,12 +102,92 @@ class _FinishLLMTool(BaseTool):
         return {"done": True}
 
 
+class _SaveAssetTool(BaseTool):
+    name = "save_asset"
+    description = "save asset"
+    category = "asset"
+    parameters = []
+
+    async def execute(self, ctx, params):
+        return {
+            "ok": True,
+            "id": "asset-1",
+            "kind": "text",
+            "asset_kind": "script",
+            "name": "郑明传奇剧本",
+            "url": "/assets/script-1.txt",
+        }
+
+
+class _BlockingLLM:
+    def __init__(self):
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def generate(self, messages, tools=None, **kwargs):
+        self.started.set()
+        await self.release.wait()
+        from app.agent.llm import LLMResponse
+        return LLMResponse(tool_name="echo", tool_args={"text": "must-not-run"})
+
+
 def test_agent_state_enum():
     """状态枚举。"""
     assert AgentState.PENDING.value == "pending"
     assert AgentState.RUNNING.value == "running"
     assert AgentState.DONE.value == "done"
     assert AgentState.FAILED.value == "failed"
+
+
+def test_runtime_messages_include_user_response_observation():
+    """runtime 传给 LLM 的消息必须包含 ask_user 的用户回答。"""
+    llm = _StubLLM([])
+    memory = AgentMemory(user_goal="郑明传奇", plan=[])
+    memory.add_step(
+        step_number=1,
+        thought="等待用户补充",
+        action={"tool": "ask_user"},
+        observation={"success": True, "user_response": {"response": "郑明传奇"}},
+        status="success",
+    )
+    runtime = AgentRuntime(task_id="t1", llm=llm, memory=memory)
+
+    messages = runtime._build_messages()
+
+    assert "郑明传奇" in messages[0]["content"]
+    assert "user_response" in messages[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_does_not_execute_after_cancel_during_llm_call():
+    """主动停止后，即使正在等待 LLM 返回，也不得执行已经返回的旧动作。"""
+    llm = _BlockingLLM()
+    runtime = AgentRuntime(task_id="t-stop", llm=llm, memory=AgentMemory(user_goal="x"))
+    tool = _EchoTool()
+    tool.execute = AsyncMock(return_value={"echo": "must-not-run"})
+    runtime.registry.register(tool)
+
+    running = asyncio.create_task(runtime.step())
+    await llm.started.wait()
+    runtime.state = AgentState.CANCELLED
+    llm.release.set()
+    await running
+
+    tool.execute.assert_not_awaited()
+    assert runtime.state == AgentState.CANCELLED
+
+
+@pytest.mark.asyncio
+async def test_runtime_projects_saved_asset_into_memory_artifacts():
+    """save_asset 成功后必须进入 artifacts，供前端生成普通资产节点。"""
+    llm = _StubLLM([{"tool_name": "save_asset", "tool_args": {}, "content": None}])
+    memory = AgentMemory(user_goal="郑明传奇", plan=[])
+    runtime = AgentRuntime(task_id="t1", llm=llm, memory=memory)
+    runtime.registry.register(_SaveAssetTool())
+
+    await runtime.step()
+
+    assert memory.artifacts["script"][0]["id"] == "asset-1"
 
 
 @pytest.mark.asyncio

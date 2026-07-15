@@ -9,6 +9,7 @@ import { useAgentStore } from '@/agent/use-agent-store';
 vi.mock('@/services/apiClient', () => ({
   api: {
     respondAgent: vi.fn().mockResolvedValue({ ok: true }),
+    resumeAgent: vi.fn().mockResolvedValue({ ok: true }),
   },
 }));
 
@@ -95,6 +96,7 @@ describe('<ErrorRecoveryCard />', () => {
         recovery_action: 'change_model',
         new_model_id: 'dall-e-2',
       });
+      expect(api.resumeAgent).toHaveBeenCalledWith('t-1');
     });
   });
 

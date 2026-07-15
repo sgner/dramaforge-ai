@@ -132,7 +132,18 @@ def build_react_prompt(
             action = s.get("action", {})
             tool = action.get("tool") if isinstance(action, dict) else None
             status = s.get("status", "?")
-            step_lines.append(f"#{n} [{status}] {thought} → {tool}")
+            observation = s.get("observation")
+            observation_text = ""
+            if observation:
+                try:
+                    observation_text = " | observation: " + json.dumps(
+                        observation,
+                        ensure_ascii=False,
+                        default=str,
+                    )[:4000]
+                except (TypeError, ValueError):
+                    observation_text = f" | observation: {str(observation)[:4000]}"
+            step_lines.append(f"#{n} [{status}] {thought} → {tool}{observation_text}")
         parts.append("【最近步骤（最近 10 步）】\n" + "\n".join(step_lines))
 
     # 工具列表

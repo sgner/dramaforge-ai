@@ -160,6 +160,7 @@ class AgentUserResponse(BaseModel):
     Spec B: 新增 recovery_action / new_model_id 支持工具失败恢复。
     """
     response: Optional[Any] = None
+    custom_text: Optional[str] = None
     approved: bool = True
     # Spec B: 失败恢复决策
     recovery_action: Optional[Literal["retry", "change_model", "skip"]] = None

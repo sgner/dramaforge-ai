@@ -14,6 +14,7 @@ export const ErrorRecoveryCard: React.FC = () => {
   const taskId = useAgentStore((s) => s.taskId);
   const [action, setAction] = useState<'retry' | 'change_model' | 'skip'>('retry');
   const [modelId, setModelId] = useState<string>('');
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     if (pending) {
@@ -25,11 +26,18 @@ export const ErrorRecoveryCard: React.FC = () => {
   if (!pending) return null;
 
   const onConfirm = async () => {
-    await api.respondAgent(taskId, {
-      response: action,
-      recovery_action: action,
-      new_model_id: action === 'change_model' ? modelId : null,
-    });
+    if (!taskId || submitting) return;
+    setSubmitting(true);
+    try {
+      await api.respondAgent(taskId, {
+        response: action,
+        recovery_action: action,
+        new_model_id: action === 'change_model' ? modelId : null,
+      });
+      await api.resumeAgent(taskId);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const overlayStyle: React.CSSProperties = {
@@ -127,6 +135,7 @@ export const ErrorRecoveryCard: React.FC = () => {
           data-testid="erc-confirm"
           type="button"
           onClick={onConfirm}
+          disabled={submitting}
           style={{
             width: '100%',
             padding: '10px 16px',

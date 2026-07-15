@@ -100,6 +100,28 @@ def test_build_react_prompt_includes_recent_steps():
     assert "success" in p.lower()
 
 
+def test_build_react_prompt_includes_user_response_observation():
+    """用户回答 ask_user 后，下一轮 LLM 必须能看到回答内容。"""
+    p = build_react_prompt(
+        user_goal="郑明传奇",
+        plan=[],
+        artifacts={},
+        recent_steps=[{
+            "step_number": 2,
+            "thought": "等待用户补充信息",
+            "action": {"tool": "ask_user"},
+            "observation": {
+                "success": True,
+                "user_response": {"response": "郑明传奇"},
+            },
+            "status": "success",
+        }],
+        tool_summaries=[],
+    )
+    assert "郑明传奇" in p
+    assert "user_response" in p
+
+
 def test_build_react_prompt_includes_tool_parameter_schema():
     """ReAct prompt 必须把工具参数名 / 类型 / 必填告诉 LLM，
     否则 LLM 会瞎猜参数名（如把 user_input 写成 user_text），工具 validate 失败 → 死循环。

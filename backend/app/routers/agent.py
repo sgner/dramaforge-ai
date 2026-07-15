@@ -21,7 +21,6 @@ from ..agent.events import event_bus, AgentEvent, EventType
 from ..agent.memory import AgentMemory, StepRecord
 from ..agent.runtime import AgentRuntime, AgentState
 from ..agent.tools import build_default_registry
-from ..agent.media_service import StubMediaService
 from ..agent.llm_factory import load_llm_configs, select_llm_for_task, NoLLMConfigured
 from ..agent.tools import list_tool_metadata
 
@@ -42,6 +41,19 @@ def _gen_id() -> str:
 _RUNNING_RUNTIMES: dict[str, AgentRuntime] = {}
 _RUNNING_TASKS: dict[str, asyncio.Task] = {}
 _RUNNING_LOCK = asyncio.Lock()
+
+
+def _schedule_runtime(task_id: str, coroutine) -> asyncio.Task:
+    """Register a runtime task so the stop endpoint can cancel it."""
+    job = asyncio.create_task(coroutine)
+    _RUNNING_TASKS[task_id] = job
+
+    def _forget(done: asyncio.Task) -> None:
+        if _RUNNING_TASKS.get(task_id) is done:
+            _RUNNING_TASKS.pop(task_id, None)
+
+    job.add_done_callback(_forget)
+    return job
 
 
 # ========================
@@ -85,7 +97,7 @@ async def create_task(body: schemas.AgentTaskCreate, db: Session = Depends(get_d
 
     # 已在 FastAPI 主 event loop 中：直接调度 runtime 协程
     # 必须在 task_dict 取得后再调度——后台 task 立即读 task_dict
-    asyncio.create_task(_spawn_runtime(task_dict))
+    _schedule_runtime(task_dict["id"], _spawn_runtime(task_dict))
 
     return task_dict
 
@@ -226,7 +238,11 @@ async def user_respond(task_id: str, body: schemas.AgentUserResponse, db: Sessio
     task = db.query(AgentTask).filter_by(id=task_id).first()
     if not task:
         raise HTTPException(404, f"Task {task_id} not found")
-    task.pending_response = {"response": body.response, "approved": body.approved}
+    task.pending_response = {
+        "response": body.response,
+        "custom_text": body.custom_text,
+        "approved": body.approved,
+    }
     if body.recovery_action:
         task.pending_response["recovery_action"] = body.recovery_action
     if body.new_model_id:
@@ -239,6 +255,7 @@ async def user_respond(task_id: str, body: schemas.AgentUserResponse, db: Sessio
         task_id=task_id, type=EventType.USER_INPUT_RECEIVED,
         payload={
             "response": body.response,
+            "custom_text": body.custom_text,
             "approved": body.approved,
             "recovery_action": body.recovery_action,
             "new_model_id": body.new_model_id,
@@ -256,12 +273,13 @@ async def _spawn_runtime(task_dict: dict) -> None:
 
     流程：
     1. 构造 memory / registry / llm / runtime
-    2. 注入 StubMediaService 到所有媒体工具
+    2. 构造真实媒体工具上下文
     3. 注册到 _RUNNING_RUNTIMES
     4. 跑主循环（见 _run_runtime_loop）
     5. 完成后清理注册表
     """
     task_id = task_dict["id"]
+    runtime_db = None
     try:
         # 1. 选 LLM：必须从 DB 选真实 LLM，无 provider 配置时直接抛错
         # 任务在新的 DB 会话里跑，避免 asyncio.create_task 里持有 request-scoped session
@@ -298,22 +316,18 @@ async def _spawn_runtime(task_dict: dict) -> None:
         # 3. 构造工具注册表
         registry = build_default_registry()
 
-        # 4. 注入 StubMediaService 到所有 image/video/audio 工具
-        media = StubMediaService()
-        for tool in registry.list():
-            if tool.category in ("image", "video", "audio"):
-                try:
-                    tool._media_service = media  # type: ignore[attr-defined]
-                except Exception:
-                    pass
-
+        # 4. 构造 runtime
         # 5. 构造 runtime
+        # ToolContext 需要真实 DB session 才能让 save_asset/get_artifacts 生效。
+        # 不能只依赖每轮持久化函数的独立 session，否则资产工具会走 no-db 占位分支。
+        runtime_db = SessionLocal()
         runtime = AgentRuntime(
             task_id=task_id,
             llm=llm,
             memory=memory,
             registry=registry,
             project_id=task_dict.get("project_id"),
+            db=runtime_db,
             max_steps=task_dict.get("max_steps", 30) or 30,
             skip_confirm=bool(task_dict.get("skip_confirm", False)),
         )
@@ -361,6 +375,8 @@ async def _spawn_runtime(task_dict: dict) -> None:
         except Exception:
             pass
     finally:
+        if runtime_db is not None:
+            runtime_db.close()
         async with _RUNNING_LOCK:
             _RUNNING_RUNTIMES.pop(task_id, None)
             _RUNNING_TASKS.pop(task_id, None)
@@ -378,6 +394,7 @@ async def _continue_runtime(task_id: str) -> None:
     from ..database import SessionLocal
     from ..models import AgentStep
 
+    runtime_db = None
     try:
         # 1. 读 task + steps 重建 memory
         with SessionLocal() as db:
@@ -431,21 +448,16 @@ async def _continue_runtime(task_id: str) -> None:
 
         # 3. 构造 registry + 注入 media service
         registry = build_default_registry()
-        media = StubMediaService()
-        for tool in registry.list():
-            if tool.category in ("image", "video", "audio"):
-                try:
-                    tool._media_service = media
-                except Exception:
-                    pass
-
         # 4. 构造 runtime，从 PAUSED 状态启动以匹配 pending_request
+        # 恢复路径同样必须注入 DB，否则恢复后的 save_asset 仍会静默不落库。
+        runtime_db = SessionLocal()
         runtime = AgentRuntime(
             task_id=task_id,
             llm=llm,
             memory=memory,
             registry=registry,
             project_id=task_dict.get("project_id"),
+            db=runtime_db,
             max_steps=task_dict["max_steps"],
             skip_confirm=task_dict["skip_confirm"],
         )
@@ -481,7 +493,8 @@ async def _continue_runtime(task_id: str) -> None:
             _RUNNING_RUNTIMES[task_id] = runtime
 
         # 6. 注入用户响应
-        user_response = (task_dict.get("pending_response") or {}).get("response")
+        pending_response = task_dict.get("pending_response") or {}
+        user_response = pending_response
         if runtime.state == AgentState.PAUSED and user_response is not None:
             # resume() 会把 user_response 注入 memory 并跑一步；后续主循环会接管
             await runtime.resume(user_response)
@@ -504,6 +517,8 @@ async def _continue_runtime(task_id: str) -> None:
         except Exception:
             pass
     finally:
+        if runtime_db is not None:
+            runtime_db.close()
         async with _RUNNING_LOCK:
             _RUNNING_RUNTIMES.pop(task_id, None)
             _RUNNING_TASKS.pop(task_id, None)
@@ -537,6 +552,9 @@ async def _run_runtime_loop(task_id: str, runtime: AgentRuntime, memory: AgentMe
         # step() 内部已发 TASK_FAILED 事件（如超 max_steps），
         # 这里只更新 DB 状态，不再重复发事件。
         _update_task_status(task_id, "failed")
+        return
+    if runtime.state == AgentState.CANCELLED:
+        _update_task_status(task_id, "cancelled")
         return
     final_status = "done" if runtime.state.value == "done" else "failed"
     _update_task_status(task_id, final_status)
@@ -629,6 +647,56 @@ async def pause_task(task_id: str, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
+@router.post("/tasks/{task_id}/stop")
+async def stop_task(task_id: str, db: Session = Depends(get_db)):
+    """停止正在运行或排队中的任务。"""
+    task = db.query(AgentTask).filter_by(id=task_id).first()
+    if not task:
+        raise HTTPException(404, f"Task {task_id} not found")
+    if task.status not in ("pending", "running"):
+        raise HTTPException(400, f"Cannot stop task in status {task.status}")
+    task.status = "cancelled"
+    task.updated_at = _now()
+    db.commit()
+    runtime = _RUNNING_RUNTIMES.get(task_id)
+    job = _RUNNING_TASKS.get(task_id)
+    if runtime is not None:
+        runtime.state = AgentState.CANCELLED
+    if job is not None and not job.done():
+        job.cancel()
+    await event_bus.publish(AgentEvent(
+        task_id=task_id, type=EventType.TASK_FAILED,
+        payload={"error": "task stopped by user", "cancelled": True},
+    ))
+    return {"ok": True, "task_id": task_id, "status": "cancelled"}
+
+
+@router.post("/tasks/{task_id}/retry")
+async def retry_task(task_id: str, db: Session = Depends(get_db)):
+    """从头重试失败或已停止的任务。"""
+    from ..models import AgentStep
+
+    task = db.query(AgentTask).filter_by(id=task_id).first()
+    if not task:
+        raise HTTPException(404, f"Task {task_id} not found")
+    if task.status not in ("failed", "cancelled"):
+        raise HTTPException(400, f"Cannot retry task in status {task.status}")
+    if task_id in _RUNNING_RUNTIMES:
+        raise HTTPException(409, "Task is still running")
+    db.query(AgentStep).filter_by(task_id=task_id).delete()
+    task.status = "pending"
+    task.plan = []
+    task.artifacts = {}
+    task.pending_response = None
+    task.total_cost_usd = 0.0
+    task.total_tokens = 0
+    task.updated_at = _now()
+    db.commit()
+    db.refresh(task)
+    _schedule_runtime(task_id, _spawn_runtime(task.to_dict()))
+    return {"ok": True, "task_id": task_id, "status": "pending"}
+
+
 @router.post("/tasks/{task_id}/resume")
 async def resume_task(task_id: str, db: Session = Depends(get_db)):
     """恢复已暂停的任务。
@@ -641,13 +709,27 @@ async def resume_task(task_id: str, db: Session = Depends(get_db)):
         raise HTTPException(404, f"Task {task_id} not found")
     if task.status != "paused":
         raise HTTPException(400, f"Cannot resume task in status {task.status}")
+    runtime = _RUNNING_RUNTIMES.get(task_id)
     if not task.pending_response:
-        raise HTTPException(
-            400, "task has no pending_response; call /respond first"
+        from ..models import AgentStep
+        last_step = db.query(AgentStep).filter_by(task_id=task_id).order_by(AgentStep.step_number.desc()).first()
+        is_waiting_for_user = bool(
+            last_step and last_step.status == "pending" and
+            (last_step.action or {}).get("tool") == "ask_user"
         )
+        if is_waiting_for_user or (runtime is None and last_step is None):
+            raise HTTPException(400, "task has no pending_response; call /respond first")
+        task.status = "running"
+        task.updated_at = _now()
+        db.commit()
+        await event_bus.publish(AgentEvent(task_id=task_id, type=EventType.TASK_RESUMED, payload={}))
+        async def _spawn_manual_resume() -> None:
+            await _continue_runtime(task_id)
+        _schedule_runtime(task_id, _spawn_manual_resume())
+        return {"ok": True, "task_id": task_id, "status": "resuming"}
     await event_bus.publish(AgentEvent(task_id=task_id, type=EventType.TASK_RESUMED, payload={}))
     # 用独立 asyncio task 跑 continue（不能 await 在请求 handler 里，否则会阻塞响应）
     async def _spawn() -> None:
         await _continue_runtime(task_id)
-    asyncio.create_task(_spawn())
+    _schedule_runtime(task_id, _spawn())
     return {"ok": True, "task_id": task_id, "status": "resuming"}

@@ -35,6 +35,7 @@ class AgentState(str, Enum):
     PAUSED = "paused"
     DONE = "done"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 def parse_decision(raw: str) -> dict:
@@ -89,7 +90,7 @@ class AgentRuntime:
 
     async def step(self) -> bool:
         """执行一个 ReAct 步。返回 True 表示任务完成。"""
-        if self.state == AgentState.DONE:
+        if self.state in (AgentState.DONE, AgentState.CANCELLED):
             return True
         if self.state == AgentState.PAUSED:
             return False
@@ -105,6 +106,11 @@ class AgentRuntime:
         # 1. think
         messages = self._build_messages()
         response = await self.llm.generate(messages)
+
+        # stop_task may cancel while the LLM request is in flight. Never execute
+        # the stale tool call that arrives after cancellation.
+        if self.state == AgentState.CANCELLED:
+            return True
 
         if response.tool_name is None:
             # LLM 没调用工具，按 content 解析为决策
@@ -126,6 +132,8 @@ class AgentRuntime:
 
         # 2. 决策：finish_task / 调工具 / ask_user
         tool_name = action.get("tool", "")
+        if self.state == AgentState.CANCELLED:
+            return True
         if tool_name == "finish_task":
             # 记录 finish_task 这一步到 memory（与正常 tool 步骤一致，便于持久化）
             self.memory.add_step(
@@ -170,6 +178,15 @@ class AgentRuntime:
         })
 
         observation, status = await self._execute_tool(tool_name, action.get("params", {}))
+
+        if tool_name == "save_asset" and status == "success":
+            saved_asset = observation.get("result") if isinstance(observation, dict) else None
+            if isinstance(saved_asset, dict) and saved_asset.get("id"):
+                asset_kind = str(saved_asset.get("asset_kind") or saved_asset.get("kind") or "other")
+                bucket = self.memory.artifacts.setdefault(asset_kind, [])
+                if not any(isinstance(item, dict) and item.get("id") == saved_asset.get("id") for item in bucket):
+                    bucket.append(saved_asset)
+                await self._emit(EventType.ARTIFACT_CREATED, saved_asset)
 
         # 4. 记录 step
         self.memory.add_step(
@@ -255,6 +272,7 @@ class AgentRuntime:
                 "step_number": s.step_number,
                 "thought": s.thought,
                 "action": s.action,
+                "observation": s.observation,
                 "status": s.status,
             }
             for s in self.memory.recent_steps(10)

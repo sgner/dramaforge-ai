@@ -83,7 +83,10 @@ describe('useAgentStore', () => {
     const after = useAgentStore.getState();
     expect(after.pendingQuestion).not.toBeNull();
     expect(after.pendingQuestion!.question).toBe('你想要的题材是？');
-    expect(after.pendingQuestion!.options).toEqual(['科幻', '悬疑']);
+    expect(after.pendingQuestion!.options).toEqual([
+      { id: 'option-0', label: '科幻' },
+      { id: 'option-1', label: '悬疑' },
+    ]);
   });
 
   it('hydrate ignores pending_response that already has a response (already answered)', () => {
@@ -153,10 +156,57 @@ describe('useAgentStore', () => {
       payload: { question: '主角是男是女？', options: ['男', '女'] },
       timestamp: 1,
     });
-    expect(useAgentStore.getState().pendingQuestion).toEqual({
+    expect(useAgentStore.getState().pendingQuestion).toMatchObject({
       question: '主角是男是女？',
-      options: ['男', '女'],
+      options: [{ id: 'option-0', label: '男' }, { id: 'option-1', label: '女' }],
+      selection_mode: 'single',
     });
+  });
+
+  it('normalizes legacy string options as single-select options', () => {
+    useAgentStore.getState().applyEvent({
+      type: 'request_user_input',
+      payload: { question: '选择题材', options: ['古风', '现代'] },
+    });
+
+    expect(useAgentStore.getState().pendingQuestion).toMatchObject({
+      selection_mode: 'single',
+      options: [
+        { id: 'option-0', label: '古风' },
+        { id: 'option-1', label: '现代' },
+      ],
+    });
+  });
+
+  it('preserves structured multiple-select metadata and response arrays', () => {
+    useAgentStore.getState().applyEvent({
+      type: 'request_user_input',
+      payload: {
+        question: '选择标签',
+        options: [{ id: 'style', label: '古风' }, { id: 'tone', label: '悬疑' }],
+        selection_mode: 'multiple',
+        allow_custom: true,
+        min_selections: 1,
+        max_selections: 2,
+      },
+    });
+
+    expect(useAgentStore.getState().pendingQuestion).toMatchObject({
+      selection_mode: 'multiple',
+      allow_custom: true,
+      min_selections: 1,
+      max_selections: 2,
+      options: [
+        { id: 'style', label: '古风' },
+        { id: 'tone', label: '悬疑' },
+      ],
+    });
+
+    useAgentStore.getState().applyEvent({
+      type: 'user_input_received',
+      payload: { response: ['古风', '悬疑'], custom_text: '节奏偏快' },
+    });
+    expect(useAgentStore.getState().pendingQuestion).toBeNull();
   });
 
   it('applyEvent user_input_received clears pendingQuestion', () => {

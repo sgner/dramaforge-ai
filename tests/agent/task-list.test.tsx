@@ -44,4 +44,40 @@ describe('<TaskList />', () => {
     fireEvent.click(screen.getByTestId('task-list-refresh'));
     await waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
   });
+
+  it('resumes a paused task from its row action', async () => {
+    vi.spyOn(api, 'listAgentTasks').mockResolvedValue([
+      { id: 't-paused', user_goal: 'paused goal', status: 'paused' },
+    ] as any);
+    const resumeSpy = vi.spyOn(api, 'resumeAgent').mockResolvedValue({ ok: true } as any);
+    render(<TaskList projectId="p1" onSelect={() => {}} />);
+    await waitFor(() => screen.getByTestId('task-list-row-t-paused'));
+
+    fireEvent.click(screen.getByTestId('task-list-resume-t-paused'));
+    await waitFor(() => expect(resumeSpy).toHaveBeenCalledWith('t-paused'));
+  });
+
+  it('stops a running task from its row action', async () => {
+    vi.spyOn(api, 'listAgentTasks').mockResolvedValue([
+      { id: 't-running', user_goal: 'running goal', status: 'running' },
+    ] as any);
+    const stopSpy = vi.spyOn(api, 'stopAgent').mockResolvedValue({ ok: true } as any);
+    render(<TaskList projectId="p1" onSelect={() => {}} />);
+    await waitFor(() => screen.getByTestId('task-list-row-t-running'));
+
+    fireEvent.click(screen.getByTestId('task-list-stop-t-running'));
+    await waitFor(() => expect(stopSpy).toHaveBeenCalledWith('t-running'));
+  });
+
+  it('retries a failed task from its row action', async () => {
+    vi.spyOn(api, 'listAgentTasks').mockResolvedValue([
+      { id: 't-failed', user_goal: 'failed goal', status: 'failed' },
+    ] as any);
+    const retrySpy = vi.spyOn(api, 'retryAgent').mockResolvedValue({ ok: true } as any);
+    render(<TaskList projectId="p1" onSelect={() => {}} />);
+    await waitFor(() => screen.getByTestId('task-list-row-t-failed'));
+
+    fireEvent.click(screen.getByTestId('task-list-retry-t-failed'));
+    await waitFor(() => expect(retrySpy).toHaveBeenCalledWith('t-failed'));
+  });
 });

@@ -24,6 +24,7 @@ import { ThoughtStream } from './thought-stream';
 import { ToolPalette } from './tool-palette';
 import { TaskList } from './task-list';
 import { ErrorRecoveryCard } from './error-recovery-card';
+import { AskUserResponse } from './ask-user-response';
 import { api } from '@/services/apiClient';
 import { InfiniteCanvas } from '@/components/infinite-canvas/InfiniteCanvas';
 import { useCanvasStore } from '@/components/infinite-canvas/use-canvas-store';
@@ -125,14 +126,7 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
   // 只有这 6 个 slice 的引用变化才需要重跑 project()。
   // 其他 slice（totalCostUsd/totalTokens/error/pendingPlan/taskId/status）变化不触发，避免无意义的
   // addAgentNodes → 内部 setState → saveNodes debounced POST 抖动。
-  const lastProjectedRef = useRef<{
-    thoughts: unknown;
-    actions: unknown;
-    observations: unknown;
-    plan: unknown;
-    artifacts: unknown;
-    pendingQuestion: unknown;
-  } | null>(null);
+  const lastProjectedRef = useRef<{ artifacts: unknown } | null>(null);
 
   // 投影：useAgentStore 状态变化 → useCanvasStore.addAgentNodes
   useEffect(() => {
@@ -141,33 +135,15 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
       const last = lastProjectedRef.current;
       if (
         last &&
-        last.thoughts === state.thoughts &&
-        last.actions === state.actions &&
-        last.observations === state.observations &&
-        last.plan === state.plan &&
-        last.artifacts === state.artifacts &&
-        last.pendingQuestion === state.pendingQuestion
+        last.artifacts === state.artifacts
       ) {
         return;
       }
-      const userGoal = state.status === 'running' || state.status === 'paused' || state.status === 'done' || state.status === 'failed'
-        ? (state.thoughts[0]?.payload?.text as string) || ''
-        : '';
       useCanvasStore.getState().addAgentNodes({
-        userGoal,
-        plan: state.plan,
-        actions: state.actions,
-        observations: state.observations,
         artifacts: state.artifacts,
-        pendingQuestion: state.pendingQuestion,
       });
       lastProjectedRef.current = {
-        thoughts: state.thoughts,
-        actions: state.actions,
-        observations: state.observations,
-        plan: state.plan,
         artifacts: state.artifacts,
-        pendingQuestion: state.pendingQuestion,
       };
       // 节点更新后自动 fit 视图，让用户一眼看到完整时间线
       // 多次 fit 不会重复触发太多（zustand 内部 setState 节流）
@@ -177,7 +153,7 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
         // 延后一帧：等 React 完成渲染 + DOM 更新后再 fit
         requestAnimationFrame(() => {
           const cs = useCanvasStore.getState();
-          if (cs.nodes.filter((n) => n.type === 'agent_node').length === 0) {
+          if (cs.nodes.length === 0) {
             // 还没有节点：把 viewport 移到 (0, 0) 区域，避免 viewport 停留在 (-1800, -1000)
             cs.resetViewportToAgentOrigin(r.width, r.height);
           } else {
@@ -205,7 +181,7 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
       if (!container) return;
       const r = container.getBoundingClientRect();
       const cs = useCanvasStore.getState();
-      if (cs.nodes.filter((n) => n.type === 'agent_node').length === 0) {
+      if (cs.nodes.length === 0) {
         cs.resetViewportToAgentOrigin(r.width, r.height);
       } else {
         cs.fitAgentView(r.width, r.height);
@@ -304,7 +280,7 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
 
   // 整理节点 / 重排画布视图：让用户一键修复节点乱跑、视图错位
   const onRelayout = () => {
-    useCanvasStore.getState().relayoutAgentNodes();
+    // Agent 状态不投影到画布；资产布局由 addAgentNodes 统一处理。
     const container = canvasContainerRef.current;
     if (container) {
       const r = container.getBoundingClientRect();
@@ -322,6 +298,7 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
     if (status === 'paused') return pendingQuestion ? '等待你的回复' : '已暂停';
     if (status === 'done') return '任务完成';
     if (status === 'failed') return '任务失败';
+    if (status === 'cancelled') return '任务已停止';
     return '';
   })();
 
@@ -691,15 +668,21 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
  *    看起来要按 2 次才能发送。
  * 3. 弹窗定位：右下方、不挡住画布中心的 agent_node 流程。
  */
-const AskUserResponse: React.FC = () => {
+const LegacyAskUserResponse: React.FC = () => {
   const taskId = useAgentStore((s) => s.taskId);
   const pendingQuestion = useAgentStore((s) => s.pendingQuestion);
   const [answer, setAnswer] = React.useState('');
+  const [customText, setCustomText] = React.useState('');
+  const [selected, setSelected] = React.useState<string[]>([]);
   const [submitting, setSubmitting] = React.useState(false);
+  const [submitError, setSubmitError] = React.useState<string | null>(null);
 
   // 切换 pendingQuestion 时清空旧答案
   React.useEffect(() => {
     setAnswer('');
+    setCustomText('');
+    setSelected([]);
+    setSubmitError(null);
   }, [pendingQuestion?.question]);
 
   if (!taskId || !pendingQuestion) return null;

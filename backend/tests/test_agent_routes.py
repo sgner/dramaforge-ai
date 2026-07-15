@@ -1,3 +1,5 @@
+import uuid
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -25,7 +27,7 @@ def db_session():
             from app.models import AgentTask, AgentStep
             from app.database import SessionLocal as _SL
             with _SL() as cleanup_db:
-                for tid in ("t-rec-1", "t-rec-2", "t-rec-3"):
+                for tid in ("t-rec-1", "t-rec-2", "t-rec-3", "t-stop", "t-retry"):
                     cleanup_db.query(AgentStep).filter_by(task_id=tid).delete()
                     cleanup_db.query(AgentTask).filter_by(id=tid).delete()
                 cleanup_db.commit()
@@ -137,6 +139,60 @@ def test_post_user_response(client):
     assert data["ok"] is True
 
 
+def test_stop_running_task(client, db_session, monkeypatch):
+    class _RunningJob:
+        def __init__(self):
+            self.cancelled = False
+
+        def done(self):
+            return self.cancelled
+
+        def cancel(self):
+            self.cancelled = True
+
+    task = AgentTask(
+        id="t-stop", project_id="p1", user_goal="stop me", status="running",
+        plan=[], artifacts={}, total_cost_usd=0.0, total_tokens=0,
+        max_steps=30, skip_confirm=False,
+    )
+    db_session.add(task)
+    db_session.commit()
+    from app.routers import agent as agent_router
+    job = _RunningJob()
+    monkeypatch.setitem(agent_router._RUNNING_TASKS, "t-stop", job)
+
+    response = client.post("/api/agent/tasks/t-stop/stop")
+    assert response.status_code == 200
+    assert response.json()["status"] == "cancelled"
+    db_session.refresh(task)
+    assert task.status == "cancelled"
+    assert job.cancelled is True
+
+
+def test_retry_failed_task_resets_state_and_restarts(client, db_session, monkeypatch):
+    task = AgentTask(
+        id="t-retry", project_id="p1", user_goal="retry me", status="failed",
+        plan=[{"title": "old"}], artifacts={"image": [{"id": "old"}]},
+        total_cost_usd=1.2, total_tokens=42, max_steps=30, skip_confirm=False,
+    )
+    db_session.add(task)
+    db_session.commit()
+
+    async def noop_spawn(_task_dict):
+        return None
+
+    monkeypatch.setattr("app.routers.agent._spawn_runtime", noop_spawn)
+    response = client.post("/api/agent/tasks/t-retry/retry")
+    assert response.status_code == 200
+    assert response.json()["status"] == "pending"
+    db_session.refresh(task)
+    assert task.status == "pending"
+    assert task.plan == []
+    assert task.artifacts == {}
+    assert task.total_cost_usd == 0
+    assert task.total_tokens == 0
+
+
 class TestUserRespondRecovery:
     """Spec B: user_respond 支持 recovery_action / new_model_id。"""
 
@@ -219,3 +275,19 @@ class TestUserRespondRecovery:
         db_session.refresh(task)
         assert "recovery_action" not in task.pending_response
         assert task.pending_response["response"] == "ok"
+
+    def test_respond_preserves_multiple_response_and_custom_text(self, client, db_session):
+        task_id = f"t-rec-structured-{uuid.uuid4().hex}"
+        task = AgentTask(
+            id=task_id, project_id="p1", user_goal="x", status="paused", plan=[], artifacts={},
+            total_cost_usd=0.0, total_tokens=0, max_steps=30, skip_confirm=False,
+        )
+        db_session.add(task)
+        db_session.commit()
+        resp = client.post(f"/api/agent/tasks/{task_id}/respond", json={
+            "response": ["古风", "悬疑"], "custom_text": "节奏偏快", "approved": True,
+        })
+        assert resp.status_code == 200
+        db_session.refresh(task)
+        assert task.pending_response["response"] == ["古风", "悬疑"]
+        assert task.pending_response["custom_text"] == "节奏偏快"

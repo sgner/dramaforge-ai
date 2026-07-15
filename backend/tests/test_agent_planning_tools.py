@@ -161,6 +161,32 @@ async def test_ask_user_returns_question_payload():
 
 
 @pytest.mark.asyncio
+async def test_ask_user_returns_selection_metadata():
+    tool = AskUserTool()
+    result = await tool.execute(None, {
+        "question": "选择风格",
+        "options": [{"id": "a", "label": "古风"}],
+        "selection_mode": "multiple",
+        "allow_custom": True,
+        "min_selections": 1,
+        "max_selections": 2,
+    })
+    assert result["selection_mode"] == "multiple"
+    assert result["allow_custom"] is True
+    assert result["min_selections"] == 1
+
+
+@pytest.mark.asyncio
+async def test_ask_user_infers_multiple_mode_from_question_wording():
+    result = await AskUserTool().execute(None, {
+        "question": "请至少选择题材、时长和风格三项。",
+        "options": ["悬疑", "爱情", "科幻"],
+    })
+    assert result["selection_mode"] == "multiple"
+    assert result["min_selections"] == 3
+
+
+@pytest.mark.asyncio
 async def test_ask_user_validation_requires_question():
     """ask_user 缺少 question 应抛 ToolValidationError。"""
     from app.agent.tools.base import ToolValidationError

@@ -154,6 +154,10 @@ class AskUserTool(BaseTool):
             description="可选：上下文摘要，前端展示用。",
             required=False,
         ),
+        ToolParameter(name="selection_mode", type="string", description="single/multiple/confirm/text", required=False),
+        ToolParameter(name="allow_custom", type="boolean", description="是否允许补充文本", required=False),
+        ToolParameter(name="min_selections", type="number", description="最少选择数量", required=False),
+        ToolParameter(name="max_selections", type="number", description="最多选择数量", required=False),
     ]
 
     async def validate(self, ctx: ToolContext, params: dict) -> str | None:
@@ -162,12 +166,40 @@ class AskUserTool(BaseTool):
         return None
 
     async def execute(self, ctx: ToolContext, params: dict) -> dict:
+        question = params["question"]
+        options = params.get("options") or []
+        selection_mode = params.get("selection_mode") or infer_selection_mode(question, bool(options))
+        min_selections = params.get("min_selections")
+        if min_selections is None and selection_mode == "multiple":
+            min_selections = infer_min_selections(question)
         return {
             "type": "ask_user",
-            "question": params["question"],
-            "options": params.get("options") or [],
+            "question": question,
+            "options": options,
             "context": params.get("context") or {},
+            "selection_mode": selection_mode,
+            "allow_custom": bool(params.get("allow_custom", False)),
+            "min_selections": min_selections,
+            "max_selections": params.get("max_selections"),
         }
+
+
+def infer_selection_mode(question: str, has_options: bool) -> str:
+    if not has_options:
+        return "text"
+    return "multiple" if any(marker in question for marker in ("至少选择", "最少选择", "可多选", "多选")) else "single"
+
+
+def infer_min_selections(question: str) -> int:
+    import re
+
+    match = re.search(r"(?:至少|最少)选择[^。！？\n]{0,30}?([一二两三四五六七八九十\d]+)\s*项", question)
+    if not match:
+        return 1
+    return {
+        "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5,
+        "六": 6, "七": 7, "八": 8, "九": 9, "十": 10,
+    }.get(match.group(1), int(match.group(1)) if match.group(1).isdigit() else 1)
 
 
 # ========================

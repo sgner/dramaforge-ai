@@ -15,7 +15,8 @@ export type AgentStatus =
   | 'running'
   | 'paused'
   | 'done'
-  | 'failed';
+  | 'failed'
+  | 'cancelled';
 
 export interface AgentEventLike {
   type: string;
@@ -34,7 +35,11 @@ export interface ArtifactItem {
 
 export interface PendingQuestion {
   question: string;
-  options?: string[];
+  options?: { id: string; label: string }[];
+  selection_mode?: 'single' | 'multiple' | 'confirm' | 'text';
+  allow_custom?: boolean;
+  min_selections?: number;
+  max_selections?: number;
   [k: string]: any;
 }
 
@@ -144,6 +149,26 @@ function bucketOf(assetKind: string | undefined): string {
   return assetKind || 'other';
 }
 
+function normalizeQuestion(payload: Record<string, any>): PendingQuestion {
+  const rawOptions = Array.isArray(payload.options) ? payload.options : [];
+  const options = rawOptions
+    .map((option: any, index: number) => {
+      if (typeof option === 'string') return { id: `option-${index}`, label: option };
+      const label = String(option?.label ?? option?.value ?? '').trim();
+      if (!label) return null;
+      return { id: String(option?.id ?? option?.value ?? `option-${index}`), label };
+    })
+    .filter((option): option is { id: string; label: string } => !!option);
+  const mode = payload.selection_mode || (options.length ? 'single' : 'text');
+  return {
+    ...payload,
+    question: String(payload.question || ''),
+    options,
+    selection_mode: ['single', 'multiple', 'confirm', 'text'].includes(mode) ? mode : 'text',
+    allow_custom: payload.allow_custom === true,
+  };
+}
+
 export const useAgentStore = create<AgentState>((set) => ({
   ...INITIAL,
 
@@ -206,11 +231,7 @@ export const useAgentStore = create<AgentState>((set) => ({
           typeof snapshot.pending_response === 'object' &&
           !('response' in snapshot.pending_response) &&
           typeof (snapshot.pending_response as any).question === 'string'
-            ? {
-                question: (snapshot.pending_response as any).question,
-                options: (snapshot.pending_response as any).options,
-                ...snapshot.pending_response,
-              }
+            ? normalizeQuestion(snapshot.pending_response as Record<string, any>)
             : state.pendingQuestion,
       };
     }),
@@ -261,14 +282,7 @@ export const useAgentStore = create<AgentState>((set) => ({
           };
         }
         case 'request_user_input':
-          return {
-            pendingQuestion: {
-              question: p.question,
-              options: p.options,
-              ...p,
-            },
-            status: 'paused',
-          };
+          return { pendingQuestion: normalizeQuestion(p), status: 'paused' };
         case 'user_input_received':
           return { pendingQuestion: null, status: 'running' };
         case 'tool_retrying':
@@ -296,7 +310,10 @@ export const useAgentStore = create<AgentState>((set) => ({
         case 'task_done':
           return { status: 'done' };
         case 'task_failed':
-          return { status: 'failed', error: p.error || 'task failed' };
+          return {
+            status: p.cancelled ? 'cancelled' : 'failed',
+            error: p.error || 'task failed',
+          };
         case 'cost_update':
           return {
             totalCostUsd: state.totalCostUsd + Number(p.cost_usd || 0),

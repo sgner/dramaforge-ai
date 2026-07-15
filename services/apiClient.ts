@@ -196,6 +196,12 @@ export const api = {
   resumeAgent: (taskId: string) =>
     request<{ ok: boolean }>(`/agent/tasks/${taskId}/resume`, { method: 'POST' }),
 
+  stopAgent: (taskId: string) =>
+    request<{ ok: boolean; status: string }>(`/agent/tasks/${taskId}/stop`, { method: 'POST' }),
+
+  retryAgent: (taskId: string) =>
+    request<{ ok: boolean; status: string }>(`/agent/tasks/${taskId}/retry`, { method: 'POST' }),
+
   /**
    * 启动 agent task：创建任务 → 返回 taskId。
    * 实际运行由前端调用 useAgentStream(taskId) 接收 SSE 事件。
