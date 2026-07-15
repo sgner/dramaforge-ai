@@ -38,6 +38,72 @@ class MediaServiceError(Exception):
     pass
 
 
+class DatabaseMediaService:
+    """Adapter from Agent media tools to the unified provider configuration table."""
+
+    def __init__(self, db, preferred_provider_id: str | None = None):
+        self.db = db
+        self.preferred_provider_id = preferred_provider_id
+
+    def _provider(self, request: MediaRequest) -> dict:
+        from ..models import ProviderConfig
+
+        rows = self.db.query(ProviderConfig).filter(ProviderConfig.enabled.is_(True)).all()
+        if request.provider_id:
+            rows = [row for row in rows if row.provider_id == request.provider_id]
+        elif self.preferred_provider_id:
+            preferred = [row for row in rows if row.provider_id == self.preferred_provider_id]
+            rows = preferred + [row for row in rows if row not in preferred]
+        for row in rows:
+            cfg = row.to_internal_dict()
+            models = cfg.get(f"{request.kind}_models", [])
+            if not models:
+                continue
+            if request.model_id and request.model_id not in models:
+                continue
+            if cfg.get("base_url") and (cfg.get("api_key") or cfg.get("protocol") == "local"):
+                return cfg
+        raise MediaServiceError(f"no enabled {request.kind} provider/model is configured")
+
+    async def generate(self, request: MediaRequest) -> MediaResult:
+        if request.kind == "audio":
+            raise MediaServiceError("audio provider integration is not configured")
+        from ..routers.media import ImageGenerateIn, VideoGenerateIn, _openai_image, _openai_video
+        import time
+
+        provider = self._provider(request)
+        started = time.perf_counter()
+        if request.kind == "image":
+            body = ImageGenerateIn(
+                provider_id=provider["provider_id"],
+                model=request.model_id or provider.get("default_model") or (provider.get("image_models") or [None])[0],
+                prompt=request.prompt,
+                ref_urls=request.reference_urls,
+                aspect_ratio=request.extra.get("aspect_ratio", "1:1"),
+                extra=request.extra,
+            )
+            result = await _openai_image(provider, body)
+        elif request.kind == "video":
+            body = VideoGenerateIn(
+                provider_id=provider["provider_id"],
+                model=request.model_id or provider.get("default_model") or (provider.get("video_models") or [None])[0],
+                prompt=request.prompt,
+                ref_urls=request.reference_urls,
+                aspect_ratio=request.extra.get("aspect_ratio", "16:9"),
+                duration_sec=max(1, int(request.duration_sec)),
+                extra=request.extra,
+            )
+            result = await _openai_video(provider, body)
+        else:
+            raise MediaServiceError(f"unsupported media kind: {request.kind}")
+        return MediaResult(
+            url=result.url,
+            kind=request.kind,
+            elapsed_sec=time.perf_counter() - started,
+            raw=result.raw,
+        )
+
+
 class MediaService(Protocol):
     """媒体服务协议。后端实现可以是 stub / 真实 provider。"""
 

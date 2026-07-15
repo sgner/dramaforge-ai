@@ -167,7 +167,8 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
     const unsubscribe = useAgentStore.subscribe(project);
     return () => {
       unsubscribe();
-      useCanvasStore.getState().clearAgentNodes();
+      // Agent asset projections are persisted canvas nodes and must remain visible
+      // after leaving Agent mode. Thought/action state belongs to ThoughtStream.
     };
   }, [projectId]);
 
@@ -321,7 +322,6 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
           onSelect={async (id) => {
             // 1. 切换 task：reset store 到 INITIAL + 写入新 taskId
             //    （setTask 内部已 reset，避免上一个 task 的 thoughts/actions 残留）
-            setTask(id, 'running', projectId);
             setThoughtOpen(true);
             // 2. 异步 hydrate：从后端拉 task 的持久化状态（plan/artifacts/status/
             //    成本/pending_response），立即让 UI 显示"非空"内容。
@@ -329,6 +329,7 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
             //    两者互补：hydrate 来自 DB（永久），SSE replay 来自内存（短期）。
             try {
               const snapshot = await api.getAgentTask(id);
+              setTask(id, snapshot.status as any, projectId);
               useAgentStore.getState().hydrate({
                 user_goal: snapshot.user_goal,
                 status: snapshot.status,

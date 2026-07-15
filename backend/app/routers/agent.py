@@ -23,6 +23,7 @@ from ..agent.runtime import AgentRuntime, AgentState
 from ..agent.tools import build_default_registry
 from ..agent.llm_factory import load_llm_configs, select_llm_for_task, NoLLMConfigured
 from ..agent.tools import list_tool_metadata
+from ..agent.media_service import DatabaseMediaService
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -330,6 +331,7 @@ async def _spawn_runtime(task_dict: dict) -> None:
             db=runtime_db,
             max_steps=task_dict.get("max_steps", 30) or 30,
             skip_confirm=bool(task_dict.get("skip_confirm", False)),
+            media_service=DatabaseMediaService(runtime_db, task_dict.get("llm_provider_id")),
         )
 
         # 6. 注册 runtime
@@ -460,6 +462,7 @@ async def _continue_runtime(task_id: str) -> None:
             db=runtime_db,
             max_steps=task_dict["max_steps"],
             skip_confirm=task_dict["skip_confirm"],
+            media_service=DatabaseMediaService(runtime_db, task_dict.get("llm_provider_id")),
         )
         # 恢复 step_count 与 state：基于 memory 现有 step 数量
         runtime._step_count = len(memory.short_term)
@@ -681,7 +684,7 @@ async def retry_task(task_id: str, db: Session = Depends(get_db)):
         raise HTTPException(404, f"Task {task_id} not found")
     if task.status not in ("failed", "cancelled"):
         raise HTTPException(400, f"Cannot retry task in status {task.status}")
-    if task_id in _RUNNING_RUNTIMES:
+    if task_id in _RUNNING_RUNTIMES or task_id in _RUNNING_TASKS:
         raise HTTPException(409, "Task is still running")
     db.query(AgentStep).filter_by(task_id=task_id).delete()
     task.status = "pending"

@@ -128,15 +128,7 @@ async def _openai_video(provider: dict, body: VideoGenerateIn) -> GenerateOut:
         except httpx.HTTPError as e:
             raise HTTPException(status_code=502, detail=f"video API network error: {e}")
     if r.status_code == 404:
-        # 供应商没实现 /v1/videos/generations —— fallback: 返回 mock url 让链路可测
-        # 实际生产中应该按供应商协议分支（sora / kling / veo 等）
-        logger.warning(f"video endpoint 404 at {url}; returning mock url for dev")
-        return GenerateOut(
-            url="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4",
-            provider_id=provider["provider_id"],
-            model=body.model,
-            raw={"note": "dev fallback (endpoint 404)"},
-        )
+        raise HTTPException(status_code=502, detail=f"video API endpoint not found: {url}")
     if r.status_code >= 400:
         raise HTTPException(status_code=502, detail=f"video API HTTP {r.status_code}: {r.text[:300]}")
     data = r.json()

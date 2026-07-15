@@ -39,6 +39,7 @@ import {
 } from './engine';
 import { KnifePoint, CanvasNode, Connection, uid } from './types';
 import { createNode } from './use-canvas-store';
+import { getPaddedWorldRect } from './visibility';
 import { useI18n } from '../../i18n';
 import './canvas.css';
 
@@ -857,15 +858,11 @@ export const InfiniteCanvas: React.FC<{
             - hard cap 100 是最坏情况兜底 */}
         {(() => {
           const boardRect = getBoardRect();
-          const scale = viewport.scale || 1;
-          const padding = 2; // 视口外 2 屏 padding 仍渲染（拖动时不闪现）
-          const visW = boardRect ? boardRect.width * padding : 6000;
-          const visH = boardRect ? boardRect.height * padding : 4000;
-          const visX0 = -viewport.x / scale - visW / 2;
-          const visY0 = -viewport.y / scale - visH / 2;
-          const visX1 = visX0 + visW;
-          const visY1 = visY0 + visH;
-          const HARD_CAP = 100;
+          const rect = getPaddedWorldRect(boardRect, viewport);
+          const visX0 = rect.x;
+          const visY0 = rect.y;
+          const visX1 = rect.x + rect.width;
+          const visY1 = rect.y + rect.height;
           // 总是显示：选中节点 / 拖动节点 / 视口内节点
           const isVisible = (n: CanvasNode) => {
             if (selected.has(n.id)) return true;
@@ -878,8 +875,7 @@ export const InfiniteCanvas: React.FC<{
             return !(n.x + w < visX0 || n.x > visX1 || n.y + h < visY0 || n.y > visY1);
           };
           const filtered = nodes.filter(isVisible);
-          const capped = filtered.length > HARD_CAP ? filtered.slice(0, HARD_CAP) : filtered;
-          return capped.map((node) => (
+          return filtered.map((node) => (
             <CanvasNodeComponent
               key={node.id}
               node={node}

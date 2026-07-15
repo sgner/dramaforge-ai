@@ -69,6 +69,7 @@ class AgentRuntime:
         project_id: str | None = None,
         db: Any | None = None,
         api_config: Any | None = None,
+        media_service: Any | None = None,
         max_steps: int = DEFAULT_MAX_STEPS,
         skip_confirm: bool = False,
         pending_request: dict | None = None,
@@ -80,6 +81,7 @@ class AgentRuntime:
         self.project_id = project_id
         self.db = db
         self.api_config = api_config
+        self.media_service = media_service
         self.max_steps = max_steps
         self.skip_confirm = skip_confirm
         self.pending_request = pending_request
@@ -310,6 +312,7 @@ class AgentRuntime:
             db=self.db,
             llm_client=self.llm,
             api_config=self.api_config,
+            media_service=self.media_service,
             artifacts=self.memory.artifacts,
             skip_confirm=self.skip_confirm,
             emit=lambda t, p: self._emit_sync(t, p),

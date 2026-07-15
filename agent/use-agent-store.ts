@@ -149,6 +149,18 @@ function bucketOf(assetKind: string | undefined): string {
   return assetKind || 'other';
 }
 
+function hasEvent(events: AgentEventLike[], event: AgentEventLike): boolean {
+  const p = event.payload || {};
+  const step = p.step ?? p.step_id;
+  if (step !== undefined) {
+    return events.some((item) => {
+      const existing = item.payload || {};
+      return (existing.step ?? existing.step_id) === step;
+    });
+  }
+  return false;
+}
+
 function normalizeQuestion(payload: Record<string, any>): PendingQuestion {
   const rawOptions = Array.isArray(payload.options) ? payload.options : [];
   const options = rawOptions
@@ -247,14 +259,25 @@ export const useAgentStore = create<AgentState>((set) => ({
           // stub = DevScriptedLLM 假任务（需要用户在 API 设置里配 LLM key）
           const mode = p.llm_mode === 'real' ? 'real' : (p.llm_mode === 'stub' ? 'stub' : state.llmMode);
           const reason = typeof p.llm_fallback_reason === 'string' ? p.llm_fallback_reason : state.llmFallbackReason;
-          return { llmMode: mode, llmFallbackReason: reason, status: 'running' };
+          // A retry/reconnect replays task_started first. Start a fresh event view
+          // so the previous attempt cannot be appended to the new attempt.
+          return {
+            thoughts: [],
+            actions: [],
+            observations: [],
+            pendingQuestion: null,
+            pendingErrorRecovery: null,
+            llmMode: mode,
+            llmFallbackReason: reason,
+            status: 'running',
+          };
         }
         case 'thought':
-          return { thoughts: [...state.thoughts, event] };
+          return hasEvent(state.thoughts, event) ? {} : { thoughts: [...state.thoughts, event] };
         case 'action':
-          return { actions: [...state.actions, event] };
+          return hasEvent(state.actions, event) ? {} : { actions: [...state.actions, event] };
         case 'observation':
-          return { observations: [...state.observations, event] };
+          return hasEvent(state.observations, event) ? {} : { observations: [...state.observations, event] };
         case 'goal_parsed':
           return { plan: Array.isArray(p.plan) ? p.plan : state.plan };
         case 'plan_ready':
@@ -277,6 +300,7 @@ export const useAgentStore = create<AgentState>((set) => ({
             url: p.url,
             ...p,
           };
+          if (p.id && existing.some((candidate) => candidate.id === p.id)) return {};
           return {
             artifacts: { ...state.artifacts, [cat]: [...existing, item] },
           };
