@@ -1,5 +1,7 @@
 """ORM 模型"""
-from sqlalchemy import Column, String, Integer, Float, Text, Boolean, DateTime, ForeignKey, JSON
+import json
+
+from sqlalchemy import Column, String, Integer, Float, Text, Boolean, DateTime, ForeignKey, JSON, event, inspect, text
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone, timedelta
 
@@ -54,7 +56,8 @@ class Node(Base):
     __tablename__ = "nodes"
 
     id = Column(String, primary_key=True)
-    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    # 索引：加载画布时高频按 project_id 查，无索引会全表扫描
+    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
     type = Column(String, nullable=False)
     x = Column(Float, default=0.0)
     y = Column(Float, default=0.0)
@@ -72,7 +75,8 @@ class Connection(Base):
     __tablename__ = "connections"
 
     id = Column(String, primary_key=True)
-    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    # 索引：加载画布时高频按 project_id 查，无索引会全表扫描
+    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
     from_node = Column(String, nullable=False)
     to_node = Column(String, nullable=False)
     from_port = Column(String, default="out")
@@ -86,7 +90,8 @@ class Asset(Base):
     __tablename__ = "assets"
 
     id = Column(String, primary_key=True)
-    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"), nullable=True)
+    # 索引：资产库按 project_id 查，无索引会全表扫描
+    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"), nullable=True, index=True)
     kind = Column(String, nullable=False)  # image / video / text
     asset_kind = Column(String, nullable=True)  # character / prop / scene / shot / novel / script
     title = Column(String, default="")
@@ -102,6 +107,12 @@ class Asset(Base):
     extra = Column(JSON, default=dict)  # 其他扩展字段
     origin = Column(String, nullable=False, default="generated")
     source_asset_id = Column(String, ForeignKey("assets.id", ondelete="SET NULL"), nullable=True)
+    status = Column(String, nullable=False, default="uploaded")
+    version = Column(Integer, nullable=False, default=1)
+    derived_from = Column(JSON, default=list)
+    reference_role = Column(String, nullable=True)
+    prompt_source = Column(Text, nullable=True)
+    prompt_optimized = Column(Text, nullable=True)
     inspection_status = Column(String, nullable=False, default="pending")
     inspection = Column(JSON, default=dict)
     visual_identity = Column(JSON, default=dict)
@@ -121,7 +132,8 @@ class AgentTask(Base):
     __tablename__ = "agent_tasks"
 
     id = Column(String, primary_key=True)
-    project_id = Column(String, ForeignKey("projects.id"), nullable=True)
+    # 索引：项目页常按 project_id 查 agent 任务
+    project_id = Column(String, ForeignKey("projects.id"), nullable=True, index=True)
     user_goal = Column(Text, nullable=True)
     status = Column(String, default="pending")  # pending | running | paused | done | failed
     plan = Column(JSON, default=list)            # 计划步骤
@@ -134,12 +146,35 @@ class AgentTask(Base):
     # LLM 选择（仅 provider_id / model_id；key 不入库）
     llm_provider_id = Column(String(64), nullable=True, default=None)
     llm_model_id = Column(String(128), nullable=True, default=None)
+    _task_profile_json = Column("task_profile", Text, nullable=True)
+    rule_pack_version = Column(String(64), nullable=True)
     created_at = Column(DateTime, default=_now)
     updated_at = Column(DateTime, default=_now, onupdate=_now)
 
     steps = relationship("AgentStep", back_populates="task", cascade="all, delete-orphan")
 
+    @property
+    def task_profile(self) -> dict | None:
+        if not self._task_profile_json:
+            return None
+        if isinstance(self._task_profile_json, dict):
+            return self._task_profile_json
+        try:
+            value = json.loads(self._task_profile_json)
+        except (TypeError, ValueError):
+            return None
+        return value if isinstance(value, dict) else None
+
+    @task_profile.setter
+    def task_profile(self, value: dict | None) -> None:
+        self._task_profile_json = json.dumps(value, ensure_ascii=False) if value is not None else None
+
     def to_dict(self) -> dict:
+        pending_question = None
+        for step in reversed(self.steps or []):
+            if step.status == "pending" and (step.action or {}).get("tool") == "ask_user":
+                pending_question = (step.action or {}).get("params") or {}
+                break
         return {
             "id": self.id,
             "project_id": self.project_id,
@@ -148,6 +183,9 @@ class AgentTask(Base):
             "plan": self.plan or [],
             "artifacts": self.artifacts or {},
             "pending_response": self.pending_response,
+            "pending_question": pending_question,
+            "task_profile": self.task_profile,
+            "rule_pack_version": self.rule_pack_version,
             "total_cost_usd": self.total_cost_usd or 0.0,
             "total_tokens": self.total_tokens or 0,
             "max_steps": self.max_steps or 30,
@@ -172,9 +210,25 @@ class AgentTask(Base):
             total_tokens=d.get("total_tokens", 0),
             max_steps=d.get("max_steps", 30),
             skip_confirm=bool(d.get("skip_confirm", False)),
+            task_profile=d.get("task_profile"),
+            rule_pack_version=d.get("rule_pack_version"),
             llm_provider_id=d.get("llm_provider_id"),
             llm_model_id=d.get("llm_model_id"),
         )
+
+
+
+@event.listens_for(Base.metadata, "after_create")
+def _ensure_agent_task_profile_columns(metadata, connection, **kwargs):
+    """Keep local SQLite databases readable without an Alembic dependency."""
+    columns = {column["name"] for column in inspect(connection).get_columns("agent_tasks")}
+    missing = {
+        "task_profile": "TEXT",
+        "rule_pack_version": "VARCHAR(64)",
+    }
+    for name, definition in missing.items():
+        if name not in columns:
+            connection.execute(text(f'ALTER TABLE agent_tasks ADD COLUMN "{name}" {definition}'))
 
 
 class AgentStep(Base):
@@ -182,7 +236,8 @@ class AgentStep(Base):
     __tablename__ = "agent_steps"
 
     id = Column(String, primary_key=True)
-    task_id = Column(String, ForeignKey("agent_tasks.id"), nullable=False)
+    # 索引：SSE 重放 / 步骤查询按 task_id 查，无索引会全表扫描
+    task_id = Column(String, ForeignKey("agent_tasks.id"), nullable=False, index=True)
     step_number = Column(Integer, default=0)
     thought = Column(Text, nullable=True)
     action = Column(JSON, default=dict)      # {tool, params}
@@ -509,3 +564,20 @@ class PromptTemplate(Base):
             "created_at": _iso(self.created_at),
             "updated_at": _iso(self.updated_at),
         }
+
+
+def ensure_agent_task_profile_columns() -> None:
+    """Upgrade an existing local SQLite table without an external migration tool."""
+    from .database import engine
+
+    if "agent_tasks" not in inspect(engine).get_table_names():
+        return
+    columns = {column["name"] for column in inspect(engine).get_columns("agent_tasks")}
+    with engine.begin() as connection:
+        if "task_profile" not in columns:
+            connection.execute(text('ALTER TABLE agent_tasks ADD COLUMN "task_profile" TEXT'))
+        if "rule_pack_version" not in columns:
+            connection.execute(text('ALTER TABLE agent_tasks ADD COLUMN "rule_pack_version" VARCHAR(64)'))
+
+
+ensure_agent_task_profile_columns()
