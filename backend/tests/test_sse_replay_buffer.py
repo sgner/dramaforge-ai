@@ -253,3 +253,26 @@ def test_stream_endpoint_returns_replay_for_already_done_task():
     )
 
     event_bus.clear_log(task_id)
+
+
+def test_sse_heartbeat_is_visible_to_eventsource():
+    from app.routers.agent import _sse_heartbeat
+
+    assert _sse_heartbeat() == "event: heartbeat\ndata: {}\n\n"
+
+
+def test_heartbeat_interval_is_short_enough_to_avoid_frontend_timeout():
+    """后端 heartbeat 间隔必须远小于前端 heartbeat timeout（45s）。
+
+    回归问题：此前后端 heartbeat 间隔 30s == 前端 heartbeat timeout 30s，
+    没有余量。当 agent PAUSED（等待用户回答 ask_user）时，无真实事件，
+    完全依赖 heartbeat 保活；后端 T=30s 发 heartbeat，前端 T=30s 检查
+    timeout，网络延迟导致前端误判断线 → "heartbeat timeout, reconnecting"。
+    修复：后端间隔缩短到 15s，前端 timeout 增加到 45s，留 30s 余量。
+    """
+    from app.routers.agent import HEARTBEAT_INTERVAL_S
+
+    assert HEARTBEAT_INTERVAL_S <= 20.0, (
+        f"后端 heartbeat 间隔 {HEARTBEAT_INTERVAL_S}s 过大，"
+        f"agent PAUSED 时会因竞态条件触发前端 heartbeat timeout"
+    )

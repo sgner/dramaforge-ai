@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from .. import schemas
 from ..database import SessionLocal, get_db
-from ..models import AgentTask, AgentStep
+from ..models import AgentTask, AgentStep, Asset
 from ..agent.events import event_bus, AgentEvent, EventType
 from ..agent.memory import AgentMemory, StepRecord
 from ..agent.runtime import AgentRuntime, AgentState
@@ -25,6 +25,7 @@ from ..agent.llm_factory import load_llm_configs, select_llm_for_task, NoLLMConf
 from ..agent.tools import list_tool_metadata
 from ..agent.media_service import DatabaseMediaService
 from ..agent.capabilities import CapabilityConfigurationError, resolve_capability_bindings
+from ..agent.task_profiles import TaskProfile, classify_task
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -32,6 +33,16 @@ router = APIRouter()
 
 def _gen_id() -> str:
     return uuid.uuid4().hex[:12]
+
+
+def _profile_for_goal(db: Session, user_goal: str, project_id: str | None) -> TaskProfile:
+    assets = []
+    if project_id:
+        assets = [
+            {"kind": asset.kind, "asset_kind": asset.asset_kind, "title": asset.title, "name": asset.name}
+            for asset in db.query(Asset).filter(Asset.project_id == project_id).all()
+        ]
+    return classify_task(user_goal, None, assets)
 
 
 # ========================
@@ -83,6 +94,7 @@ async def create_task(body: schemas.AgentTaskCreate, db: Session = Depends(get_d
     except CapabilityConfigurationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     llm_binding = capabilities["llm"]
+    profile = _profile_for_goal(db, body.user_goal, body.project_id)
     task = AgentTask(
         id=_gen_id(),
         project_id=body.project_id,
@@ -96,6 +108,8 @@ async def create_task(body: schemas.AgentTaskCreate, db: Session = Depends(get_d
         skip_confirm=body.skip_confirm,
         llm_provider_id=llm_binding["provider_id"],
         llm_model_id=llm_binding["model_id"],
+        task_profile=profile.model_dump(mode="json"),
+        rule_pack_version=profile.rule_pack_id.rsplit(".", 1)[-1],
     )
     db.add(task)
     db.commit()
@@ -182,6 +196,17 @@ def list_steps(task_id: str, db: Session = Depends(get_db)):
 # SSE 事件流
 # ========================
 
+# 后端 heartbeat 间隔。必须远小于前端 agent-stream-manager.ts 的 HEARTBEAT_TIMEOUT（45s），
+# 否则 agent PAUSED（等待用户回答 ask_user）时无真实事件，完全依赖 heartbeat 保活，
+# 前后端 timeout 相等会导致竞态条件误判断线（"heartbeat timeout, reconnecting"）。
+HEARTBEAT_INTERVAL_S = 15.0
+
+
+def _sse_heartbeat() -> str:
+    """Return a named SSE heartbeat that EventSource can observe."""
+    return "event: heartbeat\ndata: {}\n\n"
+
+
 @router.get("/tasks/{task_id}/stream")
 async def stream_events(task_id: str):
     """SSE 推送 agent 事件。
@@ -191,7 +216,7 @@ async def stream_events(task_id: str):
        ——修复"runtime 启动 vs SSE subscribe"的竞态丢失（用户重连也能看到进度）。
     2. 之后 await queue.get() 接收 live 事件。
     3. 收到 task_done / task_failed 时 break，断开 SSE。
-    4. 每 30s 无事件 yield `: heartbeat` 防代理超时。
+    4. 每 HEARTBEAT_INTERVAL_S 无事件 yield heartbeat 防代理超时。
     """
     queue = event_bus.subscribe(task_id)
     pending_response_holder: dict[str, Any] = {"value": None, "event": None}
@@ -211,13 +236,13 @@ async def stream_events(task_id: str):
             # 2. 进入 live 事件循环
             while True:
                 try:
-                    event: AgentEvent = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    event: AgentEvent = await asyncio.wait_for(queue.get(), timeout=HEARTBEAT_INTERVAL_S)
                     yield event.to_sse(event_id=int(event.timestamp * 1000))
                     if event.type in (EventType.TASK_DONE, EventType.TASK_FAILED):
                         break
                 except asyncio.TimeoutError:
                     # 心跳
-                    yield ": heartbeat\n\n"
+                    yield _sse_heartbeat()
         finally:
             event_bus.unsubscribe(task_id, queue)
 
@@ -347,6 +372,7 @@ async def _spawn_runtime(task_dict: dict) -> None:
             db=runtime_db,
             max_steps=task_dict.get("max_steps", 30) or 30,
             skip_confirm=bool(task_dict.get("skip_confirm", False)),
+            profile=TaskProfile.model_validate(task_dict["task_profile"]) if task_dict.get("task_profile") else None,
             media_service=DatabaseMediaService(
                 runtime_db,
                 task_dict.get("llm_provider_id"),
@@ -424,6 +450,11 @@ async def _continue_runtime(task_id: str) -> None:
             if not task_row:
                 logger.error("[continue_runtime] task %s not found", task_id)
                 return
+            if task_row.task_profile is None:
+                legacy_profile = _profile_for_goal(db, task_row.user_goal or "", task_row.project_id)
+                task_row.task_profile = legacy_profile.model_dump(mode="json")
+                task_row.rule_pack_version = legacy_profile.rule_pack_id.rsplit(".", 1)[-1]
+                db.commit()
             task_dict = {
                 "id": task_row.id,
                 "user_goal": task_row.user_goal,
@@ -435,6 +466,8 @@ async def _continue_runtime(task_id: str) -> None:
                 "pending_response": task_row.pending_response or {},
                 "plan": list(task_row.plan or []),
                 "artifacts": dict(task_row.artifacts or {}),
+                "task_profile": task_row.task_profile,
+                "rule_pack_version": task_row.rule_pack_version,
             }
             steps = db.query(AgentStep).filter_by(task_id=task_id).order_by(AgentStep.step_number).all()
             memory = AgentMemory(user_goal=task_dict["user_goal"], plan=task_dict["plan"])
@@ -484,6 +517,7 @@ async def _continue_runtime(task_id: str) -> None:
             db=runtime_db,
             max_steps=task_dict["max_steps"],
             skip_confirm=task_dict["skip_confirm"],
+            profile=TaskProfile.model_validate(task_dict["task_profile"]) if task_dict.get("task_profile") else None,
             media_service=DatabaseMediaService(
                 runtime_db,
                 task_dict.get("llm_provider_id"),
@@ -501,8 +535,12 @@ async def _continue_runtime(task_id: str) -> None:
             params = last_pending.action.get("params", {}) or {}
             runtime.pending_request = {
                 "type": "ask_user",
+                "step_id": params.get("step_id", "clarify_source"),
                 "question": params.get("question", ""),
                 "options": params.get("options", []),
+                "missing_inputs": params.get("missing_inputs", []),
+                "selection_mode": params.get("selection_mode", "text"),
+                "allow_custom": params.get("allow_custom", True),
             }
             runtime.state = AgentState.PAUSED
         elif task_dict.get("pending_response", {}).get("recovery_action"):
@@ -529,7 +567,7 @@ async def _continue_runtime(task_id: str) -> None:
             await runtime.resume(user_response)
             # 把刚 step 出来的 step 落库
             _persist_steps(task_id, memory, runtime)
-            _sync_task_artifacts(task_id, memory)
+            _sync_task_artifacts(task_id, memory, runtime)
 
         # 7. 跑主循环
         _update_task_status(task_id, "running")
@@ -568,7 +606,7 @@ async def _run_runtime_loop(task_id: str, runtime: AgentRuntime, memory: AgentMe
         # 把每步的 memory 写入数据库
         _persist_steps(task_id, memory, runtime)
         # 同步 plan / artifacts / cost
-        _sync_task_artifacts(task_id, memory)
+        _sync_task_artifacts(task_id, memory, runtime)
         if done:
             break
 
@@ -611,9 +649,18 @@ def _persist_steps(task_id: str, memory: AgentMemory, runtime: AgentRuntime) -> 
     """把 memory.short_term 中所有 step 持久化到数据库（只追加新的）。"""
     try:
         with SessionLocal() as db:
-            existing = db.query(AgentStep).filter_by(task_id=task_id).count()
+            existing_steps = db.query(AgentStep).filter_by(task_id=task_id).order_by(AgentStep.step_number).all()
+            existing = len(existing_steps)
             for i, s in enumerate(memory.short_term):
                 if i < existing:
+                    row = existing_steps[i]
+                    row.thought = s.thought or ""
+                    row.action = s.action or {}
+                    row.observation = s.observation or {}
+                    row.status = s.status
+                    row.cost_usd = s.cost_usd
+                    row.tokens = s.tokens
+                    row.finished_at = _now()
                     continue
                 step = AgentStep(
                     id=_gen_id(),
@@ -634,7 +681,7 @@ def _persist_steps(task_id: str, memory: AgentMemory, runtime: AgentRuntime) -> 
         logger.warning("failed to persist steps for %s: %s", task_id, e)
 
 
-def _sync_task_artifacts(task_id: str, memory: AgentMemory) -> None:
+def _sync_task_artifacts(task_id: str, memory: AgentMemory, runtime: AgentRuntime | None = None) -> None:
     """同步 memory 的 plan / artifacts / cost 到 task 记录。"""
     try:
         with SessionLocal() as db:
@@ -647,6 +694,9 @@ def _sync_task_artifacts(task_id: str, memory: AgentMemory) -> None:
                 t.artifacts = dict(memory.artifacts)
             t.total_cost_usd = memory.total_cost_usd
             t.total_tokens = memory.total_tokens
+            if runtime is not None and runtime.profile is not None:
+                t.task_profile = runtime.profile.model_dump(mode="json")
+                t.rule_pack_version = runtime.profile.rule_pack_id.rsplit(".", 1)[-1]
             t.updated_at = _now()
             db.commit()
     except Exception as e:
@@ -714,8 +764,25 @@ async def retry_task(
         raise HTTPException(404, f"Task {task_id} not found")
     if task.status not in ("failed", "cancelled"):
         raise HTTPException(400, f"Cannot retry task in status {task.status}")
-    if task_id in _RUNNING_RUNTIMES or task_id in _RUNNING_TASKS:
-        raise HTTPException(409, "Task is still running")
+    # A terminal event can reach the client just before the runtime task's
+    # finally block removes its in-memory handles. A finished handle must not
+    # permanently block retry; an active one is cancelled and drained first.
+    stale_runtime = _RUNNING_RUNTIMES.pop(task_id, None)
+    if stale_runtime is not None:
+        stale_runtime.state = AgentState.CANCELLED
+    stale_job = _RUNNING_TASKS.pop(task_id, None)
+    if stale_job is not None:
+        is_done = stale_job.done() if hasattr(stale_job, "done") else False
+        if not is_done:
+            if not hasattr(stale_job, "cancel"):
+                raise HTTPException(409, "Task is still running")
+            stale_job.cancel()
+            try:
+                await asyncio.wait_for(asyncio.shield(stale_job), timeout=2.0)
+            except asyncio.CancelledError:
+                pass
+            except asyncio.TimeoutError as exc:
+                raise HTTPException(409, "Task is still running") from exc
     db.query(AgentStep).filter_by(task_id=task_id).delete()
     task.status = "pending"
     task.plan = []
@@ -747,12 +814,24 @@ async def resume_task(task_id: str, db: Session = Depends(get_db)):
     task = db.query(AgentTask).filter_by(id=task_id).first()
     if not task:
         raise HTTPException(404, f"Task {task_id} not found")
-    if task.status != "paused":
-        raise HTTPException(400, f"Cannot resume task in status {task.status}")
+    from ..models import AgentStep
     runtime = _RUNNING_RUNTIMES.get(task_id)
+    if task.status == "running" and (runtime is not None or task_id in _RUNNING_TASKS):
+        # respond and resume can race with the runtime's own transition to
+        # running. Treat a duplicate resume as success instead of surfacing a
+        # misleading 400 to the user.
+        return {"ok": True, "task_id": task_id, "status": "already_running"}
+    last_step = db.query(AgentStep).filter_by(task_id=task_id).order_by(AgentStep.step_number.desc()).first()
+    can_resume_answered_question = bool(
+        task.status == "failed"
+        and task.pending_response
+        and last_step
+        and last_step.status == "pending"
+        and (last_step.action or {}).get("tool") == "ask_user"
+    )
+    if task.status != "paused" and not can_resume_answered_question:
+        raise HTTPException(400, f"Cannot resume task in status {task.status}")
     if not task.pending_response:
-        from ..models import AgentStep
-        last_step = db.query(AgentStep).filter_by(task_id=task_id).order_by(AgentStep.step_number.desc()).first()
         is_waiting_for_user = bool(
             last_step and last_step.status == "pending" and
             (last_step.action or {}).get("tool") == "ask_user"

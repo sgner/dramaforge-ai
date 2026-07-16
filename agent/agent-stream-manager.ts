@@ -20,12 +20,16 @@ let retryTimer: ReturnType<typeof setTimeout> | null = null;
 let currentTaskId: string | null = null;
 let lastEventTime = 0;
 let heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
+let stableTimer: ReturnType<typeof setTimeout> | null = null;
 const MAX_RETRIES = 8;
 const BACKOFF_MS = 1000;
 const MAX_BACKOFF_MS = 30000;
-const HEARTBEAT_TIMEOUT = 30_000;
+// 必须 > 后端 HEARTBEAT_INTERVAL_S（15s）* 2，留足余量。
+// 此前 30s == 后端 30s，agent PAUSED 时竞态条件导致 "heartbeat timeout, reconnecting"。
+const HEARTBEAT_TIMEOUT = 45_000;
 
 const EVENT_TYPES = [
+  'heartbeat',
   'task_started',
   'goal_parsed',
   'thought',
@@ -64,6 +68,10 @@ function close(): void {
     clearTimeout(heartbeatTimer);
     heartbeatTimer = null;
   }
+  if (stableTimer) {
+    clearTimeout(stableTimer);
+    stableTimer = null;
+  }
 }
 
 function startHeartbeat(): void {
@@ -88,11 +96,11 @@ function startHeartbeat(): void {
   }, HEARTBEAT_TIMEOUT);
 }
 
-function open(taskId: string): void {
+function open(taskId: string, resetRetries = false): void {
   if (typeof EventSource === 'undefined') return;
   if (es) close();
   currentTaskId = taskId;
-  retryCount = 0;
+  if (resetRetries) retryCount = 0;
   lastEventTime = Date.now();
 
   const stream = new EventSource(streamUrl(taskId));
@@ -100,12 +108,21 @@ function open(taskId: string): void {
   startHeartbeat();
 
   stream.onopen = () => {
-    retryCount = 0;
+    if (es !== stream) return;
     lastEventTime = Date.now();
     startHeartbeat();
+    // Only reset the retry budget after the connection has stayed healthy.
+    // EventSource can briefly report `open` and fail immediately afterwards;
+    // resetting here would turn that loop into unbounded reconnects.
+    if (stableTimer) clearTimeout(stableTimer);
+    stableTimer = setTimeout(() => {
+      if (es === stream) retryCount = 0;
+      stableTimer = null;
+    }, 10_000);
   };
 
   stream.onerror = () => {
+    if (es !== stream) return;
     // eslint-disable-next-line no-console
     console.warn('[agent-stream-manager] connection error, retrying');
     close();
@@ -175,7 +192,7 @@ export function setActiveTask(taskId: string | null): void {
   if (currentTaskId === taskId && es) {
     return; // 已经在监听
   }
-  open(taskId);
+  open(taskId, true);
 }
 
 /**
