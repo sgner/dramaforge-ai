@@ -28,6 +28,7 @@ import { AgentPetController } from './agent-pet-controller';
 import { api } from '@/services/apiClient';
 import { useCanvasStore } from '@/components/infinite-canvas/use-canvas-store';
 import { getBindingForStep } from '@/types';
+import { PromptLibraryPanel } from '../components/PromptLibraryPanel';
 import './agent.css';
 
 export interface AgentModeProps {
@@ -43,6 +44,7 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId, canvasContainer
   const [toolDrawerOpen, setToolDrawerOpen] = useState(false);
   const [taskDrawerOpen, setTaskDrawerOpen] = useState(true);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [promptLibraryOpen, setPromptLibraryOpen] = useState(false);
   // 画布容器 ref（用于 fitAgentView 时获取 board 尺寸）
   const internalCanvasContainerRef = useRef<HTMLDivElement | null>(null);
   const canvasContainerRef = externalCanvasContainerRef || internalCanvasContainerRef;
@@ -313,6 +315,20 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId, canvasContainer
         data-testid="agent-mode-overlay"
         className="agent-overlay-main"
       >
+        {/* ===== 提示词模板库 toggle — 浮动在 topbar 区域，可切换右侧面板 ===== */}
+        <button
+          data-testid="prompt-library-toggle"
+          className={`agent-topbar-btn ${promptLibraryOpen ? 'active' : ''}`}
+          onClick={() => setPromptLibraryOpen(v => !v)}
+          title="提示词模板库"
+          style={{ position: 'absolute', top: 14, right: 14, zIndex: 45 }}
+        >
+          {/* bookmark icon */}
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z" />
+          </svg>
+        </button>
+
         {/* ===== 输入栏 — 2 行布局：第 1 行 LLM 选择，第 2 行 目标输入 + 视图按钮 ===== */}
         {false && <div
           data-testid="agent-mode-input-bar"
@@ -456,6 +472,18 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId, canvasContainer
           {/* 浮动状态栏 — 画布左下角，合并 LLM 模式 + 进度 */}
               {/* LLM 模式指示器 — 内联在进度条里，不再单独占一行 */}
         </div>
+
+        {/* 提示词模板库 — 右侧浮层面板，由 topbar toggle 控制 */}
+        {promptLibraryOpen && (
+          <div style={{ position: 'absolute', top: 0, right: 0, bottom: 0, zIndex: 40 }}>
+            <PromptLibraryPanel
+              onInsert={(tmpl) => {
+                // Insert positive prompt into the goal input
+                setGoal(g => g ? `${g}\n\n${tmpl.positive}` : tmpl.positive);
+              }}
+            />
+          </div>
+        )}
 
         <AgentPetController
           projectId={projectId}

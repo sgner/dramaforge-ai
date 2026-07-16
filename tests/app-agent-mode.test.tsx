@@ -6,7 +6,7 @@
  * - 验证 URL ?agent=1 时自动进入
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, fireEvent, cleanup, act } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, act, waitFor } from '@testing-library/react';
 import App from '@/App';
 import { api } from '@/services/apiClient';
 import { useCanvasStore } from '@/components/infinite-canvas/use-canvas-store';
@@ -64,6 +64,16 @@ vi.mock('@/services/apiClient', () => ({
     deleteDramaTask: vi.fn().mockResolvedValue({ ok: true }),
     getUserPreference: vi.fn().mockResolvedValue({ value: null }),
     setUserPreference: vi.fn().mockResolvedValue({ value: null }),
+  },
+  // PromptLibraryPanel 内部会调用 promptTemplates.list() 拉取模板列表，
+  // 这里给出空数组 mock，避免 unhandled rejection。
+  promptTemplates: {
+    list: vi.fn().mockResolvedValue([]),
+    get: vi.fn().mockResolvedValue(undefined),
+    create: vi.fn().mockResolvedValue(undefined),
+    update: vi.fn().mockResolvedValue(undefined),
+    remove: vi.fn().mockResolvedValue({ ok: true }),
+    batchRemove: vi.fn().mockResolvedValue({ removed: 0 }),
   },
 }));
 
@@ -206,5 +216,26 @@ describe('<App /> — Agent Mode 入口（位于 Canvas 工具栏）', () => {
       { kind: 'image', providerId: '', modelId: '' },
       { kind: 'video', providerId: '', modelId: '' },
     ]);
+  });
+
+  it('shows prompt library panel when toggle button clicked', async () => {
+    // ... existing setup that opens canvas ...
+    // Reset mocks that may have been mutated by earlier tests (e.g. listProviders
+    // rejected in the "backend unavailable" test) so the App loads normally.
+    vi.mocked(api.listProviders).mockResolvedValue([]);
+    // Reset URL: an earlier test pushes ?agent=1 which would make the App boot
+    // in agent mode, turning the enter-agent-mode click into an exit toggle.
+    window.history.pushState({}, '', '/');
+    render(<App />);
+    await openCanvas();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('enter-agent-mode'));
+    });
+    // Find the bookmark/book icon button in the topbar
+    const panelBtn = screen.getByTestId('prompt-library-toggle');
+    fireEvent.click(panelBtn);
+    await waitFor(() => {
+      expect(screen.getByTestId('prompt-library-panel')).toBeInTheDocument();
+    });
   });
 });
