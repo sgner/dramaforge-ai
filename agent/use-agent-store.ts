@@ -43,6 +43,20 @@ export interface PendingQuestion {
   [k: string]: any;
 }
 
+export interface TaskProfile {
+  task_type: string;
+  input_mode?: string;
+  source_kind?: string;
+  script_required?: boolean;
+  needs_clarification?: boolean;
+  deliverables?: string[];
+  asset_strategy?: string;
+  confidence?: number;
+  missing_inputs?: string[];
+  rule_pack_id: string;
+  [k: string]: any;
+}
+
 export interface PendingErrorRecovery {
   stepId: string;
   tool: string;
@@ -66,6 +80,7 @@ export interface AgentState {
   // 计划 + 资产
   plan: any[];
   artifacts: Record<string, ArtifactItem[]>;
+  taskProfile: TaskProfile | null;
 
   // 用户交互
   pendingQuestion: PendingQuestion | null;
@@ -97,6 +112,9 @@ export interface AgentState {
     plan?: any[];
     artifacts?: Record<string, ArtifactItem[]>;
     pending_response?: any;
+    pending_question?: any;
+    task_profile?: TaskProfile | null;
+    rule_pack_version?: string | null;
     total_cost_usd?: number;
     total_tokens?: number;
     llm_provider_id?: string | null;
@@ -136,6 +154,7 @@ const INITIAL: Pick<
   observations: [],
   plan: [],
   artifacts: {},
+  taskProfile: null,
   pendingQuestion: null,
   pendingPlan: null,
   pendingErrorRecovery: null,
@@ -153,6 +172,9 @@ function bucketOf(assetKind: string | undefined): string {
 }
 
 function hasEvent(events: AgentEventLike[], event: AgentEventLike): boolean {
+  if (event.timestamp !== undefined && events.some((item) => item.timestamp === event.timestamp)) {
+    return true;
+  }
   const p = event.payload || {};
   const step = p.step ?? p.step_id;
   if (step !== undefined) {
@@ -208,6 +230,9 @@ export const useAgentStore = create<AgentState>((set) => ({
     plan?: any[];
     artifacts?: Record<string, ArtifactItem[]>;
     pending_response?: any;
+    pending_question?: any;
+    task_profile?: TaskProfile | null;
+    rule_pack_version?: string | null;
     total_cost_usd?: number;
     total_tokens?: number;
     llm_provider_id?: string | null;
@@ -228,6 +253,7 @@ export const useAgentStore = create<AgentState>((set) => ({
           snapshot.artifacts && typeof snapshot.artifacts === 'object'
             ? (snapshot.artifacts as Record<string, ArtifactItem[]>)
             : state.artifacts,
+        taskProfile: snapshot.task_profile ?? state.taskProfile,
         totalCostUsd:
           typeof snapshot.total_cost_usd === 'number'
             ? snapshot.total_cost_usd
@@ -242,7 +268,9 @@ export const useAgentStore = create<AgentState>((set) => ({
         // 只有前者才需要恢复成 pendingQuestion；后者由 SSE 的
         // user_input_received / task_resumed 事件处理。
         pendingQuestion:
-          snapshot.pending_response &&
+          snapshot.pending_question && typeof snapshot.pending_question === 'object' && typeof snapshot.pending_question.question === 'string'
+            ? normalizeQuestion(snapshot.pending_question)
+            : snapshot.pending_response &&
           typeof snapshot.pending_response === 'object' &&
           !('response' in snapshot.pending_response) &&
           typeof (snapshot.pending_response as any).question === 'string'
@@ -262,30 +290,46 @@ export const useAgentStore = create<AgentState>((set) => ({
           // stub = DevScriptedLLM 假任务（需要用户在 API 设置里配 LLM key）
           const mode = p.llm_mode === 'real' ? 'real' : (p.llm_mode === 'stub' ? 'stub' : state.llmMode);
           const reason = typeof p.llm_fallback_reason === 'string' ? p.llm_fallback_reason : state.llmFallbackReason;
-          // A retry/reconnect replays task_started first. Start a fresh event view
-          // so the previous attempt cannot be appended to the new attempt.
+          // setTask() already resets state when switching tasks. Do not clear the
+          // event view here: reconnects replay task_started before historical
+          // events, and clearing would make the UI flicker and discard hydrated
+          // live state during a transient SSE failure.
           return {
-            thoughts: [],
-            actions: [],
-            observations: [],
-            pendingQuestion: null,
-            pendingErrorRecovery: null,
-            streamingText: '',
             llmMode: mode,
             llmFallbackReason: reason,
             status: 'running',
           };
         }
         case 'thought':
-          return hasEvent(state.thoughts, event) ? {} : { thoughts: [...state.thoughts, event] };
+          // Some older/partial LLM decisions contained only an action and an
+          // empty thought. Do not let those become blank cards in the stream.
+          if (typeof p.text !== 'string' || !p.text.trim()) return {};
+          return hasEvent(state.thoughts, event)
+            ? {}
+            : {
+                thoughts: [...state.thoughts, event],
+                // Replayed history can contain thoughts before the original
+                // request_user_input event. Keep the draft question mounted
+                // while paused so reconnects cannot erase the user's typing.
+                ...(state.status === 'paused' && state.pendingQuestion
+                  ? {}
+                  : { pendingQuestion: null }),
+              };
         case 'text_delta':
           return { streamingText: `${state.streamingText}${String(p.text || '')}` };
         case 'prompt_optimization_started':
-          return { thoughts: [...state.thoughts, { ...event, payload: { ...p, message: `正在优化${p.target === 'video' ? '视频' : '图像'}提示词` } }] };
+          return hasEvent(state.thoughts, event) ? {} : { thoughts: [...state.thoughts, { ...event, payload: { ...p, message: `正在优化${p.target === 'video' ? '视频' : '图像'}提示词` } }] };
         case 'prompt_optimization_finished':
-          return { thoughts: [...state.thoughts, { ...event, payload: { ...p, message: '提示词优化完成，开始生成媒体' } }] };
+          return hasEvent(state.thoughts, event) ? {} : { thoughts: [...state.thoughts, { ...event, payload: { ...p, message: '提示词优化完成，开始生成媒体' } }] };
         case 'action':
-          return hasEvent(state.actions, event) ? {} : { actions: [...state.actions, event] };
+          return hasEvent(state.actions, event)
+            ? {}
+            : {
+                actions: [...state.actions, event],
+                ...(state.status === 'paused' && state.pendingQuestion
+                  ? {}
+                  : { pendingQuestion: null }),
+              };
         case 'observation':
           return hasEvent(state.observations, event) ? {} : { observations: [...state.observations, event], streamingText: '' };
         case 'goal_parsed':
@@ -325,11 +369,14 @@ export const useAgentStore = create<AgentState>((set) => ({
         case 'request_user_input':
           return { pendingQuestion: normalizeQuestion(p), status: 'paused' };
         case 'user_input_received':
-          return { pendingQuestion: null, status: 'running' };
+          // Keep the question visible until the resumed runtime emits its
+          // first thought/action. If resume fails after this event, the user
+          // must still be able to see and retry the submitted question.
+          return { status: 'running' };
         case 'tool_retrying':
-          return { thoughts: [...state.thoughts, event] };
+          return hasEvent(state.thoughts, event) ? {} : { thoughts: [...state.thoughts, event] };
         case 'tool_fallback_model':
-          return { thoughts: [...state.thoughts, event] };
+          return hasEvent(state.thoughts, event) ? {} : { thoughts: [...state.thoughts, event] };
         case 'tool_error':
           return {
             pendingErrorRecovery: {

@@ -5,7 +5,7 @@ import './agent.css';
 
 export interface TaskListProps {
   projectId: string;
-  onSelect: (taskId: string) => void;
+  onSelect: (taskId: string, status?: AgentTaskOut['status']) => void;
   selectedId?: string | null;
   /**
    * 父组件传入的"刷新触发器"：每次值变化时，列表会重新拉取。
@@ -76,6 +76,10 @@ export const TaskList: React.FC<TaskListProps> = ({
         else await api.retryAgent(taskId);
       }
       await loadRef.current();
+      // Re-select after resume/retry so the active task store and SSE stream
+      // are rebuilt from the server's new lifecycle state. Without this, the
+      // list may show a pending retry while ThoughtStream remains failed.
+      if (action !== 'stop') onSelect(taskId, action === 'retry' ? 'running' : undefined);
     } catch (e) {
       console.warn(`TaskList: failed to ${action} task`, e);
     } finally {
@@ -128,7 +132,7 @@ export const TaskList: React.FC<TaskListProps> = ({
           <div
             key={t.id}
             data-testid={`task-list-row-${t.id}`}
-            onClick={() => onSelect(t.id)}
+            onClick={() => onSelect(t.id, t.status)}
             className={`task-list-row ${selectedId === t.id ? 'active' : ''}`}
             title={t.user_goal || '(空目标)'}
           >
@@ -142,9 +146,12 @@ export const TaskList: React.FC<TaskListProps> = ({
               {formatRelative(t.updated_at || t.created_at)}
             </span>
             <span className="task-list-actions" onClick={(e) => e.stopPropagation()}>
-              {t.status === 'paused' && (
+              {t.status === 'paused' && t.pending_response && (
                 <button type="button" data-testid={`task-list-resume-${t.id}`} className="tool-btn task-list-action"
                   disabled={actionTaskId === t.id} onClick={() => void runAction(t.id, 'resume')}>继续</button>
+              )}
+              {t.status === 'paused' && !t.pending_response && (
+                <span className="task-list-action task-list-waiting">等待回复</span>
               )}
               {(t.status === 'pending' || t.status === 'running') && (
                 <button type="button" data-testid={`task-list-stop-${t.id}`} className="tool-btn task-list-action"

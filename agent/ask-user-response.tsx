@@ -8,6 +8,14 @@ type ResponsePayload = {
   approved?: boolean;
 };
 
+type QuestionDraft = {
+  answer: string;
+  customText: string;
+  selected: string[];
+};
+
+const questionDrafts = new Map<string, QuestionDraft>();
+
 export const AskUserResponse: React.FC = () => {
   const taskId = useAgentStore((s) => s.taskId);
   const question = useAgentStore((s) => s.pendingQuestion);
@@ -15,14 +23,21 @@ export const AskUserResponse: React.FC = () => {
   const [customText, setCustomText] = React.useState('');
   const [selected, setSelected] = React.useState<string[]>([]);
   const [submitting, setSubmitting] = React.useState(false);
+  const [answered, setAnswered] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const questionKey = question
+    ? String(question.step_id ?? question.id ?? question.question)
+    : null;
+  const draftKey = taskId && questionKey ? `${taskId}:${questionKey}` : null;
 
   React.useEffect(() => {
-    setAnswer('');
-    setCustomText('');
-    setSelected([]);
+    const draft = draftKey ? questionDrafts.get(draftKey) : undefined;
+    setAnswer(draft?.answer ?? '');
+    setCustomText(draft?.customText ?? '');
+    setSelected(draft?.selected ?? []);
+    setAnswered(false);
     setError(null);
-  }, [question?.question]);
+  }, [draftKey]);
 
   if (!taskId || !question) return null;
 
@@ -39,12 +54,12 @@ export const AskUserResponse: React.FC = () => {
         ? selected.length >= min && selected.length <= Math.max(1, max)
         : selected.length === 1;
   // 选项只是快捷入口，任何提问都允许用户直接描述答案。
-  const canSubmit = !!answer.trim() || hasValidSelection;
+  const canSubmit = !answered && (!!answer.trim() || hasValidSelection);
 
   const submit = async (event?: React.MouseEvent | React.KeyboardEvent) => {
     event?.preventDefault();
     event?.stopPropagation();
-    if (!canSubmit || submitting) return;
+    if (!canSubmit || submitting || answered) return;
     const typedAnswer = answer.trim();
     const response: string | string[] = typedAnswer && !hasValidSelection
       ? typedAnswer
@@ -58,6 +73,8 @@ export const AskUserResponse: React.FC = () => {
     try {
       await api.respondAgent(taskId, payload);
       await api.resumeAgent(taskId);
+      if (draftKey) questionDrafts.delete(draftKey);
+      setAnswered(true);
     } catch (cause) {
       console.error('[ask-user] failed to respond', cause);
       setError('发送失败，请重试');
@@ -90,7 +107,7 @@ export const AskUserResponse: React.FC = () => {
               data-testid={`ask-user-option-${index}`}
               className={`tool-btn ask-user-option${active ? ' is-selected' : ''}`}
               aria-pressed={active}
-              disabled={submitting}
+              disabled={submitting || answered}
               onMouseDown={(e) => e.stopPropagation()}
               onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggle(option.label); }}
             >{active ? '✓ ' : ''}{option.label}</button>;
@@ -101,21 +118,29 @@ export const AskUserResponse: React.FC = () => {
         data-testid="ask-user-custom-input"
         className="ask-user-response-input"
         value={customText}
-        onChange={(e) => setCustomText(e.target.value)}
+        onChange={(e) => {
+          const value = e.target.value;
+          setCustomText(value);
+          if (draftKey) questionDrafts.set(draftKey, { answer, customText: value, selected });
+        }}
         onMouseDown={(e) => e.stopPropagation()}
         placeholder="补充说明（可选）"
-        disabled={submitting}
+        disabled={submitting || answered}
       />}
       <div className="ask-user-response-input-row">
         <input
           data-testid="ask-user-input"
           className="ask-user-response-input"
           value={answer}
-          onChange={(e) => setAnswer(e.target.value)}
+          onChange={(e) => {
+            const value = e.target.value;
+            setAnswer(value);
+            if (draftKey) questionDrafts.set(draftKey, { answer: value, customText, selected });
+          }}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) void submit(e); }}
           onMouseDown={(e) => e.stopPropagation()}
           placeholder={options.length > 0 ? '选择上方选项或直接输入…' : '直接输入…'}
-          disabled={submitting}
+          disabled={submitting || answered}
         />
       </div>
       {mode === 'multiple' && <div className="ask-user-selection-hint">已选 {selected.length} 项{max < options.length ? `，最多 ${max} 项` : ''}</div>}
@@ -126,7 +151,7 @@ export const AskUserResponse: React.FC = () => {
         className="tool-btn ask-user-submit"
         onMouseDown={(e) => e.stopPropagation()}
         onClick={submit}
-        disabled={submitting || !canSubmit}
+        disabled={submitting || answered || !canSubmit}
       >{submitting ? '发送中…' : '确认发送'}</button>
     </div>
   );

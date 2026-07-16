@@ -266,13 +266,15 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId, canvasContainer
           refreshTrigger={refreshTrigger}
           retryProviderId={selectedProviderId}
           retryModelId={selectedModelId}
-          onSelect={async (id) => {
+          onSelect={async (id, listedStatus) => {
             // 1. 切换 task：reset store 到 INITIAL + 写入新 taskId
             //    （setTask 内部已 reset，避免上一个 task 的 thoughts/actions 残留）
             setThoughtOpen(true);
             // 先切换任务，再异步拉取快照；即使快照请求失败，当前任务也必须可见，
             // 避免 UI 回退到旧任务或表现为“没有选中任务”。
-            setTask(id, 'running', projectId);
+            // Use the list snapshot immediately so a failed/paused task never
+            // flashes as "running" while the detail request is in flight.
+            setTask(id, (listedStatus || 'running') as any, projectId);
             // 2. 异步 hydrate：从后端拉 task 的持久化状态（plan/artifacts/status/
             //    成本/pending_response），立即让 UI 显示"非空"内容。
             //    SSE 也会同时连接并重放历史 events（thought/action/observation），

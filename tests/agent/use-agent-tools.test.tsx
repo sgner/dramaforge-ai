@@ -35,11 +35,11 @@ describe('useAgentTools', () => {
     expect(result.current.error).toBeNull();
   });
 
-  it('falls back to hardcoded palette on fetch failure', async () => {
+  it('does not inject hardcoded tools on fetch failure', async () => {
     (globalThis.fetch as any).mockRejectedValueOnce(new Error('network'));
     const { result } = renderHook(() => useAgentTools());
     await waitFor(() => expect(result.current.isLoading).toBe(false));
-    expect(result.current.tools.length).toBeGreaterThanOrEqual(18);
+    expect(result.current.tools).toEqual([]);
     expect(result.current.error).not.toBeNull();
   });
 

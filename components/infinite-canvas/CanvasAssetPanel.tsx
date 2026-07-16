@@ -1,5 +1,5 @@
-import React, { useCallback, useState, useMemo } from 'react';
-import { Package, User, Mountain, Clapperboard, Theater, Library, X, BookOpen, FileText, Loader2, AlertCircle, RefreshCw, Trash2 } from 'lucide-react';
+import React, { useCallback, useMemo, useState } from 'react';
+import { AlertCircle, BookOpen, Clapperboard, FileText, Loader2, Library, Mountain, Package, RefreshCw, Theater, Trash2, User, X } from 'lucide-react';
 import { useCanvasStore } from './use-canvas-store';
 import { TaskAssetKind } from './types';
 import { useI18n } from '../../i18n';
@@ -12,18 +12,20 @@ interface AssetItem {
   kind?: 'image' | 'video' | 'audio' | 'template' | 'text';
   tags?: string[];
   assetKind?: TaskAssetKind;
-  /** 资产元数据：提示词 */
   prompt?: string;
-  /** 资产元数据：供应商名称 */
   providerName?: string;
-  /** 资产元数据：模型 ID */
   modelId?: string;
-  /** 是否正在流式生成中 */
   generating?: boolean;
-  /** 是否生成失败 */
   failed?: boolean;
-  /** 生成失败的错误信息 */
   error?: string;
+  status?: string;
+  version?: number;
+  sourceAssetId?: string;
+  derivedFrom?: string[];
+  referenceRole?: string;
+  promptSource?: string;
+  promptOptimized?: string;
+  inspectionStatus?: string;
 }
 
 interface AssetCategory {
@@ -59,11 +61,7 @@ const KIND_LABEL: Record<TaskAssetKind, string> = {
 
 const TEXT_KINDS: TaskAssetKind[] = ['novel', 'script'];
 
-export const CanvasAssetPanel: React.FC<CanvasAssetPanelProps> = ({
-  open,
-  onClose,
-  onAddToCanvas,
-}) => {
+export const CanvasAssetPanel: React.FC<CanvasAssetPanelProps> = ({ open, onClose, onAddToCanvas }) => {
   const { t } = useI18n();
   const [category, setCategory] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -73,13 +71,11 @@ export const CanvasAssetPanel: React.FC<CanvasAssetPanelProps> = ({
   const retryFailedAsset = useCanvasStore((s) => s.retryFailedAsset);
   const setTaskAssets = useCanvasStore((s) => s.setTaskAssets);
 
-  // Merge task assets with locally dropped assets
   const allItems = useMemo<AssetItem[]>(() => {
     const taskItems: AssetItem[] = taskAssets.map((a) => ({
       id: a.id,
       name: a.name,
       url: a.url,
-      // 文本资产 url 为空，kind 标记为 text
       kind: TEXT_KINDS.includes(a.kind) ? 'text' : 'image',
       assetKind: a.kind,
       tags: a.tags || [t(KIND_LABEL[a.kind])],
@@ -89,69 +85,61 @@ export const CanvasAssetPanel: React.FC<CanvasAssetPanelProps> = ({
       generating: a.generating,
       failed: a.failed,
       error: a.error,
+      status: a.status,
+      version: a.version,
+      sourceAssetId: a.sourceAssetId,
+      derivedFrom: a.derivedFrom,
+      referenceRole: a.referenceRole,
+      promptSource: a.promptSource,
+      promptOptimized: a.promptOptimized,
+      inspectionStatus: a.inspectionStatus,
     }));
     return [...taskItems, ...localAssets];
   }, [taskAssets, localAssets, t]);
 
   const filteredItems = useMemo(() => {
     let items = allItems;
-    if (category !== 'all') {
-      items = items.filter((i) => i.assetKind === category);
-    }
+    if (category !== 'all') items = items.filter((i) => i.assetKind === category);
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       items = items.filter(
         (i) =>
           i.name.toLowerCase().includes(q) ||
-          i.tags?.some((t) => t.toLowerCase().includes(q)) ||
-          i.prompt?.toLowerCase().includes(q)
+          i.tags?.some((tag) => tag.toLowerCase().includes(q)) ||
+          i.prompt?.toLowerCase().includes(q),
       );
     }
     return items;
   }, [allItems, category, searchQuery]);
 
-  const handleDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const files = [...e.dataTransfer.files].filter((f) =>
-        f.type.startsWith('image/')
-      );
-      files.forEach((file) => {
-        const url = URL.createObjectURL(file);
-        setLocalAssets((prev) => [
-          ...prev,
-          {
-            id: `asset_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-            name: file.name,
-            url,
-            kind: 'image',
-          },
-        ]);
-      });
-    },
-    []
-  );
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const files = [...e.dataTransfer.files].filter((f) => f.type.startsWith('image/'));
+    files.forEach((file) => {
+      setLocalAssets((prev) => [
+        ...prev,
+        {
+          id: `asset_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          name: file.name,
+          url: URL.createObjectURL(file),
+          kind: 'image',
+        },
+      ]);
+    });
+  }, []);
 
-  const handleDragStart = useCallback(
-    (item: AssetItem, e: React.DragEvent) => {
-      e.dataTransfer.setData('application/json', JSON.stringify(item));
-      e.dataTransfer.effectAllowed = 'copy';
-    },
-    []
-  );
+  const handleDragStart = useCallback((item: AssetItem, e: React.DragEvent) => {
+    e.dataTransfer.setData('application/json', JSON.stringify(item));
+    e.dataTransfer.effectAllowed = 'copy';
+  }, []);
 
-  const handleAddToCanvas = useCallback(
-    (item: AssetItem) => {
-      onAddToCanvas?.(item);
-    },
-    [onAddToCanvas]
-  );
+  const handleAddToCanvas = useCallback((item: AssetItem) => {
+    onAddToCanvas?.(item);
+  }, [onAddToCanvas]);
 
-  // 文本资产卡片
   const renderTextCard = (item: AssetItem) => {
-    const isNovel = item.assetKind === 'novel';
-    const Icon = isNovel ? BookOpen : FileText;
+    const Icon = item.assetKind === 'novel' ? BookOpen : FileText;
     const charCount = item.prompt?.length || 0;
     return (
       <div className="canvas-asset-text-card">
@@ -161,39 +149,32 @@ export const CanvasAssetPanel: React.FC<CanvasAssetPanelProps> = ({
           {item.generating && <Loader2 size={12} className="animate-spin" />}
         </div>
         <div className="canvas-asset-text-preview">
-          {item.generating
-            ? t('canvasPanelAssetGenerating')
-            : (item.prompt || '').slice(0, 200) + ((item.prompt?.length || 0) > 200 ? '...' : '')}
+          {item.generating ? t('canvasPanelAssetGenerating') : (item.prompt || '').slice(0, 200) + ((item.prompt?.length || 0) > 200 ? '...' : '')}
         </div>
         <div className="canvas-asset-text-meta">
-          {item.prompt && (
-            <span>{t('canvasPanelAssetChars').replace('{0}', String(charCount))}</span>
-          )}
+          {item.prompt && <span>{t('canvasPanelAssetChars').replace('{0}', String(charCount))}</span>}
         </div>
       </div>
     );
   };
 
-  // 图片资产元数据
   const renderImageMeta = (item: AssetItem) => {
-    if (!item.providerName && !item.modelId && !item.prompt) return null;
+    const derivedFromLabel = item.derivedFrom?.length ? item.derivedFrom.join(', ') : '';
+    if (!item.providerName && !item.modelId && !item.prompt && !item.status && !item.referenceRole && !item.sourceAssetId && !derivedFromLabel) return null;
     return (
       <div className="canvas-asset-img-meta">
-        {item.providerName && (
-          <span className="asset-meta-item" title={item.providerName}>
-            {item.providerName}
-          </span>
-        )}
-        {item.modelId && (
-          <span className="asset-meta-item" title={item.modelId}>
-            {item.modelId}
-          </span>
-        )}
+        <span className="asset-meta-item asset-meta-name" title={item.name}>{item.name}</span>
+        {item.status && <span className="asset-meta-item" title={item.status}>{item.status}</span>}
+        {typeof item.version === 'number' && <span className="asset-meta-item" title={`v${item.version}`}>v{item.version}</span>}
+        {item.referenceRole && <span className="asset-meta-item" title={item.referenceRole}>{item.referenceRole}</span>}
+        {item.sourceAssetId && <span className="asset-meta-item" title={item.sourceAssetId}>{item.sourceAssetId}</span>}
+        {derivedFromLabel && !item.sourceAssetId && <span className="asset-meta-item" title={derivedFromLabel}>{derivedFromLabel}</span>}
+        {item.providerName && <span className="asset-meta-item" title={item.providerName}>{item.providerName}</span>}
+        {item.modelId && <span className="asset-meta-item" title={item.modelId}>{item.modelId}</span>}
       </div>
     );
   };
 
-  // 失败资产卡片：保留提示词 + 错误信息 + 重试
   const renderFailedCard = (item: AssetItem) => {
     const isRetrying = !!item.generating;
     return (
@@ -297,64 +278,51 @@ export const CanvasAssetPanel: React.FC<CanvasAssetPanelProps> = ({
       </div>
 
       <div className="canvas-asset-grid">
-        {filteredItems.length ? (
-          filteredItems.map((item) => {
-            // 失败资产卡片：保留提示词 + 错误 + 重试
-            if (item.failed) {
-              return (
-                <div
-                  key={item.id}
-                  className="canvas-asset-item canvas-asset-item-failed"
-                  title={item.name}
-                >
-                  {renderFailedCard(item)}
-                </div>
-              );
-            }
-            // 文本资产使用文本卡片渲染
-            if (item.kind === 'text') {
-              return (
-                <div
-                  key={item.id}
-                  className={`canvas-asset-item canvas-asset-item-text${item.generating ? ' is-generating' : ''}`}
-                  draggable
-                  onDragStart={(e) => handleDragStart(item, e)}
-                  onDoubleClick={() => handleAddToCanvas(item)}
-                  title={item.name}
-                >
-                  {renderTextCard(item)}
-                </div>
-              );
-            }
-            // 图片资产
+        {filteredItems.length ? filteredItems.map((item) => {
+          if (item.failed) {
+            return (
+              <div key={item.id} className="canvas-asset-item canvas-asset-item-failed" title={item.name}>
+                {renderFailedCard(item)}
+              </div>
+            );
+          }
+
+          if (item.kind === 'text') {
             return (
               <div
                 key={item.id}
-                className="canvas-asset-item"
+                className={`canvas-asset-item canvas-asset-item-text${item.generating ? ' is-generating' : ''}`}
                 draggable
                 onDragStart={(e) => handleDragStart(item, e)}
                 onDoubleClick={() => handleAddToCanvas(item)}
                 title={item.name}
               >
-                {item.url ? (
-                  <img src={item.url} alt={item.name} draggable={false} />
-                ) : (
-                  <div className="canvas-asset-empty" style={{ minHeight: 80 }}>
-                    {item.name}
-                  </div>
-                )}
-                {renderImageMeta(item)}
-                {item.tags && item.tags.length > 0 && (
-                  <div className="asset-item-tags">
-                    {item.tags.slice(0, 2).map((tag) => (
-                      <span key={tag} className="asset-tag">{tag}</span>
-                    ))}
-                  </div>
-                )}
+                {renderTextCard(item)}
               </div>
             );
-          })
-        ) : (
+          }
+
+          return (
+            <div
+              key={item.id}
+              className="canvas-asset-item"
+              draggable
+              onDragStart={(e) => handleDragStart(item, e)}
+              onDoubleClick={() => handleAddToCanvas(item)}
+              title={item.name}
+            >
+              {item.url ? <img src={item.url} alt={item.name} draggable={false} /> : <div className="canvas-asset-empty" style={{ minHeight: 80 }}>{item.name}</div>}
+              {renderImageMeta(item)}
+              {item.tags && item.tags.length > 0 && (
+                <div className="asset-item-tags">
+                  {item.tags.slice(0, 2).map((tag) => (
+                    <span key={tag} className="asset-tag">{tag}</span>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        }) : (
           <div className="canvas-asset-empty">
             {t('canvasPanelAssetsEmpty')}
             <br />

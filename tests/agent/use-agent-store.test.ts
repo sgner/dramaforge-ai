@@ -108,6 +108,25 @@ describe('useAgentStore', () => {
     ]);
   });
 
+  it('ignores empty thought events instead of rendering blank cards', () => {
+    const s = useAgentStore.getState();
+    s.applyEvent({ type: 'thought', payload: { text: '   ' }, timestamp: 1 });
+    expect(useAgentStore.getState().thoughts).toHaveLength(0);
+  });
+
+  it('keeps hydrated and replayed state when task_started arrives again', () => {
+    const s = useAgentStore.getState();
+    s.setTask('t-reconnect', 'running');
+    s.applyEvent({ type: 'thought', payload: { text: '已有思考' }, timestamp: 1 });
+    s.applyEvent({ type: 'plan_ready', payload: { plan: [{ tool: 'generate_script' }] }, timestamp: 2 });
+    s.applyEvent({ type: 'task_started', payload: { llm_mode: 'real' }, timestamp: 3 });
+    s.applyEvent({ type: 'thought', payload: { text: '已有思考' }, timestamp: 1 });
+
+    const after = useAgentStore.getState();
+    expect(after.thoughts).toHaveLength(1);
+    expect(after.plan).toEqual([{ tool: 'generate_script' }]);
+  });
+
   it('applyEvent adds action to actions list', () => {
     const s = useAgentStore.getState();
     s.setTask('t-1', 'running');
@@ -174,6 +193,16 @@ describe('useAgentStore', () => {
     });
   });
 
+  it('keeps a pending question during replayed thoughts while paused', () => {
+    const s = useAgentStore.getState();
+    s.setTask('t-1', 'paused');
+    s.applyEvent({ type: 'request_user_input', payload: { question: '请输入补充说明' }, timestamp: 1 });
+    s.applyEvent({ type: 'thought', payload: { text: '历史思考事件' }, timestamp: 2 });
+    s.applyEvent({ type: 'action', payload: { tool: 'ask_user' }, timestamp: 3 });
+
+    expect(useAgentStore.getState().pendingQuestion?.question).toBe('请输入补充说明');
+  });
+
   it('normalizes legacy string options as single-select options', () => {
     useAgentStore.getState().applyEvent({
       type: 'request_user_input',
@@ -217,14 +246,16 @@ describe('useAgentStore', () => {
       type: 'user_input_received',
       payload: { response: ['古风', '悬疑'], custom_text: '节奏偏快' },
     });
-    expect(useAgentStore.getState().pendingQuestion).toBeNull();
+    expect(useAgentStore.getState().pendingQuestion).not.toBeNull();
   });
 
-  it('applyEvent user_input_received clears pendingQuestion', () => {
+  it('keeps pendingQuestion until resumed execution actually starts', () => {
     const s = useAgentStore.getState();
     s.setTask('t-1', 'paused');
     s.applyEvent({ type: 'request_user_input', payload: { question: 'q' }, timestamp: 1 });
     s.applyEvent({ type: 'user_input_received', payload: { response: 'r', approved: true }, timestamp: 2 });
+    expect(useAgentStore.getState().pendingQuestion).not.toBeNull();
+    s.applyEvent({ type: 'thought', payload: { text: '继续处理回答' }, timestamp: 3 });
     expect(useAgentStore.getState().pendingQuestion).toBeNull();
   });
 

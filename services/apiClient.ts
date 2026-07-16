@@ -67,6 +67,18 @@ export interface AssetOut {
   generating: boolean;
   extra: Record<string, any>;
   created_at: string;
+  status?: string;
+  version?: number;
+  source_asset_id?: string | null;
+  derived_from?: string[];
+  reference_role?: string | null;
+  prompt_source?: string | null;
+  prompt_optimized?: string | null;
+  inspection_status?: string;
+  inspection?: Record<string, any>;
+  visual_identity?: Record<string, any>;
+  reference_capabilities?: Record<string, any>;
+  usage_count?: number;
 }
 
 export interface AgentTaskOut { /* moved up — kept for compat in case imported elsewhere */
@@ -77,6 +89,9 @@ export interface AgentTaskOut { /* moved up — kept for compat in case imported
   plan: any[];
   artifacts: Record<string, any>;
   pending_response?: any;
+  pending_question?: any;
+  task_profile?: Record<string, any> | null;
+  rule_pack_version?: string | null;
   total_cost_usd: number;
   total_tokens: number;
   max_steps: number;

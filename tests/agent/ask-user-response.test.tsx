@@ -11,6 +11,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { AgentMode } from '@/agent/agent-mode';
+import { AskUserResponse } from '@/agent/ask-user-response';
 import { api } from '@/services/apiClient';
 import { useAgentStore } from '@/agent/use-agent-store';
 
@@ -60,6 +61,28 @@ describe('AskUserResponse', () => {
     expect(screen.getByTestId('ask-user-question').textContent).toBe(longQ);
   });
 
+  it('preserves a typed draft when the question card remounts during stream replay', async () => {
+    makePendingQuestion('请输入补充说明', []);
+    const view = render(<AskUserResponse />);
+
+    const input = screen.getByTestId('ask-user-input');
+    fireEvent.change(input, { target: { value: '不要清空这段内容' } });
+
+    view.unmount();
+    render(<AskUserResponse />);
+    useAgentStore.setState({ pendingQuestion: null });
+    useAgentStore.setState({
+      pendingQuestion: {
+        question: '请输入补充说明',
+        options: [],
+        selection_mode: 'text',
+        context: {},
+      } as any,
+    });
+
+    await waitFor(() => expect(screen.getByTestId('ask-user-input')).toHaveValue('不要清空这段内容'));
+  });
+
   it('single-select requires explicit confirmation before respond + resume', async () => {
     makePendingQuestion('选一个', ['A', 'B']);
     const respondSpy = vi.spyOn(api, 'respondAgent').mockResolvedValue({ ok: true } as any);
@@ -77,6 +100,22 @@ describe('AskUserResponse', () => {
     });
     // 单次点击：只调用 1 次 respond（不是 2 次）
     expect(respondSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('disables all answer controls after a successful response', async () => {
+    makePendingQuestion('选择一个', ['A', 'B']);
+    const respondSpy = vi.spyOn(api, 'respondAgent').mockResolvedValue({ ok: true } as any);
+    vi.spyOn(api, 'resumeAgent').mockResolvedValue({ ok: true } as any);
+    render(<AgentMode projectId="p1" />);
+
+    fireEvent.click(screen.getByTestId('ask-user-option-0'));
+    fireEvent.click(screen.getByTestId('ask-user-submit'));
+
+    await waitFor(() => expect(respondSpy).toHaveBeenCalledTimes(1));
+    expect(screen.getByTestId('ask-user-option-0')).toBeDisabled();
+    expect(screen.getByTestId('ask-user-option-1')).toBeDisabled();
+    expect(screen.getByTestId('ask-user-input')).toBeDisabled();
+    expect(screen.getByTestId('ask-user-submit')).toBeDisabled();
   });
 
   it('allows free-text answers even when selectable options are present', async () => {

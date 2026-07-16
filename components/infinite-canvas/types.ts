@@ -171,6 +171,14 @@ export interface TaskAssetRef {
   failed?: boolean;
   /** 生成失败时的错误信息 */
   error?: string;
+  status?: string;
+  version?: number;
+  sourceAssetId?: string;
+  derivedFrom?: string[];
+  referenceRole?: string;
+  promptSource?: string;
+  promptOptimized?: string;
+  inspectionStatus?: string;
 }
 
 export const UNDO_MAX = 30;
