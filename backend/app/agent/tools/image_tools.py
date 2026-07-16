@@ -10,6 +10,7 @@ from ..media_service import MediaRequest, MediaService, get_default_media_servic
 from ..asset_references import resolve_asset_references
 from ..prompt_engineering import optimize_generation_prompt, collect_storyboard_reference_asset_ids
 from .base import BaseTool, ToolContext, ToolParameter
+from ..specs import get_spec_for_tool
 
 
 CHARACTER_DESIGN_SHEET_PROMPT = (
@@ -50,6 +51,9 @@ def _build_character_prompt(character: dict, style: str = "cinematic") -> str:
         "white background, high detail, consistent across views",
         style + " style, professional lighting",
     ]
+    spec = get_spec_for_tool("image_character")
+    if spec:
+        parts.append(spec)
     return ", ".join(p for p in parts if p)
 
 
@@ -59,6 +63,9 @@ def _build_prop_prompt(prop: dict) -> str:
         prop.get("description", ""),
         "product photo, white background, high detail, sharp focus, soft shadows",
     ]
+    spec = get_spec_for_tool("image_prop")
+    if spec:
+        parts.append(spec)
     return ", ".join(p for p in parts if p)
 
 
@@ -71,6 +78,9 @@ def _build_scene_prompt(scene: dict) -> str:
         scene.get("description", ""),
         "cinematic composition, wide shot, atmospheric lighting, 8k, high detail",
     ]
+    spec = get_spec_for_tool("image_scene")
+    if spec:
+        parts.append(spec)
     return ", ".join(p for p in parts if p)
 
 
@@ -85,6 +95,9 @@ def _build_storyboard_prompt(shot: dict, characters: list | None = None) -> str:
     if char_names:
         parts.append(f"featuring {char_names}")
     parts.append("storyboard frame, sketch style, cinematic framing")
+    spec = get_spec_for_tool("image_storyboard")
+    if spec:
+        parts.append(spec)
     return ", ".join(p for p in parts if p)
 
 
