@@ -399,3 +399,50 @@ export interface UserPreferenceItem {
   value: any;
   updated_at?: string;
 }
+
+// ============ Prompt Templates ============
+export interface PromptTemplateOut {
+  id: string;
+  name: string;
+  category: string;
+  scene: string;
+  positive: string;
+  negative: string;
+  params: Record<string, string>;
+  is_builtin: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export const promptTemplates = {
+  list: (category?: string) =>
+    request<PromptTemplateOut[]>(
+      category ? `/prompt-templates?category=${category}` : '/prompt-templates'
+    ),
+  get: (id: string) =>
+    request<PromptTemplateOut>(`/prompt-templates/${id}`),
+  create: (data: {
+    name: string;
+    category?: string;
+    scene?: string;
+    positive?: string;
+    negative?: string;
+    params?: Record<string, string>;
+  }) =>
+    request<PromptTemplateOut>('/prompt-templates', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  update: (id: string, data: Partial<PromptTemplateOut>) =>
+    request<PromptTemplateOut>(`/prompt-templates/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  remove: (id: string) =>
+    request<{ ok: boolean }>(`/prompt-templates/${id}`, { method: 'DELETE' }),
+  batchRemove: (ids: string[]) =>
+    request<{ removed: number }>('/prompt-templates/batch-delete', {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    }),
+};
