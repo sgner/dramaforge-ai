@@ -1563,6 +1563,18 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
     const ROW_GAP_Y = 32;  // 类别之间的垂直间距
     const COL_GAP_X = 32;  // header 与 image、image 与 image 之间的水平间距
 
+    // 收集本次投影的资产引用，用于同步到 taskAssets（资产库侧栏）
+    const newAssetRefs: TaskAssetRef[] = [];
+    const t = getT();
+    const assetTagMap: Record<string, string> = {
+      character: 'assetTagCharacter',
+      prop: 'assetTagProp',
+      scene: 'assetTagBackground',
+      storyboard: 'assetTagStoryboard',
+      novel: 'canvasPanelAssetsNovel',
+      script: 'canvasPanelAssetsScript',
+    };
+
     // 3) 应用更新：先清掉所有 agent 投影节点（按 id 前缀），再加新的
     set((s) => {
       // 保留所有非 agent 节点（user-drawn）
@@ -1631,6 +1643,23 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
             // 保留用户拖动过的其他字段
             ...(existingImg ? { running: existingImg.running } : {}),
           } as CanvasNode);
+          // 同步收集 assetRef，用于把 agent 资产推入 taskAssets（资产库侧栏）
+          const tagKey = assetTagMap[bucket.kind] || '';
+          const tagLabel = tagKey ? t(tagKey) : bucket.kind;
+          newAssetRefs.push({
+            id: imgNodeId,
+            kind: bucket.kind as TaskAssetKind,
+            name: itemName,
+            url: typeof itemUrl === 'string' ? itemUrl : '',
+            tags: Boolean((item as any).failed) ? [tagLabel, t('canvasPanelAssetTagFailed')] : [tagLabel],
+            prompt: itemPrompt,
+            providerId: itemProviderId || undefined,
+            providerName: itemProviderName || undefined,
+            modelId: itemModelId || undefined,
+            generating: Boolean((item as any).generating),
+            failed: Boolean((item as any).failed),
+            error: (item as any).error,
+          });
         });
 
         // 下一个分类从 (runningY + max(HEADER_H, items_count * IMG_H) + ROW_GAP_Y) 开始
@@ -1644,6 +1673,20 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
         connections: otherConns,
       };
     });
+
+    // 4) 同步 agent 资产到 taskAssets（让资产库侧栏实时显示）+ 后端
+    //    每次 agent event 都会重放整个 artifacts 快照，所以先清掉旧的 agent 投影资产，
+    //    再合并新的。syncAssetCreate 只对"新"或"url 变化"的资产调用，避免重复创建后端记录。
+    const prevAssets = get().taskAssets || [];
+    const nonAgentAssets = prevAssets.filter((a) => !a.id.startsWith('agent-asset-'));
+    get().setTaskAssets([...nonAgentAssets, ...newAssetRefs]);
+    const prevById = new Map(prevAssets.map((a) => [a.id, a]));
+    for (const ref of newAssetRefs) {
+      const prev = prevById.get(ref.id);
+      if (!prev || prev.url !== ref.url) {
+        void syncAssetCreate(ref, get().projectId || undefined);
+      }
+    }
   },
 
   clearAgentNodes: () =>
@@ -1655,6 +1698,8 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
         nodes: s.nodes.filter((n) => !removed.has(n.id)),
         connections: s.connections.filter((c) => !removed.has(c.from) && !removed.has(c.to)),
         selected: new Set([...s.selected].filter((id) => !removed.has(id))),
+        // 同步移除 taskAssets 中对应的 agent 投影资产（保持资产库侧栏一致）
+        taskAssets: s.taskAssets.filter((a) => !a.id.startsWith('agent-asset-')),
       };
     }),
 
