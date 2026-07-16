@@ -192,66 +192,99 @@ function AppContent() {
   }, []);
 
   useEffect(() => {
-    // 1) 异步从后端加载 DramaTask（不再用 localStorage 的 dramaforge_tasks）。
-    //    老 localStorage 的任务作为一次性迁移：如果后端为空且 localStorage 有，
-    //    把 localStorage 里的任务上传到后端后再清空 localStorage。
-    //    失败时回落到 localStorage 旧数据（兜底）。
+    // 首屏：用单个 GET /api/bootstrap 合并 listDramaTasks + listProviders +
+    // getUserPreference('model_bindings') 三个请求，减少 RTT（3 → 1）。
+    // 失败时回落到 localStorage（任务兜底 + 老 API 配置迁移），逻辑与原
+    // 三请求版完全一致。
     let cancelled = false;
-    api.listDramaTasks()
-      .then(async (rows) => {
+    const applyLoadedApiConfig = (config: ApiConfig) => {
+      setApiConfig(config);
+      useCanvasStore.getState().setApiConfig(config);
+    };
+
+    api.bootstrap()
+      .then(async (boot) => {
         if (cancelled) return;
-        if (rows && rows.length > 0) {
-          // 后端有数据 → 直接用
-          const tasksFromBackend: DramaTask[] = rows.map((r) => {
-            // data 里就是完整 DramaTask JSON；与 r.id / r.name 合并
+
+        // ── 1) tasks ──────────────────────────────────────────────
+        // 后端有数据 → 直接用；后端为空 → 尝试从 localStorage 迁移。
+        if (boot.tasks && boot.tasks.length > 0) {
+          const tasksFromBackend: DramaTask[] = boot.tasks.map((r) => {
             const { id, name, ...rest } = (r.data || {}) as DramaTask & { id?: string; name?: string };
             return { ...(rest as DramaTask), id: r.id, name: r.name || name || 'Untitled' };
           });
           setTasks(tasksFromBackend);
-          return;
-        }
-        // 后端为空 → 尝试从 localStorage 迁移
-        const legacyRaw = localStorage.getItem('dramaforge_tasks');
-        if (legacyRaw) {
-          try {
-            const legacyTasks: DramaTask[] = JSON.parse(legacyRaw).tasks || JSON.parse(legacyRaw);
-            if (Array.isArray(legacyTasks) && legacyTasks.length > 0) {
-              // 上传到后端
-              for (const t of legacyTasks) {
-                try {
-                  await api.upsertDramaTask(t.id, { name: t.name, data: t as any });
-                } catch (e) {
-                  console.warn('[App] migrate legacy task failed', t.id, e);
-                }
-              }
-              if (!cancelled) {
-                setTasks(legacyTasks);
-                // 迁移成功后清掉 localStorage（避免下次再迁一次）
-                try { localStorage.removeItem('dramaforge_tasks'); } catch {}
-                // 同步清掉备份（避免备份里的老数据"复活"）
-                try {
-                  for (let i = localStorage.length - 1; i >= 0; i--) {
-                    const k = localStorage.key(i);
-                    if (k && (k.startsWith('dramaforge_tasks_backup') || k === 'dramaforge_tasks_autobackup')) {
-                      localStorage.removeItem(k);
-                    }
+        } else {
+          const legacyRaw = localStorage.getItem('dramaforge_tasks');
+          if (legacyRaw) {
+            try {
+              const legacyTasks: DramaTask[] = JSON.parse(legacyRaw).tasks || JSON.parse(legacyRaw);
+              if (Array.isArray(legacyTasks) && legacyTasks.length > 0) {
+                for (const t of legacyTasks) {
+                  try {
+                    await api.upsertDramaTask(t.id, { name: t.name, data: t as any });
+                  } catch (e) {
+                    console.warn('[App] migrate legacy task failed', t.id, e);
                   }
-                } catch {}
-                console.info(`[App] migrated ${legacyTasks.length} legacy tasks from localStorage to backend`);
+                }
+                if (!cancelled) {
+                  setTasks(legacyTasks);
+                  try { localStorage.removeItem('dramaforge_tasks'); } catch {}
+                  try {
+                    for (let i = localStorage.length - 1; i >= 0; i--) {
+                      const k = localStorage.key(i);
+                      if (k && (k.startsWith('dramaforge_tasks_backup') || k === 'dramaforge_tasks_autobackup')) {
+                        localStorage.removeItem(k);
+                      }
+                    }
+                  } catch {}
+                  console.info(`[App] migrated ${legacyTasks.length} legacy tasks from localStorage to backend`);
+                }
+              } else {
+                setTasks([]);
               }
-              return;
+            } catch (e) {
+              console.warn('[App] parse legacy localStorage tasks failed', e);
+              setTasks([]);
             }
-          } catch (e) {
-            console.warn('[App] parse legacy localStorage tasks failed', e);
+          } else {
+            setTasks([]);
           }
         }
-        // 都没有 → 空数组
-        setTasks([]);
+
+        // ── 2) providers + model_bindings ────────────────────────
+        // rows 来自后端 ProviderOut（api_key 脱敏），转成前端 Provider
+        const providers: any[] = (boot.providers || []).map((r) => ({
+          id: r.provider_id,
+          name: r.name || r.provider_id,
+          baseUrl: r.base_url || '',
+          protocol: r.protocol || 'openai',
+          enabled: r.enabled !== false,
+          // 后端只返脱敏 key；不要把脱敏值塞进可编辑字段，否则保存会覆盖真 key。
+          apiKey: r.has_key ? '' : (r.api_key || ''),
+          hasKey: r.has_key || false,
+          keyPreview: r.key_preview || '',
+          defaultModel: r.default_model || '',
+          chatModels: r.chat_models || [],
+          imageModels: r.image_models || [],
+          videoModels: r.video_models || [],
+        }));
+        // model_bindings：后端是主存，localStorage 兜底
+        let bindings: any[] | null = null;
+        if (Array.isArray(boot.modelBindings)) {
+          bindings = boot.modelBindings;
+        } else {
+          try {
+            const raw = localStorage.getItem(STORAGE_KEY_MODEL_BINDINGS);
+            if (raw) bindings = JSON.parse(raw);
+          } catch {}
+        }
+        applyLoadedApiConfig(normalizeModelBindings({ providers, modelBindings: bindings || [] }));
       })
       .catch((e) => {
         if (cancelled) return;
-        console.error('[App] listDramaTasks failed, falling back to localStorage', e);
-        // 后端不可用：兜底用 localStorage
+        console.error('[App] bootstrap failed, falling back to localStorage', e);
+        // 后端不可用：tasks 兜底用 localStorage
         const savedTasks = storageService.loadTasks();
         if (savedTasks && savedTasks.length > 0) {
           setTasks(savedTasks);
@@ -261,77 +294,6 @@ function AppContent() {
             setTasks(backupTasks);
           }
         }
-      })
-      .finally(() => {
-        // 标记后端加载完成（不论成功/失败/迁移）；prevTaskIdsRef 那个 effect
-        // 看到 tasksLoadedFromBackendRef.current=false 会初始化 lastSyncedRef。
-        // 失败时 prevTaskIdsRef 也会被填充为当前的 tasks（可能为空或兜底值），
-        // 避免后续 setTasks 误把所有 task 标记成"已删除" → DELETE 后端。
-        if (!cancelled) tasksLoadedFromBackendRef.current = true;
-      });
-    // 2) 异步从后端加载 LLM providers（不再用 localStorage）
-    //    失败时回落到默认配置 + 提示，但用户已在后端配的 provider 不会丢
-    // App owns the backend-loaded config, while AgentMode reads the canvas store.
-    // Keep both stores updated at the same boundary so Agent never starts with
-    // an empty step binding after the settings have loaded.
-    const applyLoadedApiConfig = (config: ApiConfig) => {
-      setApiConfig(config);
-      useCanvasStore.getState().setApiConfig(config);
-    };
-
-    api.listProviders()
-      .then((rows: any[]) => {
-        if (cancelled) return;
-        // rows 来自后端 ProviderOut（api_key 脱敏），转成前端 Provider
-        const providers: any[] = (rows || []).map((r) => ({
-          id: r.provider_id,
-          name: r.name || r.provider_id,
-          baseUrl: r.base_url || '',
-          protocol: r.protocol || 'openai',
-          enabled: r.enabled !== false,
-          // GET /providers only returns a masked key. Never put that mask into
-          // the editable value or a later save would overwrite the real key.
-          apiKey: r.has_key ? '' : (r.api_key || ''),
-          hasKey: r.has_key || false,
-          keyPreview: r.key_preview || '',
-          defaultModel: r.default_model || '',
-          chatModels: r.chat_models || [],
-          imageModels: r.image_models || [],
-          videoModels: r.video_models || [],
-        }));
-        // 2) stepBindings：后端是主存，localStorage 兜底
-        const applyPreference = (backend: any) => {
-            if (Array.isArray(backend?.value)) {
-              applyLoadedApiConfig(normalizeModelBindings({ providers, modelBindings: backend.value }));
-            } else {
-              let local: any[] = [];
-              try {
-                const raw = localStorage.getItem(STORAGE_KEY_MODEL_BINDINGS);
-                if (raw) local = JSON.parse(raw);
-              } catch {}
-              applyLoadedApiConfig(normalizeModelBindings({ providers, modelBindings: local }));
-            }
-        };
-        api.getUserPreference('model_bindings')
-          .then((backend) => {
-            if (Array.isArray(backend?.value)) {
-              applyPreference(backend);
-              return;
-            }
-            applyPreference({ value: [] });
-          })
-          .catch(() => {
-            let local: any[] = [];
-            try {
-              const raw = localStorage.getItem(STORAGE_KEY_MODEL_BINDINGS);
-              if (raw) local = JSON.parse(raw);
-            } catch {}
-            applyLoadedApiConfig(normalizeModelBindings({ providers, modelBindings: local }));
-          });
-      })
-      .catch((e) => {
-        if (cancelled) return;
-        console.error('[App] listProviders failed, falling back to localStorage legacy', e);
         // 后端不可用时回落到老 localStorage（含 geminiKey / 旧格式自动迁移）
         const savedConfig = localStorage.getItem(STORAGE_KEY_API_CONFIG_LEGACY);
         let localBindings: any[] = [];
@@ -377,6 +339,11 @@ function AppContent() {
             modelBindings: localBindings,
           }));
         }
+      })
+      .finally(() => {
+        // 标记后端加载完成（不论成功/失败/迁移）；prevTaskIdsRef 那个 effect
+        // 看到 tasksLoadedFromBackendRef.current=false 会初始化 lastSyncedRef。
+        if (!cancelled) tasksLoadedFromBackendRef.current = true;
       });
     return () => {
       cancelled = true;

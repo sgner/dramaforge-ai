@@ -368,7 +368,26 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+
+  // ---------- Bootstrap (首屏合并端点) ----------
+  // 合并 listDramaTasks + listProviders + getUserPreference('model_bindings')
+  // 三个首屏请求为单个 /api/bootstrap，减少 RTT（3 → 1）。
+  bootstrap: () =>
+    request<BootstrapOut>('/bootstrap'),
 };
+
+/**
+ * GET /api/bootstrap 响应体。
+ * 三个字段一一对应原 3 个端点的载荷。
+ */
+export interface BootstrapOut {
+  /** DramaTask 列表（不含 deleted，与 GET /api/drama-tasks 等价）。 */
+  tasks: DramaTaskApiOut[];
+  /** Provider 列表（api_key 脱敏，与 GET /api/providers 等价）。 */
+  providers: ProviderOut[];
+  /** model_bindings 偏好（未设置时为 null）。 */
+  modelBindings: any[] | null;
+}
 
 // ============ Provider (统一 endpoint, Plan 5) ============
 /**

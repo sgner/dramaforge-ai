@@ -1,8 +1,8 @@
 /**
- * TDD: App.tsx — DramaTask 数据迁移到后端 (/api/drama-tasks)
+ * TDD: App.tsx — DramaTask 数据迁移到后端 (/api/bootstrap)
  *
  * 关键设计：
- *  - 挂载时从后端 api.listDramaTasks 拉项目列表
+ *  - 挂载时从后端 api.bootstrap 拉首屏（tasks + providers + model_bindings）
  *  - tasks 变化时 debounce 500ms 后调 api.upsertDramaTask 同步
  *  - 删除 task 时调 api.deleteDramaTask
  *  - 老的 localStorage dramaforge_tasks 作为一次性迁移：后端为空时上传
@@ -27,8 +27,8 @@ vi.mock('@/services/storageService', () => ({
   },
 }));
 
-// 默认空 backend，让 App 走"无项目"路径
-const mockListDramaTasks = vi.fn().mockResolvedValue([]);
+// 默认空 bootstrap：tasks/providers 都空，modelBindings null
+const mockBootstrap = vi.fn().mockResolvedValue({ tasks: [], providers: [], modelBindings: null });
 const mockUpsertDramaTask = vi.fn().mockResolvedValue({ ok: true });
 const mockDeleteDramaTask = vi.fn().mockResolvedValue({ ok: true });
 
@@ -41,7 +41,7 @@ vi.mock('@/services/apiClient', () => ({
     respondAgent: vi.fn().mockResolvedValue({ ok: true }),
     pauseAgent: vi.fn().mockResolvedValue({ ok: true }),
     resumeAgent: vi.fn().mockResolvedValue({ ok: true }),
-    listDramaTasks: (...args: any[]) => mockListDramaTasks(...args),
+    bootstrap: (...args: any[]) => mockBootstrap(...args),
     upsertDramaTask: (...args: any[]) => mockUpsertDramaTask(...args),
     deleteDramaTask: (...args: any[]) => mockDeleteDramaTask(...args),
     getUserPreference: vi.fn().mockResolvedValue({ value: null }),
@@ -49,18 +49,18 @@ vi.mock('@/services/apiClient', () => ({
   },
 }));
 
-describe('<App /> — DramaTask 持久化到后端 (/api/drama-tasks)', () => {
+describe('<App /> — DramaTask 持久化到后端 (/api/bootstrap)', () => {
   beforeEach(() => {
     cleanup();
     localStorage.clear();
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    mockListDramaTasks.mockReset();
+    mockBootstrap.mockReset();
     mockUpsertDramaTask.mockReset();
     mockDeleteDramaTask.mockReset();
     mockLoadTasks.mockReset().mockReturnValue([]);
     mockLoadFromBackup.mockReset().mockReturnValue([]);
     mockSaveTasks.mockReset();
-    mockListDramaTasks.mockResolvedValue([]);
+    mockBootstrap.mockResolvedValue({ tasks: [], providers: [], modelBindings: null });
     mockUpsertDramaTask.mockResolvedValue({ ok: true } as any);
     mockDeleteDramaTask.mockResolvedValue({ ok: true } as any);
   });
@@ -69,34 +69,38 @@ describe('<App /> — DramaTask 持久化到后端 (/api/drama-tasks)', () => {
     vi.useRealTimers();
   });
 
-  it('挂载时调 api.listDramaTasks 拉项目列表（不再从 localStorage 读）', async () => {
-    mockListDramaTasks.mockResolvedValue([
-      {
-        id: 'p1',
-        name: 'Backend Project',
-        deleted: false,
-        data: {
+  it('挂载时调 api.bootstrap 拉项目列表（不再从 localStorage 读）', async () => {
+    mockBootstrap.mockResolvedValue({
+      tasks: [
+        {
+          id: 'p1',
           name: 'Backend Project',
-          style: 'Cinematic Realistic',
-          language: 'zh',
-          mode: 'auto',
-          sourceType: 'idea',
-          createdAt: 1700000000000,
-          status: 'IDLE',
-          stepStatus: 'idle',
-          progress: 0,
-          rawNovelText: '',
-          characters: [],
-          bigShots: [],
+          deleted: false,
+          data: {
+            name: 'Backend Project',
+            style: 'Cinematic Realistic',
+            language: 'zh',
+            mode: 'auto',
+            sourceType: 'idea',
+            createdAt: 1700000000000,
+            status: 'IDLE',
+            stepStatus: 'idle',
+            progress: 0,
+            rawNovelText: '',
+            characters: [],
+            bigShots: [],
+          },
+          created_at: '2025-01-01T00:00:00',
+          updated_at: '2025-01-01T00:00:00',
         },
-        created_at: '2025-01-01T00:00:00',
-        updated_at: '2025-01-01T00:00:00',
-      },
-    ] as any);
+      ],
+      providers: [],
+      modelBindings: null,
+    } as any);
 
     render(<App />);
     await waitFor(() => {
-      expect(mockListDramaTasks).toHaveBeenCalled();
+      expect(mockBootstrap).toHaveBeenCalled();
     });
     await waitFor(() => {
       expect(screen.getByText('Backend Project')).toBeInTheDocument();
@@ -104,7 +108,7 @@ describe('<App /> — DramaTask 持久化到后端 (/api/drama-tasks)', () => {
   });
 
   it('后端返回空 + localStorage 有老数据 → 一次性迁移到后端', async () => {
-    mockListDramaTasks.mockResolvedValue([]);
+    mockBootstrap.mockResolvedValue({ tasks: [], providers: [], modelBindings: null });
     const legacy = [
       {
         id: 'legacy-1',
@@ -127,7 +131,7 @@ describe('<App /> — DramaTask 持久化到后端 (/api/drama-tasks)', () => {
 
     render(<App />);
     await waitFor(() => {
-      expect(mockListDramaTasks).toHaveBeenCalled();
+      expect(mockBootstrap).toHaveBeenCalled();
     });
     // 等迁移完成（api.upsertDramaTask 应被调）
     await waitFor(() => {
@@ -141,7 +145,7 @@ describe('<App /> — DramaTask 持久化到后端 (/api/drama-tasks)', () => {
   });
 
   it('后端不可用时回落到 localStorage（兜底）', async () => {
-    mockListDramaTasks.mockRejectedValue(new Error('network down'));
+    mockBootstrap.mockRejectedValue(new Error('network down'));
     const legacy = [
       {
         id: 'fallback-1',
@@ -172,7 +176,7 @@ describe('<App /> — DramaTask 持久化到后端 (/api/drama-tasks)', () => {
   });
 
   it('后端空 + localStorage 也空 → 显示空状态（hero + 创建按钮）', async () => {
-    mockListDramaTasks.mockResolvedValue([]);
+    mockBootstrap.mockResolvedValue({ tasks: [], providers: [], modelBindings: null });
     mockLoadTasks.mockReturnValue([]);
     mockLoadFromBackup.mockReturnValue([]);
 

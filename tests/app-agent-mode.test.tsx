@@ -49,17 +49,21 @@ vi.mock('@/services/apiClient', () => ({
     respondAgent: vi.fn().mockResolvedValue({ ok: true }),
     pauseAgent: vi.fn().mockResolvedValue({ ok: true }),
     resumeAgent: vi.fn().mockResolvedValue({ ok: true }),
-    // 新版 DramaTask 走 api（替代 storageService.loadTasks）
-    listDramaTasks: vi.fn().mockResolvedValue([
-      {
-        id: 'proj-1',
-        name: 'Test Project',
-        deleted: false,
-        data: { ...MOCK_PROJECT },
-        created_at: '2025-01-01T00:00:00',
-        updated_at: '2025-01-01T00:00:00',
-      },
-    ]),
+    // 新版首屏：bootstrap 合并 tasks + providers + modelBindings
+    bootstrap: vi.fn().mockResolvedValue({
+      tasks: [
+        {
+          id: 'proj-1',
+          name: 'Test Project',
+          deleted: false,
+          data: { ...MOCK_PROJECT },
+          created_at: '2025-01-01T00:00:00',
+          updated_at: '2025-01-01T00:00:00',
+        },
+      ],
+      providers: [],
+      modelBindings: null,
+    }),
     upsertDramaTask: vi.fn().mockResolvedValue({ ok: true }),
     deleteDramaTask: vi.fn().mockResolvedValue({ ok: true }),
     getUserPreference: vi.fn().mockResolvedValue({ value: null }),
@@ -144,20 +148,27 @@ describe('<App /> — Agent Mode 入口（位于 Canvas 工具栏）', () => {
   });
 
   it('loads canvas API settings into the store used by AgentMode', async () => {
-    vi.mocked(api.listProviders).mockResolvedValue([{
-      provider_id: 'custom-api',
-      name: 'Custom API',
-      base_url: 'https://example.test/v1',
-      protocol: 'openai',
-      enabled: true,
-      default_model: 'deepseek-v4-flash',
-      chat_models: ['deepseek-v4-flash'],
-      image_models: [],
-      video_models: [],
-    }] as any);
-    vi.mocked(api.getUserPreference).mockResolvedValue({
-      key: 'model_bindings',
-      value: [{ kind: 'llm', providerId: 'custom-api', modelId: 'deepseek-v4-flash' }],
+    vi.mocked(api.bootstrap).mockResolvedValue({
+      tasks: [{
+        id: 'proj-1',
+        name: 'Test Project',
+        deleted: false,
+        data: { ...MOCK_PROJECT },
+        created_at: '2025-01-01T00:00:00',
+        updated_at: '2025-01-01T00:00:00',
+      }],
+      providers: [{
+        provider_id: 'custom-api',
+        name: 'Custom API',
+        base_url: 'https://example.test/v1',
+        protocol: 'openai',
+        enabled: true,
+        default_model: 'deepseek-v4-flash',
+        chat_models: ['deepseek-v4-flash'],
+        image_models: [],
+        video_models: [],
+      }],
+      modelBindings: [{ kind: 'llm', providerId: 'custom-api', modelId: 'deepseek-v4-flash' }],
     } as any);
 
     render(<App />);
@@ -174,20 +185,30 @@ describe('<App /> — Agent Mode 入口（位于 Canvas 工具栏）', () => {
   });
 
   it('does not treat the masked provider key returned by the backend as an editable key', async () => {
-    vi.mocked(api.listProviders).mockResolvedValue([{
-      provider_id: 'custom-api',
-      name: 'Custom API',
-      base_url: 'https://example.test/v1',
-      protocol: 'openai',
-      enabled: true,
-      api_key: 'sk-F***k1hm',
-      has_key: true,
-      key_preview: 'sk-F***k1hm',
-      chat_models: ['chat-1'],
-      image_models: [],
-      video_models: [],
-    }] as any);
-    vi.mocked(api.getUserPreference).mockResolvedValue({ key: 'model_bindings', value: [] } as any);
+    vi.mocked(api.bootstrap).mockResolvedValue({
+      tasks: [{
+        id: 'proj-1',
+        name: 'Test Project',
+        deleted: false,
+        data: { ...MOCK_PROJECT },
+        created_at: '2025-01-01T00:00:00',
+        updated_at: '2025-01-01T00:00:00',
+      }],
+      providers: [{
+        provider_id: 'custom-api',
+        name: 'Custom API',
+        base_url: 'https://example.test/v1',
+        protocol: 'openai',
+        enabled: true,
+        api_key: 'sk-F***k1hm',
+        has_key: true,
+        key_preview: 'sk-F***k1hm',
+        chat_models: ['chat-1'],
+        image_models: [],
+        video_models: [],
+      }],
+      modelBindings: [],
+    } as any);
 
     render(<App />);
     await openCanvas();
@@ -202,7 +223,8 @@ describe('<App /> — Agent Mode 入口（位于 Canvas 工具栏）', () => {
   });
 
   it('restores capability bindings from local backup when the provider API is unavailable', async () => {
-    vi.mocked(api.listProviders).mockRejectedValue(new Error('backend unavailable'));
+    // bootstrap 整体失败 → 走 localStorage 兜底逻辑（providers 默认 + 本地 bindings）
+    vi.mocked(api.bootstrap).mockRejectedValue(new Error('backend unavailable'));
     localStorage.setItem('dramaforge_model_bindings', JSON.stringify([
       { kind: 'llm', providerId: 'custom-api', modelId: 'chat-1' },
     ]));
@@ -220,9 +242,20 @@ describe('<App /> — Agent Mode 入口（位于 Canvas 工具栏）', () => {
 
   it('shows prompt library panel when toggle button clicked', async () => {
     // ... existing setup that opens canvas ...
-    // Reset mocks that may have been mutated by earlier tests (e.g. listProviders
+    // Reset mocks that may have been mutated by earlier tests (e.g. bootstrap
     // rejected in the "backend unavailable" test) so the App loads normally.
-    vi.mocked(api.listProviders).mockResolvedValue([]);
+    vi.mocked(api.bootstrap).mockResolvedValue({
+      tasks: [{
+        id: 'proj-1',
+        name: 'Test Project',
+        deleted: false,
+        data: { ...MOCK_PROJECT },
+        created_at: '2025-01-01T00:00:00',
+        updated_at: '2025-01-01T00:00:00',
+      }],
+      providers: [],
+      modelBindings: null,
+    });
     // Reset URL: an earlier test pushes ?agent=1 which would make the App boot
     // in agent mode, turning the enter-agent-mode click into an exit toggle.
     window.history.pushState({}, '', '/');
