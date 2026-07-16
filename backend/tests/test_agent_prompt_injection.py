@@ -211,3 +211,41 @@ async def test_build_prompts_run_without_spec_when_docs_missing(tmp_path, monkey
     assert "Character portrait" in char_p
     assert "Scene:" in scene_p
     assert "Object:" in prop_p
+
+
+# ========================
+# llm.py REACT_SYSTEM_PROMPT 铁律段
+# ========================
+
+def test_react_system_prompt_contains_project_spec_section():
+    """REACT_SYSTEM_PROMPT 必须包含【项目规范】总览段。"""
+    from app.agent.llm import REACT_SYSTEM_PROMPT
+    assert "【项目规范】" in REACT_SYSTEM_PROMPT
+
+
+def test_react_system_prompt_contains_isolation_rule():
+    """铁律：角色/场景/道具三者严格隔离。"""
+    from app.agent.llm import REACT_SYSTEM_PROMPT
+    assert "隔离" in REACT_SYSTEM_PROMPT
+    assert "角色" in REACT_SYSTEM_PROMPT
+    assert "场景" in REACT_SYSTEM_PROMPT
+    assert "道具" in REACT_SYSTEM_PROMPT
+
+
+def test_react_system_prompt_contains_material_rule():
+    """铁律：材质必须可触摸。"""
+    from app.agent.llm import REACT_SYSTEM_PROMPT
+    assert "可触摸" in REACT_SYSTEM_PROMPT
+
+
+def test_react_system_prompt_contains_word_count_rule():
+    """铁律：字数硬性范围。"""
+    from app.agent.llm import REACT_SYSTEM_PROMPT
+    assert "400-600" in REACT_SYSTEM_PROMPT or "400" in REACT_SYSTEM_PROMPT
+    assert "500-800" in REACT_SYSTEM_PROMPT or "500" in REACT_SYSTEM_PROMPT
+
+
+def test_build_system_prompt_still_returns_react_prompt():
+    """build_system_prompt() 仍返回 REACT_SYSTEM_PROMPT（向后兼容）。"""
+    from app.agent.llm import REACT_SYSTEM_PROMPT, build_system_prompt
+    assert build_system_prompt() == REACT_SYSTEM_PROMPT
