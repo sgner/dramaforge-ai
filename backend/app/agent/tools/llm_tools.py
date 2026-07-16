@@ -55,7 +55,7 @@ class GenerateScriptTool(BaseTool):
             {"role": "system", "content": GENERATE_SCRIPT_SYSTEM_PROMPT},
             {"role": "user", "content": _format_goal(params) + "\n\n【小说】\n" + str(params["novel_text"])},
         ]
-        resp = await ctx.llm_client.generate(messages, temperature=0.6, max_tokens=4000)
+        resp = await ctx.generate_llm(messages, temperature=0.6, max_tokens=4000)
         data = _coerce_json(resp.content) or {}
         if "scenes" not in data:
             data = {"scenes": []}
@@ -103,7 +103,7 @@ class ExtractCharactersTool(BaseTool):
             {"role": "system", "content": EXTRACT_CHARACTERS_SYSTEM_PROMPT},
             {"role": "user", "content": "【脚本】\n" + json.dumps(params["script"], ensure_ascii=False)},
         ]
-        resp = await ctx.llm_client.generate(messages, temperature=0.4, max_tokens=2000)
+        resp = await ctx.generate_llm(messages, temperature=0.4, max_tokens=2000)
         data = _coerce_json(resp.content) or {}
         return {"characters": data.get("characters", [])}
 
@@ -149,7 +149,7 @@ class ExtractPropsTool(BaseTool):
             {"role": "system", "content": EXTRACT_PROPS_SYSTEM_PROMPT},
             {"role": "user", "content": "【脚本】\n" + json.dumps(params["script"], ensure_ascii=False)},
         ]
-        resp = await ctx.llm_client.generate(messages, temperature=0.4, max_tokens=1500)
+        resp = await ctx.generate_llm(messages, temperature=0.4, max_tokens=1500)
         data = _coerce_json(resp.content) or {}
         return {"props": data.get("props", [])}
 
@@ -189,7 +189,7 @@ class ExtractScenesTool(BaseTool):
             {"role": "system", "content": EXTRACT_SCENES_SYSTEM_PROMPT},
             {"role": "user", "content": "【脚本】\n" + json.dumps(params["script"], ensure_ascii=False)},
         ]
-        resp = await ctx.llm_client.generate(messages, temperature=0.4, max_tokens=2000)
+        resp = await ctx.generate_llm(messages, temperature=0.4, max_tokens=2000)
         data = _coerce_json(resp.content) or {}
         return {"scenes": data.get("scenes", [])}
 
@@ -240,7 +240,7 @@ class ExtractShotsTool(BaseTool):
                 + "\n\n【场景】\n" + json.dumps(params["scenes"], ensure_ascii=False)
             )},
         ]
-        resp = await ctx.llm_client.generate(messages, temperature=0.5, max_tokens=4000)
+        resp = await ctx.generate_llm(messages, temperature=0.5, max_tokens=4000)
         data = _coerce_json(resp.content) or {}
         return {"shots": data.get("shots", [])}
 
@@ -298,7 +298,7 @@ class OptimizePromptTool(BaseTool):
                 + ("\n\n【上下文】\n" + json.dumps(params["context"], ensure_ascii=False) if params.get("context") else "")
             )},
         ]
-        resp = await ctx.llm_client.generate(messages, temperature=0.7, max_tokens=800)
+        resp = await ctx.generate_llm(messages, temperature=0.7, max_tokens=800)
         optimized = (resp.content or "").strip()
         # 去掉可能的引号
         if optimized.startswith('"') and optimized.endswith('"'):
@@ -397,6 +397,8 @@ EXTRACT_SHOTS_SYSTEM_PROMPT = """你是 DramaForge 摄影指导，把脚本按�
 
 
 OPTIMIZE_PROMPT_SYSTEM_PROMPT = """你是 DramaForge 提示词工程师，擅长把粗略描述改写为适合 {target} 生成模型的细 prompt。
+
+If the context contains `canonical_layout`, treat it as a hard constraint. Preserve its layout, views, identity consistency, background, and negative constraints verbatim; never replace or remove those requirements. Only add subject, action, camera, material, or lighting details around it.
 
 要求：
 - 用具体名词代替抽象词

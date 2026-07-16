@@ -48,6 +48,9 @@ def test_event_type_values():
     assert EventType.ARTIFACT_CREATED == "artifact_created"
     assert EventType.TASK_DONE == "task_done"
     assert EventType.TASK_FAILED == "task_failed"
+    assert EventType.ASSET_INSPECTION_STARTED == "asset_inspection_started"
+    assert EventType.ASSET_INSPECTION_FINISHED == "asset_inspection_finished"
+    assert EventType.ASSET_NORMALIZATION_STARTED == "asset_normalization_started"
 
 
 # ========================

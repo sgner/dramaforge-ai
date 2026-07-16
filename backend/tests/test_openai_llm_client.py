@@ -138,3 +138,20 @@ def test_generate_structured_sets_json_response_format(client):
         body = json.loads(route.calls.last.request.content)
         assert body["response_format"] == {"type": "json_object"}
         assert r.content == '{"a": 1}'
+
+
+def test_generate_streaming_emits_text_deltas_and_returns_complete_response(client):
+    with respx.mock(base_url="https://api.openai.com") as mock:
+        mock.post("/v1/chat/completions").mock(
+            return_value=Response(200, content=(
+                b'data: {"choices":[{"delta":{"content":"hello "}}]}\n\n'
+                b'data: {"choices":[{"delta":{"content":"world"}}]}\n\n'
+                b'data: [DONE]\n\n'
+            ), headers={"content-type": "text/event-stream"}))
+        chunks = []
+        r = asyncio.run(client.generate_streaming(
+            [{"role": "user", "content": "hello"}],
+            on_delta=chunks.append,
+        ))
+        assert chunks == ["hello ", "world"]
+        assert r.content == "hello world"

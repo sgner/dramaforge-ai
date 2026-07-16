@@ -38,6 +38,8 @@ htmlcov/
 venv/
 backend/.venv/
 backend/dramaforge.db
+backend/uploads/
+backend/app/uploads/
 
 # OS
 Thumbs.db

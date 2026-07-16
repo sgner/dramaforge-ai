@@ -27,10 +27,10 @@ import {
 } from 'lucide-react';
 import {
   ApiConfig,
+  ModelBindingKind,
   Provider,
   ProviderProtocol,
-  StepModelBinding,
-  StepType,
+  normalizeModelBindings,
 } from '../../types';
 import { useI18n } from '../../i18n';
 import { api } from '../../services/apiClient';
@@ -73,26 +73,14 @@ const MODEL_KIND_META: Record<ModelKind, { key: keyof Provider; label: string; c
   video: { key: 'videoModels', label: 'canvasApiSettingsVideoModelLabel', color: 'var(--text)' },
 };
 
-const STEP_DEFAULT_MODEL_KIND: Record<StepType, ModelKind> = {
-  preprocessing: 'chat',
-  scriptGeneration: 'chat',
-  promptOptimization: 'chat',
-  characterDesign: 'image',
-  storyboarding: 'image',
-  videoGeneration: 'video',
+const CAPABILITY_META: Record<ModelBindingKind, { modelKind: ModelKind; labelKey: string }> = {
+  llm: { modelKind: 'chat', labelKey: 'canvasApiSettingsCatLlm' },
+  image: { modelKind: 'image', labelKey: 'canvasApiSettingsCatImage' },
+  video: { modelKind: 'video', labelKey: 'canvasApiSettingsCatVideo' },
 };
 
-const STEP_LABEL_KEYS: Record<StepType, string> = {
-  preprocessing: 'canvasApiSettingsStepPreprocessing',
-  scriptGeneration: 'canvasApiSettingsStepScript',
-  characterDesign: 'canvasApiSettingsStepCharacter',
-  storyboarding: 'canvasApiSettingsStepStoryboard',
-  promptOptimization: 'canvasApiSettingsStepPromptOpt',
-  videoGeneration: 'canvasApiSettingsStepVideo',
-};
-
-function getDefaultModelForStep(step: StepType, p: Provider): string {
-  const kind = STEP_DEFAULT_MODEL_KIND[step];
+function getDefaultModelForCapability(bindingKind: ModelBindingKind, p: Provider): string {
+  const kind = CAPABILITY_META[bindingKind].modelKind;
   const key = MODEL_KIND_META[kind].key;
   const list = (p[key] as string[]) || [];
   return list[0] || '';
@@ -272,12 +260,12 @@ interface Props {
   open: boolean;
   onClose: () => void;
   config: ApiConfig;
-  onSave: (config: ApiConfig) => void;
+  onSave: (config: ApiConfig) => void | Promise<void>;
 }
 
 export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSave }) => {
   const { t } = useI18n();
-  const [cfg, setCfg] = useState<ApiConfig>(() => JSON.parse(JSON.stringify(config)));
+  const [cfg, setCfg] = useState<ApiConfig>(() => normalizeModelBindings(JSON.parse(JSON.stringify(config))));
   const [selectedId, setSelectedId] = useState<string>('');
   const [showRecommend, setShowRecommend] = useState(false);
   const [status, setStatus] = useState('');
@@ -354,7 +342,7 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
 
   // Sync config from parent
   useEffect(() => {
-    setCfg(JSON.parse(JSON.stringify(config)));
+    setCfg(normalizeModelBindings(JSON.parse(JSON.stringify(config))));
   }, [config]);
 
   // Auto-select first provider
@@ -610,18 +598,18 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
         return {
           ...prev,
           providers: updatedProviders,
-          stepBindings: prev.stepBindings.map(b => {
+          modelBindings: prev.modelBindings.map(b => {
             const boundP = updatedProviders.find(p => p.id === b.providerId);
             const boundModels = boundP
               ? [...(boundP.chatModels || []), ...(boundP.imageModels || []), ...(boundP.videoModels || [])]
               : [];
             // 自动修复绑定：无模型 / modelId 为空 / 当前模型不在步骤期望分类中
-            const expectedKind = STEP_DEFAULT_MODEL_KIND[b.step];
+            const expectedKind = CAPABILITY_META[b.kind].modelKind;
             const expectedKey = MODEL_KIND_META[expectedKind].key;
             const expectedModels = boundP ? ((boundP[expectedKey] as string[]) || []) : [];
             const isMismatch = b.modelId && !expectedModels.includes(b.modelId);
             if (boundModels.length === 0 || !b.modelId || isMismatch) {
-              return { ...b, providerId: item.id, modelId: getDefaultModelForStep(b.step, currentP) };
+              return { ...b, providerId: item.id, modelId: getDefaultModelForCapability(b.kind, currentP) };
             }
             return b;
           }),
@@ -649,6 +637,15 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
     setFetching(true);
     setVerifyResult({ kind: 'info', text: t('canvasApiSettingsVerifyVerifyingUrl') });
     try {
+      // A loaded provider intentionally has no plaintext key in the browser.
+      // Ask the backend to verify with its stored key instead of sending the
+      // masked preview (or an empty value) upstream.
+      if (!item.apiKey) {
+        const result = await api.verifyProvider(item.id);
+        if (!result.ok) throw new Error(`HTTP ${result.status || 502}`);
+        setVerifyResult({ kind: 'ok', text: t('canvasApiSettingsVerifyUrlOk') });
+        return;
+      }
       const url = buildModelListUrl(item.protocol, item.baseUrl, item.apiKey);
       if (!url) throw new Error(t('canvasApiSettingsErrorCannotBuildVerifyUrl'));
       const res = await fetch(url, { method: 'GET', headers: buildAuthHeader(item.protocol, item.apiKey) });
@@ -737,12 +734,12 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
     setJimengHelpOutput(key ? t(key) : `dreamina ${cmd}\n\n${t('canvasApiSettingsJimengHelpNotFound')}`);
   }, [jimengHelpCmd, t]);
 
-  /* ---- Step Binding ---- */
-  const updateStepBinding = useCallback((step: StepType, providerId: string, modelId: string) => {
+  /* ---- Capability Binding ---- */
+  const updateModelBinding = useCallback((kind: ModelBindingKind, providerId: string, modelId: string) => {
     setCfg(prev => ({
       ...prev,
-      stepBindings: prev.stepBindings.map(b =>
-        b.step === step ? { ...b, providerId, modelId } : b
+      modelBindings: prev.modelBindings.map(b =>
+        b.kind === kind ? { ...b, providerId, modelId } : b
       ),
     }));
   }, []);
@@ -817,14 +814,22 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
   /* ---- Save ---- */
   const handleSave = useCallback(async () => {
     // Normalize providers before saving
-    const normalized = {
-      ...cfg,
-      providers: cfg.providers.map(p => ({
+    const normalizedProviders = cfg.providers.map(p => ({
         ...p,
         id: normalizeId(p.id),
         imageModels: unique(p.imageModels),
         chatModels: unique(p.chatModels),
         videoModels: unique(p.videoModels),
+    }));
+    const normalizedProviderIds = new Map(
+      cfg.providers.map((provider, index) => [provider.id, normalizedProviders[index].id]),
+    );
+    const normalized = {
+      ...cfg,
+      providers: normalizedProviders,
+      modelBindings: cfg.modelBindings.map(binding => ({
+        ...binding,
+        providerId: normalizedProviderIds.get(binding.providerId) || binding.providerId,
       })),
     };
     // 1) 同步到后端 DB（统一存储）
@@ -856,7 +861,13 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
     });
 
     // 2) 触发父组件回调（保持向后兼容 — 旧 store 仍以 localStorage 兜底）
-    onSave(normalized);
+    // Persist the capability selection at the same boundary as provider settings.
+    try {
+      await api.setUserPreference('model_bindings', normalized.modelBindings);
+    } catch (e: any) {
+      errors.push(`model_bindings: ${e?.message || 'sync failed'}`);
+    }
+    await onSave(normalized);
     setSaved(true);
     setStatus(
       errors.length
@@ -1781,7 +1792,7 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
     );
   };
 
-  const renderStepBindings = () => {
+  const renderModelBindings = () => {
     return (
       <section className={`api-step-bindings ${stepBindingsCollapsed ? 'is-collapsed' : ''}`}>
         <div className="api-block-head">
@@ -1798,17 +1809,17 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
           </button>
         </div>
         <div className="api-step-grid" style={{ display: stepBindingsCollapsed ? 'none' : 'grid' }}>
-          {cfg.stepBindings.map(binding => {
+          {cfg.modelBindings.map(binding => {
             const boundProvider = cfg.providers.find(p => p.id === binding.providerId);
-            const kind = STEP_DEFAULT_MODEL_KIND[binding.step];
+            const kind = CAPABILITY_META[binding.kind].modelKind;
             const modelKey = MODEL_KIND_META[kind].key;
             const models = boundProvider ? (boundProvider[modelKey] as string[]) || [] : [];
             const providerOptions = cfg.providers.filter(p => p.enabled).map(p => ({ value: p.id, label: p.name }));
             const modelOptions = models.map(m => ({ value: m, label: m }));
             return (
-              <div key={binding.step} className="api-step-card">
+              <div key={binding.kind} data-testid={`api-capability-binding-${binding.kind}`} className="api-step-card">
                 <div className="api-step-card-label">
-                  {t(STEP_LABEL_KEYS[binding.step])}
+                  {t(CAPABILITY_META[binding.kind].labelKey)}
                 </div>
                 <div className="api-step-card-row">
                   <SearchableSelect
@@ -1816,10 +1827,10 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
                     options={providerOptions}
                     onChange={(newProviderId) => {
                       const newProvider = cfg.providers.find(p => p.id === newProviderId);
-                      updateStepBinding(
-                        binding.step,
+                      updateModelBinding(
+                        binding.kind,
                         newProviderId,
-                        newProvider ? getDefaultModelForStep(binding.step, newProvider) : ''
+                        newProvider ? getDefaultModelForCapability(binding.kind, newProvider) : ''
                       );
                     }}
                     searchPlaceholder={t('canvasApiSettingsSearchProviders')}
@@ -1828,7 +1839,7 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
                   <SearchableSelect
                     value={binding.modelId}
                     options={modelOptions}
-                    onChange={(v) => updateStepBinding(binding.step, binding.providerId, v)}
+                    onChange={(v) => updateModelBinding(binding.kind, binding.providerId, v)}
                     searchPlaceholder={t('canvasApiSettingsSearchModels')}
                     emptyText={models.length === 0 ? t('canvasApiSettingsNoModelsForType') : t('canvasApiSettingsSearchEmpty')}
                     placeholder={models.length === 0 ? t('canvasApiSettingsNoModelsForType') : undefined}
@@ -2225,12 +2236,12 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
         </div>
 
         {/* Global Step Bindings */}
-        {renderStepBindings()}
+        {renderModelBindings()}
 
         {/* Footer */}
         <div className="api-settings-footer">
           <div className="api-settings-footer-info">
-            {cfg.providers.length} {t('canvasApiSettingsFooterProviders')} · {cfg.stepBindings.length} {t('canvasApiSettingsFooterBindings')}
+            {cfg.providers.length} {t('canvasApiSettingsFooterProviders')} · {cfg.modelBindings.length} {t('canvasApiSettingsFooterBindings')}
           </div>
           <div className="api-settings-footer-right">
             <button className="api-action-btn" onClick={onClose}>{t('canvasApiSettingsClose')}</button>

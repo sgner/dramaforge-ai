@@ -199,8 +199,14 @@ export const api = {
   stopAgent: (taskId: string) =>
     request<{ ok: boolean; status: string }>(`/agent/tasks/${taskId}/stop`, { method: 'POST' }),
 
-  retryAgent: (taskId: string) =>
-    request<{ ok: boolean; status: string }>(`/agent/tasks/${taskId}/retry`, { method: 'POST' }),
+  retryAgent: (taskId: string, config?: { providerId?: string; modelId?: string }) =>
+    request<{ ok: boolean; status: string }>(`/agent/tasks/${taskId}/retry`, {
+      method: 'POST',
+      body: JSON.stringify({
+        llm_provider_id: config?.providerId ?? null,
+        llm_model_id: config?.modelId ?? null,
+      }),
+    }),
 
   /**
    * 启动 agent task：创建任务 → 返回 taskId。
@@ -265,6 +271,11 @@ export const api = {
     request<ProviderOut>(`/providers/${encodeURIComponent(providerId)}`, {
       method: 'PUT',
       body: JSON.stringify(payload),
+    }),
+
+  verifyProvider: (providerId: string) =>
+    request<{ ok: boolean; status: number; error?: string }>(`/providers/${encodeURIComponent(providerId)}/verify`, {
+      method: 'POST',
     }),
 
   deleteProvider: (providerId: string) =>

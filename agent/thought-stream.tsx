@@ -78,6 +78,7 @@ const ThoughtStreamBody: React.FC = () => {
   const plan = useAgentStore((s) => s.plan);
   const artifacts = useAgentStore((s) => s.artifacts);
   const pendingQuestion = useAgentStore((s) => s.pendingQuestion);
+  const streamingText = useAgentStore((s) => s.streamingText);
 
   const latestThought = thoughts[thoughts.length - 1];
   const isEmpty = thoughts.length === 0 && actions.length === 0 && observations.length === 0;
@@ -150,6 +151,13 @@ const ThoughtStreamBody: React.FC = () => {
         >
           <div className="thought-stream-latest-label">💡 最新思考</div>
           <div className="thought-stream-latest-text">{fmtPayload(latestThought)}</div>
+        </div>
+      )}
+
+      {streamingText && (
+        <div data-testid="thought-stream-streaming" className="thought-stream-latest observation">
+          <div className="thought-stream-latest-label">文本生成中</div>
+          <div className="thought-stream-latest-text">{streamingText}</div>
         </div>
       )}
 

@@ -15,7 +15,7 @@ import { AssetCheckReport } from './components/AssetCheckReport';
 import { TitleEndCardEditor } from './components/TitleEndCardEditor';
 import { runAssetCheck, AssetCheckResult } from './utils/assetChecker';
 import { ProjectList } from './components/ProjectList';
-import { DramaTask, TaskStatus, ArtStyle, BigShot, Character, Language, TaskMode, ApiConfig, ProcessedSegment, createDefaultApiConfig } from './types';
+import { DramaTask, TaskStatus, ArtStyle, BigShot, Character, Language, TaskMode, ApiConfig, ProcessedSegment, createDefaultApiConfig, normalizeModelBindings } from './types';
 import { storageService } from './services/storageService';
 import { useTaskExecutor } from './hooks/useTaskExecutor';
 import { useTaskActions } from './hooks/useTaskActions';
@@ -30,7 +30,7 @@ const STORAGE_KEY_LANG = 'dramaforge_language';
 // ⚠️ dramaforge_tasks / dramaforge_tasks_backup 全部已迁移到后端（/api/drama-tasks），
 // 切浏览器不会丢。stepBindings 是后端 key-value（/api/user-preferences），
 // localStorage 只作为后端不可用时的兜底。
-const STORAGE_KEY_STEP_BINDINGS = 'dramaforge_step_bindings';
+const STORAGE_KEY_MODEL_BINDINGS = 'dramaforge_model_bindings';
 const STORAGE_KEY_API_CONFIG_LEGACY = 'dramaforge_apiconfig';
 
 const LOGICAL_STEPS = [
@@ -86,6 +86,7 @@ function AppContent() {
   });
   const toastIdRef = useRef(0);
   const prevTaskStatuses = useRef<Record<string, TaskStatus>>({});
+  const canvasContainerRef = useRef<HTMLDivElement>(null);
 
   const addToast = useCallback((type: 'success' | 'error' | 'info', message: string) => {
     const id = ++toastIdRef.current;
@@ -135,6 +136,14 @@ function AppContent() {
       return prev;
     });
   }, [activeTaskId]);
+
+  const handleToggleAgentMode = useCallback(() => {
+    if (agentMode) {
+      window.dispatchEvent(new CustomEvent('agent-mode-exit'));
+      return;
+    }
+    handleEnterAgentMode();
+  }, [agentMode, handleEnterAgentMode]);
 
   // URL ?agent=1 启动时自动进入（等待 tasks 加载完，再决定用现有任务还是新建）
   useEffect(() => {
@@ -262,6 +271,14 @@ function AppContent() {
       });
     // 2) 异步从后端加载 LLM providers（不再用 localStorage）
     //    失败时回落到默认配置 + 提示，但用户已在后端配的 provider 不会丢
+    // App owns the backend-loaded config, while AgentMode reads the canvas store.
+    // Keep both stores updated at the same boundary so Agent never starts with
+    // an empty step binding after the settings have loaded.
+    const applyLoadedApiConfig = (config: ApiConfig) => {
+      setApiConfig(config);
+      useCanvasStore.getState().setApiConfig(config);
+    };
+
     api.listProviders()
       .then((rows: any[]) => {
         if (cancelled) return;
@@ -272,7 +289,9 @@ function AppContent() {
           baseUrl: r.base_url || '',
           protocol: r.protocol || 'openai',
           enabled: r.enabled !== false,
-          apiKey: r.api_key || '',   // 后端只返脱敏后的；前端 edit 时用 hasKey 判断是否要重新填
+          // GET /providers only returns a masked key. Never put that mask into
+          // the editable value or a later save would overwrite the real key.
+          apiKey: r.has_key ? '' : (r.api_key || ''),
           hasKey: r.has_key || false,
           keyPreview: r.key_preview || '',
           defaultModel: r.default_model || '',
@@ -281,26 +300,33 @@ function AppContent() {
           videoModels: r.video_models || [],
         }));
         // 2) stepBindings：后端是主存，localStorage 兜底
-        api.getUserPreference('step_bindings')
-          .then((backend) => {
+        const applyPreference = (backend: any) => {
             if (Array.isArray(backend?.value)) {
-              setApiConfig({ providers, stepBindings: backend.value });
+              applyLoadedApiConfig(normalizeModelBindings({ providers, modelBindings: backend.value }));
             } else {
               let local: any[] = [];
               try {
-                const raw = localStorage.getItem(STORAGE_KEY_STEP_BINDINGS);
+                const raw = localStorage.getItem(STORAGE_KEY_MODEL_BINDINGS);
                 if (raw) local = JSON.parse(raw);
               } catch {}
-              setApiConfig({ providers, stepBindings: local });
+              applyLoadedApiConfig(normalizeModelBindings({ providers, modelBindings: local }));
             }
+        };
+        api.getUserPreference('model_bindings')
+          .then((backend) => {
+            if (Array.isArray(backend?.value)) {
+              applyPreference(backend);
+              return;
+            }
+            applyPreference({ value: [] });
           })
           .catch(() => {
             let local: any[] = [];
             try {
-              const raw = localStorage.getItem(STORAGE_KEY_STEP_BINDINGS);
+              const raw = localStorage.getItem(STORAGE_KEY_MODEL_BINDINGS);
               if (raw) local = JSON.parse(raw);
             } catch {}
-            setApiConfig({ providers, stepBindings: local });
+            applyLoadedApiConfig(normalizeModelBindings({ providers, modelBindings: local }));
           });
       })
       .catch((e) => {
@@ -308,11 +334,16 @@ function AppContent() {
         console.error('[App] listProviders failed, falling back to localStorage legacy', e);
         // 后端不可用时回落到老 localStorage（含 geminiKey / 旧格式自动迁移）
         const savedConfig = localStorage.getItem(STORAGE_KEY_API_CONFIG_LEGACY);
+        let localBindings: any[] = [];
+        try {
+          const rawBindings = localStorage.getItem(STORAGE_KEY_MODEL_BINDINGS);
+          if (rawBindings) localBindings = JSON.parse(rawBindings);
+        } catch {}
         if (savedConfig) {
           try {
             const parsed = JSON.parse(savedConfig);
-            if (parsed.providers && parsed.models && parsed.stepBindings) {
-              setApiConfig(parsed);
+            if (parsed.providers && (parsed.modelBindings || parsed.stepBindings)) {
+              applyLoadedApiConfig(normalizeModelBindings(parsed));
             } else if (parsed.geminiKey !== undefined) {
               const migrated = createDefaultApiConfig();
               const geminiProvider = migrated.providers.find((p: any) => p.id === 'google-gemini');
@@ -330,11 +361,21 @@ function AppContent() {
                 soraProvider.apiKey = parsed.soraKey || '';
                 soraProvider.baseUrl = parsed.soraBaseUrl || 'https://api.sora.com';
               }
-              setApiConfig(migrated);
+              applyLoadedApiConfig(migrated);
+            } else {
+              applyLoadedApiConfig(normalizeModelBindings({
+                ...createDefaultApiConfig(),
+                modelBindings: localBindings,
+              }));
             }
           } catch (e) {
             console.error('Failed to parse saved api config', e);
           }
+        } else {
+          applyLoadedApiConfig(normalizeModelBindings({
+            ...createDefaultApiConfig(),
+            modelBindings: localBindings,
+          }));
         }
       });
     return () => {
@@ -435,10 +476,9 @@ function AppContent() {
   const handleSaveConfig = async (newConfig: ApiConfig) => {
     // 1) stepBindings 写后端（key-value 偏好表）— 后端是主存，localStorage 兜底
     try {
-      localStorage.setItem(STORAGE_KEY_STEP_BINDINGS, JSON.stringify(newConfig.stepBindings || []));
+      localStorage.setItem(STORAGE_KEY_MODEL_BINDINGS, JSON.stringify(newConfig.modelBindings || []));
     } catch {}
-    api.setUserPreference('step_bindings', newConfig.stepBindings || [])
-      .catch((e) => console.warn('[App] setUserPreference(step_bindings) failed', e));
+    await api.setUserPreference('model_bindings', newConfig.modelBindings || []);
     // 2) providers 走后端（不再写整个 localStorage，避免 key 漂移）
     //    对每个 provider 调 upsertProvider：apiKey 改动才覆盖（用 hasKey 检测）
     //    后端在 ProviderIn 上有保留语义：apiKey 为空 → 保留原 key
@@ -446,6 +486,7 @@ function AppContent() {
     const next = newConfig.providers;
     const byId = new Map(prev.map((p) => [p.id, p] as const));
     setApiConfig(newConfig);
+    useCanvasStore.getState().setApiConfig(newConfig);
     setIsSettingsOpen(false);
     // 异步批量同步：失败时打 warning，不阻塞 UI
     const tasks: Promise<any>[] = [];
@@ -595,10 +636,7 @@ function AppContent() {
     <div className="min-h-screen bg-[#f8fafc] text-[#111827] font-sans selection:bg-brand-600/20 overflow-x-hidden">
       <input type="file" accept="image/*" ref={charFileInputRef} onChange={handleRefFileChange} className="hidden" />
 
-      {agentMode && activeTask ? (
-        <AgentMode projectId={activeTask.id} />
-      ) : (
-        <>
+      <>
       {/* Agent 后台运行提示横幅 — 退出 agent 模式后仍能看到任务在跑 */}
       {showBackgroundBanner && (
         <div
@@ -674,10 +712,11 @@ function AppContent() {
           />
           </div>
         ) : (
+          <div ref={canvasContainerRef} className="app-canvas-shell" style={{ position: 'relative', width: '100%', height: '100%' }}>
           <InfiniteCanvas
             projectId={activeTask.id}
             onBack={() => setActiveTaskId(null)}
-            onAgentMode={handleEnterAgentMode}
+            onAgentMode={handleToggleAgentMode}
             agentModeActive={agentMode}
             onStart={() => executeTaskStep(activeTask.id)}
             onRetry={() => executeTaskStep(activeTask.id, activeTask.failedStep)}
@@ -756,6 +795,13 @@ function AppContent() {
               setTimeout(() => executeTaskStep(taskId, TaskStatus.PREPROCESSING, updates), 100);
             }}
           />
+          {agentMode && activeTask && (
+            <AgentMode
+              projectId={activeTask.id}
+              canvasContainerRef={canvasContainerRef}
+            />
+          )}
+          </div>
         )}
       </main>
 
@@ -989,8 +1035,7 @@ function AppContent() {
         })}
         </div>
       )}
-        </>
-      )}
+      </>
     </div>
   );
 }

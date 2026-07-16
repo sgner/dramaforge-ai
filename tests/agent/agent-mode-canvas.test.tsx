@@ -1,7 +1,7 @@
 /**
  * TDD: AgentMode × InfiniteCanvas — 集成测试。
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { AgentMode } from '@/agent/agent-mode';
 import { api } from '@/services/apiClient';
@@ -15,15 +15,43 @@ vi.mock('@/components/infinite-canvas/InfiniteCanvas', () => ({
 describe('<AgentMode /> canvas integration', () => {
   beforeEach(() => {
     useAgentStore.getState().reset();
-    useCanvasStore.setState({ nodes: [], connections: [], nodeOverrides: {} });
+    useCanvasStore.setState({ nodes: [], connections: [], nodeOverrides: {}, theme: 'light' });
     vi.restoreAllMocks();
     vi.spyOn(api, 'listAgentTasks').mockResolvedValue([]);
   });
 
-  it('renders InfiniteCanvas instead of placeholder', () => {
+  afterEach(() => {
+    useCanvasStore.setState({ theme: 'light' });
+  });
+
+  it('renders Agent overlay without creating a nested InfiniteCanvas', () => {
     render(<AgentMode projectId="p1" />);
-    expect(screen.getByTestId('infinite-canvas-stub')).toBeInTheDocument();
+    expect(screen.queryByTestId('infinite-canvas-stub')).toBeNull();
+    expect(screen.getByTestId('agent-mode-overlay')).toBeInTheDocument();
     expect(screen.queryByTestId('agent-mode-canvas-placeholder')).toBeNull();
+  });
+
+  it('propagates the canvas dark theme to the Agent overlay chrome', () => {
+    useCanvasStore.setState({ theme: 'dark' });
+    render(<AgentMode projectId="p1" />);
+
+    expect(screen.getByTestId('agent-mode')).toHaveClass('theme-dark');
+  });
+
+  it('can collapse the task drawer without affecting the canvas overlay', () => {
+    render(<AgentMode projectId="p1" />);
+    const aside = screen.getByTestId('agent-mode-left-aside');
+    expect(aside).not.toHaveClass('closed');
+    fireEvent.click(screen.getByTestId('agent-mode-task-drawer-toggle'));
+    expect(aside).toHaveClass('closed');
+    expect(screen.getByTestId('agent-mode-overlay')).toBeInTheDocument();
+  });
+
+  it('uses the shared canvas API toolbar and renders the draggable pet instead of Agent API controls', async () => {
+    render(<AgentMode projectId="p1" />);
+    expect(screen.queryByTestId('agent-mode-api-summary')).toBeNull();
+    expect(screen.queryByTestId('agent-mode-api-settings')).toBeNull();
+    expect(await screen.findByTestId('agent-pet')).toBeInTheDocument();
   });
 
   it('projects agent artifacts as image nodes on the canvas (reuses existing image type)', () => {
@@ -169,7 +197,8 @@ describe('<AgentMode /> canvas integration', () => {
     });
   });
 
-  it('shows LLM mode badge with stub warning when task_started reports stub mode', async () => {
+  /* removed: the status capsule and inline LLM badge are no longer rendered */
+  it.skip('shows LLM mode badge with stub warning when task_started reports stub mode', async () => {
     render(<AgentMode projectId="p1" />);
     useAgentStore.setState({ taskId: 't-1', status: 'running' });
     useAgentStore.getState().applyEvent({
@@ -186,7 +215,7 @@ describe('<AgentMode /> canvas integration', () => {
     });
   });
 
-  it('shows LLM mode badge in real mode when LLM is configured', async () => {
+  it.skip('shows LLM mode badge in real mode when LLM is configured', async () => {
     render(<AgentMode projectId="p1" />);
     useAgentStore.setState({ taskId: 't-2', status: 'running' });
     useAgentStore.getState().applyEvent({

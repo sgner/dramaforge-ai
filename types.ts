@@ -120,6 +120,15 @@ export type StepType =
   | 'promptOptimization'
   | 'videoGeneration';
 
+export type ModelBindingKind = 'llm' | 'image' | 'video';
+
+export interface ModelBinding {
+  kind: ModelBindingKind;
+  providerId: string;
+  modelId: string;
+}
+
+/** @deprecated Read-only compatibility shape for configurations saved before capability bindings. */
 export interface StepModelBinding {
   step: StepType;
   providerId: string;
@@ -128,7 +137,9 @@ export interface StepModelBinding {
 
 export interface ApiConfig {
   providers: Provider[];
-  stepBindings: StepModelBinding[];
+  modelBindings: ModelBinding[];
+  /** @deprecated Legacy data is normalized on load and must not be written by new UI code. */
+  stepBindings?: StepModelBinding[];
 }
 
 /** @deprecated Legacy types kept for service layer compatibility */
@@ -156,7 +167,11 @@ export const DEFAULT_MODELS: ModelConfig[] = [];
 
 export const DEFAULT_PROVIDERS: Provider[] = [];
 
-export const DEFAULT_STEP_BINDINGS: StepModelBinding[] = [];
+export const DEFAULT_MODEL_BINDINGS: ModelBinding[] = [
+  { kind: 'llm', providerId: '', modelId: '' },
+  { kind: 'image', providerId: '', modelId: '' },
+  { kind: 'video', providerId: '', modelId: '' },
+];
 
 export const STEP_LABELS: Record<StepType, string> = {
   preprocessing: 'Preprocessing',
@@ -170,18 +185,57 @@ export const STEP_LABELS: Record<StepType, string> = {
 export function createDefaultApiConfig(): ApiConfig {
   return {
     providers: DEFAULT_PROVIDERS.map(p => ({ ...p, imageModels: [...p.imageModels], chatModels: [...p.chatModels], videoModels: [...p.videoModels] })),
-    stepBindings: DEFAULT_STEP_BINDINGS.map(b => ({ ...b })),
+    modelBindings: DEFAULT_MODEL_BINDINGS.map(b => ({ ...b })),
   };
 }
 
+const STEP_TO_BINDING_KIND: Record<StepType, ModelBindingKind> = {
+  preprocessing: 'llm',
+  scriptGeneration: 'llm',
+  promptOptimization: 'llm',
+  characterDesign: 'image',
+  storyboarding: 'image',
+  videoGeneration: 'video',
+};
+
+export function normalizeModelBindings(input: Partial<ApiConfig> & { stepBindings?: StepModelBinding[] }): ApiConfig {
+  const providers = input.providers || [];
+  const providerIds = new Map(
+    providers.map(provider => [
+      String(provider.id || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-'),
+      provider.id,
+    ]),
+  );
+  // Legacy step bindings are intentionally ignored. They must not silently
+  // become active capability bindings after the settings model changed.
+  const source = Array.isArray(input.modelBindings) ? input.modelBindings : [];
+  const byKind = new Map<ModelBindingKind, ModelBinding>();
+  source.forEach(binding => {
+    if (binding?.kind && !byKind.has(binding.kind)) byKind.set(binding.kind, {
+      kind: binding.kind,
+      providerId: providerIds.get(String(binding.providerId || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-')) || binding.providerId || '',
+      modelId: binding.modelId || '',
+    });
+  });
+  return {
+    providers,
+    modelBindings: DEFAULT_MODEL_BINDINGS.map(defaultBinding => byKind.get(defaultBinding.kind) || { ...defaultBinding }),
+  };
+}
+
+export function getBindingForStep(config: ApiConfig, step: StepType): ModelBinding | undefined {
+  const normalized = normalizeModelBindings(config);
+  return normalized.modelBindings.find(binding => binding.kind === STEP_TO_BINDING_KIND[step]);
+}
+
 export function getProviderForStep(config: ApiConfig, step: StepType): Provider | undefined {
-  const binding = config.stepBindings.find(b => b.step === step);
+  const binding = getBindingForStep(config, step);
   if (!binding) return undefined;
   return config.providers.find(p => p.id === binding.providerId);
 }
 
 export function getModelForStep(config: ApiConfig, step: StepType): ModelConfig | undefined {
-  const binding = config.stepBindings.find(b => b.step === step);
+  const binding = getBindingForStep(config, step);
   if (!binding) return undefined;
   const provider = config.providers.find(p => p.id === binding.providerId);
   if (!provider) return undefined;

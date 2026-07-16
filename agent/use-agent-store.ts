@@ -82,6 +82,7 @@ export interface AgentState {
 
   // 错误
   error: string | null;
+  streamingText: string;
 
   // actions
   setTask: (taskId: string, status: AgentStatus, projectId?: string | null) => void;
@@ -125,6 +126,7 @@ const INITIAL: Pick<
   | 'totalCostUsd'
   | 'totalTokens'
   | 'error'
+  | 'streamingText'
 > = {
   taskId: null,
   projectId: null,
@@ -142,6 +144,7 @@ const INITIAL: Pick<
   totalCostUsd: 0,
   totalTokens: 0,
   error: null,
+  streamingText: '',
 };
 
 function bucketOf(assetKind: string | undefined): string {
@@ -267,6 +270,7 @@ export const useAgentStore = create<AgentState>((set) => ({
             observations: [],
             pendingQuestion: null,
             pendingErrorRecovery: null,
+            streamingText: '',
             llmMode: mode,
             llmFallbackReason: reason,
             status: 'running',
@@ -274,10 +278,16 @@ export const useAgentStore = create<AgentState>((set) => ({
         }
         case 'thought':
           return hasEvent(state.thoughts, event) ? {} : { thoughts: [...state.thoughts, event] };
+        case 'text_delta':
+          return { streamingText: `${state.streamingText}${String(p.text || '')}` };
+        case 'prompt_optimization_started':
+          return { thoughts: [...state.thoughts, { ...event, payload: { ...p, message: `正在优化${p.target === 'video' ? '视频' : '图像'}提示词` } }] };
+        case 'prompt_optimization_finished':
+          return { thoughts: [...state.thoughts, { ...event, payload: { ...p, message: '提示词优化完成，开始生成媒体' } }] };
         case 'action':
           return hasEvent(state.actions, event) ? {} : { actions: [...state.actions, event] };
         case 'observation':
-          return hasEvent(state.observations, event) ? {} : { observations: [...state.observations, event] };
+          return hasEvent(state.observations, event) ? {} : { observations: [...state.observations, event], streamingText: '' };
         case 'goal_parsed':
           return { plan: Array.isArray(p.plan) ? p.plan : state.plan };
         case 'plan_ready':
@@ -300,7 +310,14 @@ export const useAgentStore = create<AgentState>((set) => ({
             url: p.url,
             ...p,
           };
-          if (p.id && existing.some((candidate) => candidate.id === p.id)) return {};
+          if (p.id && existing.some((candidate) => candidate.id === p.id)) {
+            return {
+              artifacts: {
+                ...state.artifacts,
+                [cat]: existing.map((candidate) => candidate.id === p.id ? { ...candidate, ...item } : candidate),
+              },
+            };
+          }
           return {
             artifacts: { ...state.artifacts, [cat]: [...existing, item] },
           };
@@ -327,6 +344,39 @@ export const useAgentStore = create<AgentState>((set) => ({
           };
         case 'tool_resumed':
           return { pendingErrorRecovery: null, status: 'running' };
+        case 'media_recovery_started':
+          return {
+            thoughts: [...state.thoughts, {
+              ...event,
+              payload: { ...p, text: `媒体生成失败，旁路恢复 worker 正在重试 ${p.tool || ''}` },
+            }],
+            status: 'running',
+          };
+        case 'media_recovery_finished':
+          return {
+            thoughts: [...state.thoughts, {
+              ...event,
+              payload: { ...p, text: p.success ? '旁路恢复完成，结果已汇总' : `旁路恢复失败：${p.error || '未知错误'}` },
+            }],
+            status: 'running',
+          };
+        case 'asset_inspection_started':
+        case 'asset_inspection_finished':
+        case 'asset_normalization_started':
+        case 'asset_normalization_finished':
+          return {
+            thoughts: [...state.thoughts, {
+              ...event,
+              payload: {
+                ...p,
+                text: p.text || (
+                  t === 'asset_inspection_started' ? '正在检查上传资产' :
+                  t === 'asset_inspection_finished' ? '上传资产检查完成' :
+                  t === 'asset_normalization_started' ? '正在生成标准化资产' : '标准化资产已准备完成'
+                ),
+              },
+            }],
+          };
         case 'task_paused':
           return { status: 'paused' };
         case 'task_resumed':

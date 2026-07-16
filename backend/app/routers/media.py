@@ -97,11 +97,23 @@ async def _openai_image(provider: dict, body: ImageGenerateIn) -> GenerateOut:
         # OpenAI edits 模式：略简化为把 ref urls 注入 prompt 描述
         ref_desc = " ".join(body.ref_urls)
         payload["prompt"] = f"{body.prompt} (refs: {ref_desc})"
-    async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as cx:
-        r = await cx.post(url, headers=_headers(provider), json=payload)
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as cx:
+            r = await cx.post(url, headers=_headers(provider), json=payload)
+    except httpx.HTTPError as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"image provider '{provider['provider_id']}' model '{body.model}' network error: {e}",
+        )
     if r.status_code >= 400:
-        raise HTTPException(status_code=502, detail=f"image API HTTP {r.status_code}: {r.text[:300]}")
-    data = r.json()
+        raise HTTPException(
+            status_code=502,
+            detail=f"image provider '{provider['provider_id']}' model '{body.model}' HTTP {r.status_code} at {url}: {r.text[:300]}",
+        )
+    try:
+        data = r.json()
+    except ValueError as e:
+        raise HTTPException(status_code=502, detail=f"image API returned invalid JSON: {e}")
     url_out = (
         (data.get("data") or [{}])[0].get("url")
         or (data.get("data") or [{}])[0].get("b64_json")
@@ -128,10 +140,19 @@ async def _openai_video(provider: dict, body: VideoGenerateIn) -> GenerateOut:
         except httpx.HTTPError as e:
             raise HTTPException(status_code=502, detail=f"video API network error: {e}")
     if r.status_code == 404:
-        raise HTTPException(status_code=502, detail=f"video API endpoint not found: {url}")
+        raise HTTPException(
+            status_code=502,
+            detail=f"video provider '{provider['provider_id']}' model '{body.model}' endpoint not found: {url}",
+        )
     if r.status_code >= 400:
-        raise HTTPException(status_code=502, detail=f"video API HTTP {r.status_code}: {r.text[:300]}")
-    data = r.json()
+        raise HTTPException(
+            status_code=502,
+            detail=f"video provider '{provider['provider_id']}' model '{body.model}' HTTP {r.status_code} at {url}: {r.text[:300]}",
+        )
+    try:
+        data = r.json()
+    except ValueError as e:
+        raise HTTPException(status_code=502, detail=f"video API returned invalid JSON: {e}")
     url_out = (
         (data.get("data") or {}).get("url")
         or data.get("url")

@@ -24,103 +24,43 @@ import { ThoughtStream } from './thought-stream';
 import { ToolPalette } from './tool-palette';
 import { TaskList } from './task-list';
 import { ErrorRecoveryCard } from './error-recovery-card';
-import { AskUserResponse } from './ask-user-response';
+import { AgentPetController } from './agent-pet-controller';
 import { api } from '@/services/apiClient';
-import { InfiniteCanvas } from '@/components/infinite-canvas/InfiniteCanvas';
 import { useCanvasStore } from '@/components/infinite-canvas/use-canvas-store';
-import { resolveModelId } from './model-selection';
+import { getBindingForStep } from '@/types';
 import './agent.css';
 
 export interface AgentModeProps {
   projectId: string;
+  canvasContainerRef?: React.RefObject<HTMLDivElement | null>;
 }
 
-export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
+export const AgentMode: React.FC<AgentModeProps> = ({ projectId, canvasContainerRef: externalCanvasContainerRef }) => {
   const [goal, setGoal] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [thoughtOpen, setThoughtOpen] = useState(false);
   const [toolDrawerOpen, setToolDrawerOpen] = useState(false);
+  const [taskDrawerOpen, setTaskDrawerOpen] = useState(true);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
-  // 用户在 Agent 模式顶栏手动选择的 LLM provider/model
-  // 空值表示回退到 scriptGeneration 步骤绑定 / stub
-  const [selectedProviderId, setSelectedProviderId] = useState<string>('');
-  const [selectedModelId, setSelectedModelId] = useState<string>('');
-  // LLM provider 列表 — 从后端统一 provider_configs 表拉取（Task 5 后 /api/llm-providers
-  // 返回真实数据，与 ApiSettings 共享同一张表，不再有 media/llm 两套数据源断层）
-  // 兜底用 localStorage 的 apiConfig.providers（基本不触发，保留作防御）
-  const [dbProviders, setDbProviders] = useState<Array<{
-    provider_id: string;
-    name: string;
-    chat_models: string[];
-    default_model: string;
-  }>>([]);
-  const [dbProvidersLoading, setDbProvidersLoading] = useState(false);
-
   // 画布容器 ref（用于 fitAgentView 时获取 board 尺寸）
-  const canvasContainerRef = useRef<HTMLDivElement | null>(null);
+  const internalCanvasContainerRef = useRef<HTMLDivElement | null>(null);
+  const canvasContainerRef = externalCanvasContainerRef || internalCanvasContainerRef;
 
-  // 加载 DB 里的 LLM provider 列表
-  useEffect(() => {
-    let mounted = true;
-    setDbProvidersLoading(true);
-    api.listProviders()
-      .then((rows) => {
-        if (!mounted) return;
-        const list = (rows || []).map((r) => ({
-          provider_id: r.provider_id,
-          name: r.provider_id,
-          chat_models: r.chat_models || [],
-          default_model: r.default_model || '',
-        }));
-        setDbProviders(list);
-        // 自动选第一个 provider（让用户不手动选也能跑真实 LLM，避免无脑走 DevScriptedLLM 假任务）
-        if (list.length > 0) {
-          setSelectedProviderId(list[0].provider_id);
-          setSelectedModelId(resolveModelId('', {
-            defaultModel: list[0].default_model,
-            chatModels: list[0].chat_models,
-          }) || '');
-        }
-      })
-      .catch(() => {
-        if (!mounted) return;
-        setDbProviders([]);
-      })
-      .finally(() => {
-        if (mounted) setDbProvidersLoading(false);
-      });
-    return () => {
-      mounted = false;
-    };
-  }, [projectId]);
-
-  // 优先用 DB 里的 LLM provider 列表（数据源唯一：统一 provider_configs 表）
-  // 兜底用 localStorage 的 apiConfig.providers
-  const apiConfigFallback = useCanvasStore((s) => s.apiConfig);
-  const availableProviders = (dbProviders.length > 0
-    ? dbProviders.map((p) => ({
-        id: p.provider_id,
-        name: p.provider_id,
-        chatModels: p.chat_models,
-      }))
-    : apiConfigFallback.providers
-        .filter((p) => p.enabled !== false && p.chatModels && p.chatModels.length > 0)
-        .map((p) => ({ id: p.id, name: p.name || p.id, chatModels: p.chatModels || [] }))
-  );
+  // Agent 与普通画布共用同一份 API 配置；脚本生成步骤的绑定决定所用模型。
+  const apiConfig = useCanvasStore((s) => s.apiConfig);
+  const llmBinding = getBindingForStep(apiConfig, 'scriptGeneration');
+  // 兼容旧配置：早期版本只保存了 provider，没有保存 step_bindings。
+  // 仍从画布中已配置的 provider 选择模型，避免任务以空 LLM 配置启动后立即失败。
+  const selectedProviderId = llmBinding?.providerId || undefined;
+  const selectedModelId = llmBinding?.modelId || undefined;
 
   const taskId = useAgentStore((s) => s.taskId);
+  const theme = useCanvasStore((s) => s.theme);
   const setTask = useAgentStore((s) => s.setTask);
   const setStatus = useAgentStore((s) => s.setStatus);
-  const thoughts = useAgentStore((s) => s.thoughts);
   const actions = useAgentStore((s) => s.actions);
-  const observations = useAgentStore((s) => s.observations);
-  const plan = useAgentStore((s) => s.plan);
-  const artifacts = useAgentStore((s) => s.artifacts);
-  const pendingQuestion = useAgentStore((s) => s.pendingQuestion);
   const status = useAgentStore((s) => s.status);
-  const llmMode = useAgentStore((s) => s.llmMode);
-  const llmFallbackReason = useAgentStore((s) => s.llmFallbackReason);
 
   const { tools, isLoading: toolsLoading } = useAgentTools();
   // SSE 由全局 agent-stream-manager 管理：基于 useAgentStore.taskId 自动开关
@@ -131,6 +71,16 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
   // 其他 slice（totalCostUsd/totalTokens/error/pendingPlan/taskId/status）变化不触发，避免无意义的
   // addAgentNodes → 内部 setState → saveNodes debounced POST 抖动。
   const lastProjectedRef = useRef<{ artifacts: unknown } | null>(null);
+
+  // The Agent store is a process-wide session store, while AgentMode is
+  // mounted once per canvas project. Detach the previous project's session
+  // before rendering this project's ThoughtStream or question UI.
+  useEffect(() => {
+    const state = useAgentStore.getState();
+    if ((state.taskId || state.projectId) && state.projectId !== projectId) {
+      state.reset();
+    }
+  }, [projectId]);
 
   // 投影：useAgentStore 状态变化 → useCanvasStore.addAgentNodes
   useEffect(() => {
@@ -209,40 +159,20 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
     setSubmitting(true);
     setError(null);
     try {
-      // 1) 优先用用户在 Agent 模式顶栏手动选择的 provider/model
-      // 2) 否则自动选 DB 里第一个可用的真实 LLM（避免无脑走 DevScriptedLLM 假任务）
-      // 3) 都没有 → 走 stub，但提示用户去 API 设置里配 LLM
-      let providerId: string | undefined = selectedProviderId;
-      let modelId: string | undefined = selectedModelId;
-      if (!providerId) {
-        if (dbProviders.length > 0) {
-          const first = dbProviders[0];
-          providerId = first.provider_id;
-          modelId = selectedModelId || first.default_model || undefined;
-        } else {
-          const apiConfig = useCanvasStore.getState().apiConfig;
-          const llmBinding = apiConfig.stepBindings.find(
-            (b) => b.step === 'scriptGeneration',
-          );
-          providerId = llmBinding?.providerId || undefined;
-          modelId = modelId || llmBinding?.modelId || undefined;
-        }
+      if (!selectedProviderId || !selectedModelId) {
+        setError('未配置 LLM 能力绑定，请先在 API 设置中绑定 LLM 平台和模型。');
+        return;
       }
-
-      const selectedProvider = availableProviders.find((provider) => provider.id === providerId);
-      modelId = resolveModelId(modelId, selectedProvider);
+      const providerId = selectedProviderId || undefined;
+      const modelId = selectedModelId || undefined;
 
       // Defensive sync: 如果选中的 provider 还在 localStorage 但已不在 DB，
       // 先把它的 baseUrl / apiKey / models 推回 DB，避免后端 load_llm_configs
       // 拿不到 provider 而回退到 DevScriptedLLM 假任务。
       if (providerId) {
-        const inDb = dbProviders.some((p) => p.provider_id === providerId);
-        if (!inDb) {
-          const local = useCanvasStore.getState().apiConfig.providers.find(
-            (p) => p.id === providerId,
-          );
-          if (local && local.baseUrl) {
-            try {
+        const local = apiConfig.providers.find((p) => p.id === providerId);
+        if (local && local.baseUrl) {
+          try {
               await api.upsertProvider(providerId, {
                 name: local.name || providerId,
                 base_url: local.baseUrl,
@@ -255,9 +185,8 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
                 video_models: local.videoModels || [],
                 extra_config: {},
               });
-            } catch (e: any) {
-              console.warn('[agent-mode] failed to sync provider to DB', e);
-            }
+          } catch (e: any) {
+            console.warn('[agent-mode] failed to sync provider to DB', e);
           }
         }
       }
@@ -268,7 +197,7 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
       });
       setTask(t.id, 'running', projectId);
       // 后端在 TASK_STARTED 事件里也会再发一次 llm_mode，但 SSE 推送有几十 ms 延迟，
-      // 提前把 store.llmMode 写成 'real'（只要选了 provider/model 就是真实 LLM），
+      // 提前把 store.llmMode 写成 'real'（只要画布步骤绑定了 provider 就是真实 LLM），
       // 避免 UI 闪一下"等待后端启动 runtime..."。
       if (providerId) {
         useAgentStore.getState().setStatus('running');
@@ -299,37 +228,49 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
   };
 
   const onRefresh = () => setRefreshTrigger((v) => v + 1);
+  const onFitView = () => {
+    const container = canvasContainerRef.current;
+    if (!container) return;
+    const r = container.getBoundingClientRect();
+    useCanvasStore.getState().fitAgentView(r.width, r.height);
+  };
 
   // 当前任务的进度提示文字
-  const progressHint = (() => {
-    if (status === 'running') return `正在思考…(${thoughts.length} 个想法, ${actions.length} 个动作)`;
-    if (status === 'paused') return pendingQuestion ? '等待你的回复' : '已暂停';
-    if (status === 'done') return '任务完成';
-    if (status === 'failed') return '任务失败';
-    if (status === 'cancelled') return '任务已停止';
-    return '';
-  })();
-
   return (
     <div
       data-testid="agent-mode"
-      className="canvas-board"
-      style={{ display: 'grid', gridTemplateColumns: '300px 1fr', height: '100vh', position: 'relative' }}
+      data-agent-mode="true"
+      className={`agent-mode-overlay theme-${theme}`}
+      style={{ position: 'absolute', inset: 0, zIndex: 20, pointerEvents: 'none' }}
     >
       <aside
         data-testid="agent-mode-left-aside"
-        className="agent-aside"
+        className={`agent-aside${taskDrawerOpen ? '' : ' closed'}`}
       >
         <div className="agent-aside-head">
+          <button
+            type="button"
+            className="agent-aside-toggle"
+            data-testid="agent-mode-task-drawer-toggle"
+            aria-label={taskDrawerOpen ? '收起任务栏' : '展开任务栏'}
+            onClick={() => setTaskDrawerOpen((open) => !open)}
+          >
+            {taskDrawerOpen ? '‹' : '›'}
+          </button>
           <span className="agent-aside-title">任务</span>
         </div>
-        <TaskList
+        {taskDrawerOpen && <TaskList
           projectId={projectId}
           refreshTrigger={refreshTrigger}
+          retryProviderId={selectedProviderId}
+          retryModelId={selectedModelId}
           onSelect={async (id) => {
             // 1. 切换 task：reset store 到 INITIAL + 写入新 taskId
             //    （setTask 内部已 reset，避免上一个 task 的 thoughts/actions 残留）
             setThoughtOpen(true);
+            // 先切换任务，再异步拉取快照；即使快照请求失败，当前任务也必须可见，
+            // 避免 UI 回退到旧任务或表现为“没有选中任务”。
+            setTask(id, 'running', projectId);
             // 2. 异步 hydrate：从后端拉 task 的持久化状态（plan/artifacts/status/
             //    成本/pending_response），立即让 UI 显示"非空"内容。
             //    SSE 也会同时连接并重放历史 events（thought/action/observation），
@@ -359,7 +300,7 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
             }
           }}
           selectedId={taskId}
-        />
+        />}
       </aside>
       {/*
         main 用 flex column 把 [topbar / llm-banner / progress / canvas] 垂直堆叠。
@@ -369,17 +310,11 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
         canvas 用 flex:1 吃掉剩余空间，不再 absolute inset:0 压住上面那俩。
       */}
       <main
-        style={{
-          position: 'relative',
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
-          background: 'var(--canvas-bg)',
-          minWidth: 0,
-        }}
+        data-testid="agent-mode-overlay"
+        className="agent-overlay-main"
       >
         {/* ===== 输入栏 — 2 行布局：第 1 行 LLM 选择，第 2 行 目标输入 + 视图按钮 ===== */}
-        <div
+        {false && <div
           data-testid="agent-mode-input-bar"
           className="agent-topbar"
           style={{
@@ -388,77 +323,10 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
             display: 'flex',
             flexDirection: 'column',
             gap: 6,
-            position: 'relative',
+            position: 'absolute',
             flex: '0 0 auto',
           }}
         >
-          {/* Row 1: LLM provider / model */}
-          <div
-            data-testid="agent-mode-llm-row"
-            style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}
-          >
-            <div className="canvas-panel" style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '2px 6px' }}>
-              <span style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 600, marginRight: 4 }}>LLM</span>
-              <select
-                data-testid="agent-mode-llm-provider"
-                value={selectedProviderId}
-                onChange={(e) => {
-                  setSelectedProviderId(e.target.value);
-                  const provider = availableProviders.find((item) => item.id === e.target.value);
-                  setSelectedModelId(resolveModelId('', provider) || '');
-                }}
-                title={availableProviders.length === 0
-                  ? '⚠️ DB 里没有 LLM provider 配置 → agent 会用 DevScriptedLLM（假任务）'
-                  : '选择 LLM 提供商（空 = 使用 scriptGeneration 步骤绑定）'}
-                style={{
-                  height: 24,
-                  fontSize: 11,
-                  background: 'var(--bg)',
-                  color: availableProviders.length === 0 ? 'var(--muted)' : 'var(--text)',
-                  border: `1px solid ${availableProviders.length === 0 ? 'var(--line-strong)' : 'var(--line)'}`,
-                  borderRadius: 4,
-                  padding: '0 4px',
-                  outline: 'none',
-                }}
-              >
-                <option value="">{dbProvidersLoading ? '加载中…' : '默认（步骤绑定）'}</option>
-                {availableProviders.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name || p.id}</option>
-                ))}
-              </select>
-              {selectedProviderId && (() => {
-                const p = availableProviders.find((x) => x.id === selectedProviderId);
-                const models = p?.chatModels || [];
-                if (!models.length) return null;
-                return (
-                  <select
-                    data-testid="agent-mode-llm-model"
-                    value={selectedModelId}
-                    onChange={(e) => setSelectedModelId(e.target.value)}
-                    title="选择 LLM 模型"
-                    style={{
-                      height: 24,
-                      fontSize: 11,
-                      background: 'var(--bg)',
-                      color: 'var(--text)',
-                      border: '1px solid var(--line)',
-                      borderRadius: 4,
-                      padding: '0 4px',
-                      outline: 'none',
-                      maxWidth: 160,
-                    }}
-                  >
-                    <option value="">默认模型</option>
-                    {models.map((m) => (
-                      <option key={m} value={m}>{m}</option>
-                    ))}
-                  </select>
-                );
-              })()}
-            </div>
-          </div>
-
-          {/* Row 2: 目标输入 + 视图按钮 + 进度状态 */}
           <div
             data-testid="agent-mode-goal-row"
             style={{ display: 'flex', alignItems: 'center', gap: 6 }}
@@ -554,27 +422,18 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
               </button>
             </div>
           </div>
-        </div>
+        </div>}
 
         {/*
           canvas 容器 — flex:1 吃掉 topbar 之后剩余的所有空间。
           进度条 / LLM 横幅 / 错误提示都改成画布内的浮动覆盖层，
           不再占用顶部垂直空间。
         */}
-        <div
-          ref={canvasContainerRef}
+          <div
           data-testid="agent-mode-canvas-container"
-          style={{ position: 'relative', flex: '1 1 auto', minHeight: 0, overflow: 'hidden' }}
-        >
-          <style>{`
-            [data-testid="agent-mode-canvas-container"] .canvas-root {
-              width: 100% !important;
-              height: 100% !important;
-            }
-          `}</style>
-          <InfiniteCanvas projectId={projectId} hideToolbar />
+          style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
+          >
           <ErrorRecoveryCard />
-          <AskUserResponse />
 
           {/* 浮动错误提示 — 画布顶部居中 */}
           {error && (
@@ -595,40 +454,24 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId }) => {
           )}
 
           {/* 浮动状态栏 — 画布左下角，合并 LLM 模式 + 进度 */}
-          {taskId && (progressHint || llmMode) && (
-            <div
-              data-testid="agent-mode-progress"
-              className={`agent-mode-progress ${status}`}
-              onClick={() => setThoughtOpen(true)}
-              style={{
-                position: 'absolute',
-                bottom: 12,
-                left: 12,
-                zIndex: 30,
-                margin: 0,
-                alignSelf: 'auto',
-              }}
-            >
-              <span className={`agent-mode-progress-dot ${status}`} />
-              {progressHint && (
-                <span className="agent-mode-progress-text">{progressHint}</span>
-              )}
               {/* LLM 模式指示器 — 内联在进度条里，不再单独占一行 */}
-              {llmMode === 'real' && (
-                <span className="agent-llm-badge real" title={llmFallbackReason || '已连接真实 LLM'}>LLM</span>
-              )}
-              {llmMode === 'stub' && (
-                <span className="agent-llm-badge stub" title="DevScriptedLLM 假任务">STUB</span>
-              )}
-              {llmMode === null && (
-                <span className="agent-llm-badge pending" title="等待 task_started 事件上报 LLM 模式">…</span>
-              )}
-              {progressHint && (
-                <span className="agent-mode-progress-hint">点击查看详情</span>
-              )}
-            </div>
-          )}
         </div>
+
+        <AgentPetController
+          projectId={projectId}
+          containerRef={canvasContainerRef}
+          goal={goal}
+          submitting={submitting}
+          error={error}
+          onGoalChange={setGoal}
+          onSubmit={onSubmit}
+          thoughtOpen={thoughtOpen}
+          onToggleThought={() => setThoughtOpen((v) => !v)}
+          toolDrawerOpen={toolDrawerOpen}
+          onToggleTools={() => setToolDrawerOpen((v) => !v)}
+          onFitView={onFitView}
+          onRelayout={onRelayout}
+        />
 
         {/* 浮层 ThoughtStream */}
         <ThoughtStream floating open={thoughtOpen} onClose={() => setThoughtOpen(false)} />

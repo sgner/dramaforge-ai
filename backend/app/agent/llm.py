@@ -87,6 +87,24 @@ REACT_SYSTEM_PROMPT = """你是 DramaForge Director Agent —— 一个拥有 20
 """
 
 
+MEDIA_PARALLEL_POLICY = """
+媒体调度硬规则：
+- 如果当前目标需要生成两个或以上相互独立的图片/视频，必须优先调用 generate_media_batch，一次提交全部 jobs。
+- 不要先调用单个 generate_* 工具再等失败后改用批量工具；这会造成串行等待和重复资产。
+- 批量 jobs 必须为每项提供真实 prompt、kind(image/video)、name 和 asset_kind，主流程会立即创建生成中节点。
+- 批量结果中某项失败时，不要停止其他项；继续主流程，并让 media-recovery worker 处理失败项。
+"""
+
+ASSET_INTELLIGENCE_POLICY = """
+Asset intelligence policy:
+- Before generating media, inspect every uploaded asset in the current project with inspect_asset.
+- If an uploaded character, prop, or scene does not meet project standards, call prepare_character_asset before downstream generation.
+- Reuse existing usable assets instead of regenerating them. Pass logical reference_asset_ids to media tools; never invent provider URLs.
+- Prefer normalized derivatives over raw uploads while preserving the original source_asset_id relationship.
+- If inspection or references need an unavailable capability, explain the blocker and ask the user; never silently use a legacy fallback.
+"""
+
+
 def build_system_prompt() -> str:
     return REACT_SYSTEM_PROMPT
 
@@ -97,9 +115,10 @@ def build_react_prompt(
     artifacts: dict,
     recent_steps: list[dict],
     tool_summaries: list[dict],
+    project_assets: list[dict] | None = None,
 ) -> str:
     """构造单步 ReAct prompt。"""
-    parts = [REACT_SYSTEM_PROMPT]
+    parts = [REACT_SYSTEM_PROMPT, MEDIA_PARALLEL_POLICY, ASSET_INTELLIGENCE_POLICY]
 
     # 用户目标
     parts.append(f"【用户目标】\n{user_goal}")
@@ -124,6 +143,20 @@ def build_react_prompt(
             parts.append("【已生成资产】\n" + "\n".join(artifacts_lines))
 
     # 最近步骤
+    if project_assets:
+        asset_lines = []
+        for asset in project_assets[:30]:
+            asset_lines.append(
+                "- {id}: name={name}; origin={origin}; kind={kind}; inspection={inspection}".format(
+                    id=asset.get("id", "?"),
+                    name=asset.get("name") or asset.get("title") or "(unnamed)",
+                    origin=asset.get("origin", "generated"),
+                    kind=asset.get("asset_kind") or asset.get("kind") or "unknown",
+                    inspection=asset.get("inspection_status", "pending"),
+                )
+            )
+        parts.append("[CURRENT PROJECT ASSETS]\n" + "\n".join(asset_lines))
+
     if recent_steps:
         step_lines = []
         for s in recent_steps[-10:]:

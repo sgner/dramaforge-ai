@@ -12,10 +12,17 @@ from app.agent.tools.image_tools import (
 )
 from app.agent.tools.video_tools import GenerateVideoTool
 from app.agent.tools.audio_tools import GenerateVoiceoverTool, GenerateBgmTool
+from app.agent.llm import LLMResponse
 
 
 def _stub_ctx():
-    return ToolContext(task_id="t1", media_service=StubMediaService())
+    class PromptLLM:
+        model = "test-prompt-model"
+
+        async def generate(self, messages, **kwargs):
+            return LLMResponse(content="optimized: " + messages[-1]["content"])
+
+    return ToolContext(task_id="t1", llm_client=PromptLLM(), media_service=StubMediaService())
 
 
 @pytest.mark.asyncio

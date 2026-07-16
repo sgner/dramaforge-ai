@@ -2,11 +2,22 @@
 from __future__ import annotations
 
 from ..media_service import MediaRequest, MediaService, get_default_media_service
+from ..asset_references import resolve_asset_references
+from ..prompt_engineering import optimize_generation_prompt
 from .base import BaseTool, ToolContext, ToolParameter
 
 
 def _resolve_service(ctx: ToolContext) -> MediaService:
     return ctx.media_service or get_default_media_service()
+
+
+def _resolve_reference_urls(ctx: ToolContext, params: dict) -> list[str]:
+    asset_ids = list(params.get("reference_asset_ids") or [])
+    if not asset_ids:
+        return list(params.get("reference_urls") or [])
+    if not ctx.db or not ctx.project_id:
+        raise ValueError("reference_asset_ids require a project-scoped database context")
+    return [item["url"] for item in resolve_asset_references(ctx.db, ctx.project_id, asset_ids, media_kind="video")]
 
 
 class GenerateVideoTool(BaseTool):
@@ -20,6 +31,7 @@ class GenerateVideoTool(BaseTool):
     estimated_time_sec = 60.0
     idempotent = False
     parameters = [
+        ToolParameter(name="reference_asset_ids", type="array", description="project-scoped reference asset IDs", required=False),
         ToolParameter(name="shot", type="object", description="分镜 dict（含 scene/action/duration_sec/dialogue 等）", required=True),
         ToolParameter(name="reference_urls", type="array", description="可选：参考图 URL 列表（角色/场景首帧）", required=False),
         ToolParameter(name="model_id", type="string", description="可选：指定视频模型 id", required=False),
@@ -41,13 +53,14 @@ class GenerateVideoTool(BaseTool):
         ]
         if shot.get("dialogue"):
             parts.append(f"character says: {shot['dialogue']}")
-        prompt = ", ".join(p for p in parts if p)
+        source_prompt = ", ".join(p for p in parts if p)
+        prompt, source_prompt = await optimize_generation_prompt(ctx, source_prompt, "video", {"asset_kind": "shot_video", "shot": shot})
         req = MediaRequest(
             kind="video",
             prompt=prompt,
             model_id=params.get("model_id"),
             duration_sec=float(shot.get("duration_sec", 5)),
-            reference_urls=list(params.get("reference_urls") or []),
+            reference_urls=_resolve_reference_urls(ctx, params),
             extra={"asset_kind": "shot_video", "shot_index": shot.get("index")},
         )
         result = await svc.generate(req)
@@ -59,4 +72,5 @@ class GenerateVideoTool(BaseTool):
             "cost_usd": result.cost_usd,
             "elapsed_sec": result.elapsed_sec,
             "prompt": prompt,
+            "source_prompt": source_prompt,
         }

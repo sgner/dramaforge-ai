@@ -8,6 +8,8 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
+import json
 from typing import Any
 
 import httpx
@@ -150,6 +152,57 @@ class OpenAICompatibleLLMClient:
     ) -> LLMResponse:
         body = self._build_body(messages, self.model, tools, temperature, max_tokens)
         raw = await self._post_with_retry(body)
+        return self._parse_response(raw, self.model)
+
+    async def generate_streaming(
+        self,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4000,
+        on_delta: Any | None = None,
+    ) -> LLMResponse:
+        """Read OpenAI-compatible SSE deltas while retaining the normal response contract."""
+        body = self._build_body(messages, self.model, tools, temperature, max_tokens)
+        body["stream"] = True
+        content_parts: list[str] = []
+        tool_name = ""
+        tool_args = ""
+        usage: dict[str, Any] = {}
+        async with httpx.AsyncClient(timeout=self._timeout) as cx:
+            async with cx.stream("POST", self._endpoint(), headers=self._headers(), json=body) as response:
+                if response.status_code >= 400:
+                    raise LLMError(f"LLM HTTP {response.status_code}: {(await response.aread()).decode(errors='replace')[:200]}")
+                async for line in response.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    usage.update(chunk.get("usage") or {})
+                    delta = ((chunk.get("choices") or [{}])[0].get("delta") or {})
+                    text = delta.get("content")
+                    if text:
+                        content_parts.append(str(text))
+                        if on_delta:
+                            result = on_delta(str(text))
+                            if inspect.isawaitable(result):
+                                await result
+                    for call in delta.get("tool_calls") or []:
+                        fn = call.get("function") or {}
+                        tool_name += str(fn.get("name") or "")
+                        tool_args += str(fn.get("arguments") or "")
+        content = "".join(content_parts) or None
+        raw: dict[str, Any] = {"choices": [{"message": {"content": content}}], "usage": usage}
+        if tool_name:
+            raw["choices"][0]["message"]["tool_calls"] = [{
+                "type": "function",
+                "function": {"name": tool_name, "arguments": tool_args or "{}"},
+            }]
         return self._parse_response(raw, self.model)
 
     async def generate_structured(

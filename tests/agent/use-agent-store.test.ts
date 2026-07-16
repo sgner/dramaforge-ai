@@ -148,6 +148,17 @@ describe('useAgentStore', () => {
     ]);
   });
 
+  it('applyEvent artifact_created replaces a pending media asset with its completed state', () => {
+    const s = useAgentStore.getState();
+    s.setTask('t-1', 'running');
+    s.applyEvent({ type: 'artifact_created', payload: { kind: 'image', asset_kind: 'character', id: 'a1', generating: true }, timestamp: 1 });
+    s.applyEvent({ type: 'artifact_created', payload: { kind: 'image', asset_kind: 'character', id: 'a1', url: 'https://cdn.test/a1.png', generating: false }, timestamp: 2 });
+
+    expect(useAgentStore.getState().artifacts.character).toEqual([
+      expect.objectContaining({ id: 'a1', url: 'https://cdn.test/a1.png', generating: false }),
+    ]);
+  });
+
   it('applyEvent request_user_input sets pendingQuestion', () => {
     const s = useAgentStore.getState();
     s.setTask('t-1', 'paused');
@@ -215,6 +226,22 @@ describe('useAgentStore', () => {
     s.applyEvent({ type: 'request_user_input', payload: { question: 'q' }, timestamp: 1 });
     s.applyEvent({ type: 'user_input_received', payload: { response: 'r', approved: true }, timestamp: 2 });
     expect(useAgentStore.getState().pendingQuestion).toBeNull();
+  });
+
+  it('shows asset inspection and normalization progress in thoughts', () => {
+    useAgentStore.getState().setTask('t-asset', 'running');
+    useAgentStore.getState().applyEvent({
+      type: 'asset_inspection_started',
+      payload: { asset_id: 'a1', text: '正在检查上传资产' },
+      timestamp: 1,
+    });
+    useAgentStore.getState().applyEvent({
+      type: 'asset_normalization_started',
+      payload: { asset_id: 'a2', source_asset_id: 'a1', text: '正在生成标准角色设计图' },
+      timestamp: 2,
+    });
+    expect(useAgentStore.getState().thoughts).toHaveLength(2);
+    expect(useAgentStore.getState().thoughts[1].payload?.text).toContain('标准角色');
   });
 
   it('applyEvent task_done sets status to done', () => {

@@ -23,6 +23,7 @@ describe('AskUserResponse', () => {
   function makePendingQuestion(question: string, options: string[], extra: Record<string, any> = {}) {
     useAgentStore.setState({
       taskId: 't-ask-1',
+      projectId: 'p1',
       status: 'paused',
       pendingQuestion: {
         question,

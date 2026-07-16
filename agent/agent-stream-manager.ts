@@ -42,6 +42,9 @@ const EVENT_TYPES = [
   'task_done',
   'task_failed',
   'step_retrying',
+  'text_delta',
+  'prompt_optimization_started',
+  'prompt_optimization_finished',
 ];
 
 function streamUrl(taskId: string): string {

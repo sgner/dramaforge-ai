@@ -38,6 +38,7 @@ export const PALETTE_TOOLS: PaletteTool[] = [
   { name: 'generate_storyboard_image', description: '生成分镜首帧', category: 'image', requiresApproval: true },
   // video (1)
   { name: 'generate_video', description: '基于分镜生成视频片段', category: 'video', requiresApproval: true },
+  { name: 'generate_media_batch', description: '并行生成图片和视频，单项失败不影响其他任务', category: 'image', requiresApproval: true },
   // audio (2)
   { name: 'generate_voiceover', description: '文本转语音', category: 'audio', requiresApproval: true },
   { name: 'generate_bgm', description: '生成背景音乐', category: 'audio', requiresApproval: true },

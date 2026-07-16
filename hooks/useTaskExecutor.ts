@@ -1,6 +1,6 @@
 import React, { useCallback, useRef } from 'react';
 import axios from 'axios';
-import { DramaTask, TaskStatus, BigShot, Character, Prop, SceneAsset, ProcessedSegment, ApiConfig, getProviderForStep, getModelForStep } from '../types';
+import { DramaTask, TaskStatus, BigShot, Character, Prop, SceneAsset, ProcessedSegment, ApiConfig, getProviderForStep, getModelForStep, getBindingForStep } from '../types';
 import { generateScriptFromNovel, optimizeSoraPrompt, expandIdeaToStory, continueStory, preprocessNovel } from '../services/llmClient';
 import { generateCharacterDesign, generateStoryboardImage, generatePropImage } from '../services/mediaService';
 import { playSuccessSound, playErrorSound } from '../utils/helpers';
@@ -69,15 +69,15 @@ export const useTaskExecutor = (
       PROMPT_OPTIMIZATION: 'promptOptimization',
     };
     const stepKey = TASK_STATUS_TO_STEP[stepToRun] || '';
-    const stepBinding = stepKey ? cfg.stepBindings.find(b => b.step === stepKey) : undefined;
-    const stepModel = stepBinding ? cfg.models.find(m => m.id === stepBinding.modelId) : undefined;
-    const stepProvider = stepModel ? cfg.providers.find(p => p.id === stepModel.providerId) : undefined;
+    const stepBinding = stepKey ? getBindingForStep(cfg, stepKey as any) : undefined;
+    const stepModel = stepKey ? getModelForStep(cfg, stepKey as any) : undefined;
+    const stepProvider = stepKey ? getProviderForStep(cfg, stepKey as any) : undefined;
     console.log('[TaskExecutor] Step:', stepToRun, '→ stepKey:', stepKey, {
       stepBinding: stepBinding ? { step: stepBinding.step, modelId: stepBinding.modelId } : null,
       model: stepModel ? { id: stepModel.id, name: stepModel.modelName, format: stepModel.apiFormat, path: stepModel.apiPath, providerId: stepModel.providerId } : null,
       provider: stepProvider ? { id: stepProvider.id, name: stepProvider.name, type: stepProvider.type, baseUrl: stepProvider.baseUrl, hasApiKey: !!stepProvider.apiKey } : null,
       allProviders: cfg.providers.map(p => ({ id: p.id, name: p.name, type: p.type, baseUrl: p.baseUrl, hasApiKey: !!p.apiKey })),
-      allModels: cfg.models.map(m => ({ id: m.id, name: m.modelName, format: m.apiFormat, path: m.apiPath, providerId: m.providerId })),
+      modelBindings: cfg.modelBindings,
     });
     updateTask(taskId, { status: stepToRun, stepStatus: 'processing', error: undefined, failedStep: undefined });
     if (abortControllers.current[taskId]) abortControllers.current[taskId].abort();

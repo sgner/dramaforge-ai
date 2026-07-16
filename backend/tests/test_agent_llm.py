@@ -87,6 +87,30 @@ def test_build_react_prompt_includes_artifacts():
     assert "林尘" in p
 
 
+def test_build_react_prompt_requires_asset_inspection_and_reuse():
+    """Uploaded assets must be inspected before media generation and reused when possible."""
+    p = build_react_prompt(
+        user_goal="use the uploaded character in two shots",
+        plan=[],
+        artifacts={},
+        recent_steps=[],
+        tool_summaries=[],
+        project_assets=[
+            {
+                "id": "asset-upload-1",
+                "name": "uploaded character",
+                "origin": "uploaded",
+                "asset_kind": None,
+                "inspection_status": "pending",
+            }
+        ],
+    )
+    assert "asset-upload-1" in p
+    assert "inspect_asset" in p
+    assert "prepare_character_asset" in p
+    assert "reference_asset_ids" in p
+
+
 def test_build_react_prompt_includes_recent_steps():
     """ReAct prompt 包含最近步骤。"""
     p = build_react_prompt(

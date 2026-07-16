@@ -6,6 +6,7 @@ import {
   extractVideoTaskId, buildPollUrl
 } from './apiAdapter';
 import { api } from './apiClient';
+import { CHARACTER_DESIGN_SHEET_PROMPT } from '../constants';
 
 /**
  * 统一代理标志：true = 通过后端 /api/media/generate/* 调用供应商（api_key 不入前端，安全）；
@@ -95,11 +96,11 @@ function buildCharacterPrompt(character: Character, style: string): string {
     const cl = character.clothingLayers;
     return `${character.era || ''} ${character.identity || ''} ${character.gender || ''} ${character.ageRange || ''} ${style}。面容：${fa.faceShape}，${fa.eyebrow}，${fa.eyeType}，${fa.noseType}，${fa.lipType}，${fa.boneStructure}，${fa.skinTone}肤${fa.landmarks ? '，' + fa.landmarks : ''}。发式：${hs.lengthAndStyle}，${hs.color}发${hs.headwear ? '，' + hs.headwear : ''}，${hs.bangsDirection}。服装：内层${cl.inner}，外层${cl.outer}，套层${cl.overlay}，腰部${cl.waist}，下身${cl.lower}，足部${cl.feet}。${character.specialState ? '特殊状态：' + character.specialState + '。' : ''}姿态：双手自然下垂，站姿自然，面容平静。${CHARACTER_CONCEPT_SHEET_LAYOUT} 8K超精细，材质纹理清晰可触，纯白底背景`;
   }
-  return `Character Design Sheet (Three Views: Front, Side, Back) for ${character.name}. 
+  return `${CHARACTER_DESIGN_SHEET_PROMPT}. Character identity: ${character.name}.
 Visual features: ${character.visualFeatures}. 
 Clothing: ${character.clothing}. 
 Style: ${style}. 
-High quality, detailed character reference sheet, white background.`;
+High quality, detailed character reference sheet.`;
 }
 
 /**
@@ -144,7 +145,7 @@ export const generateCharacterDesign = async (
   model: ModelConfig,
   signal?: AbortSignal
 ): Promise<string> => {
-  const prompt = buildCharacterPrompt(character, style);
+  const prompt = `${buildCharacterPrompt(character, style)}\n${CHARACTER_DESIGN_SHEET_PROMPT}`;
 
   if (USE_BACKEND_PROXY) {
     // 后端代理模式：不需要前端持有 apiKey
@@ -390,7 +391,8 @@ export const generatePropImage = async (
   propPrompt: string,
   provider: Provider,
   model: ModelConfig,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  referenceImages: string[] = []
 ): Promise<string> => {
   const prompt = `Still life product photography, ${propPrompt}`;
 
@@ -400,6 +402,7 @@ export const generatePropImage = async (
       provider_id: provider.id,
       model: model.modelName,
       prompt,
+      ref_urls: referenceImages,
       aspect_ratio: '1:1',
     });
     return result.url;
@@ -436,11 +439,14 @@ export const generateSoraVideo = async (
   language: string,
   provider: Provider,
   model: ModelConfig,
-  storyboardImageUrl?: string,
+  storyboardImageUrl?: string | string[],
   onProgress?: (status: string) => void,
   signal?: AbortSignal
 ): Promise<string> => {
-  const prompt = buildVideoPrompt(optimizedPrompt, style, language, storyboardImageUrl);
+  const referenceImages = Array.isArray(storyboardImageUrl)
+    ? storyboardImageUrl.filter(Boolean)
+    : storyboardImageUrl ? [storyboardImageUrl] : [];
+  const prompt = buildVideoPrompt(optimizedPrompt, style, language, referenceImages[0]);
 
   if (USE_BACKEND_PROXY) {
     // 后端代理模式
@@ -448,7 +454,7 @@ export const generateSoraVideo = async (
       provider_id: provider.id,
       model: model.modelName,
       prompt,
-      ref_urls: storyboardImageUrl ? [storyboardImageUrl] : [],
+      ref_urls: referenceImages,
       aspect_ratio: '16:9',
       duration_sec: 15,
     });
@@ -465,7 +471,7 @@ export const generateSoraVideo = async (
     aspectRatio: '16:9',
     duration: '15',
     hd: true,
-    images: storyboardImageUrl ? [storyboardImageUrl] : []
+    images: referenceImages
   }, provider);
 
   try {

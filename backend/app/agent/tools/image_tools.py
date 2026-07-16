@@ -7,11 +7,37 @@ from __future__ import annotations
 from typing import Any
 
 from ..media_service import MediaRequest, MediaService, get_default_media_service
+from ..asset_references import resolve_asset_references
+from ..prompt_engineering import optimize_generation_prompt, collect_storyboard_reference_asset_ids
 from .base import BaseTool, ToolContext, ToolParameter
+
+
+CHARACTER_DESIGN_SHEET_PROMPT = (
+    "Character reference sheet, left-right split layout: left one-third area is chest-up close-up front view portrait "
+    "(shoulder-up framing, extreme facial detail clarity, gentle natural expression, bright eyes looking straight at camera, "
+    "realistic skin texture with visible pores and subtle imperfections, refined classical makeup); right two-thirds area is "
+    "three full-body views in horizontal row, from left to right: full-body front standing pose (arms hanging naturally, feet together, "
+    "complete front costume and body proportions), full-body side profile view (weight slightly shifted, waist-hip curve and silhouette visible, "
+    "complete side costume and footwear), full-body back view (complete back neckline, hairstyle from behind, back costume details). "
+    "Consistent front-top-side lighting across all panels, soft diffused light quality, light warm gray background color F0EDE8, "
+    "subjects softly blending with background with natural edge transition, no hard edges no white halo no light bleed, identical character design, "
+    "costume, hairstyle and accessories across all panels, professional character design sheet style, clean edges, accurate proportions, "
+    "material texture visible from all angles, absolutely no visible numbers, text, labels, frame counters, corner marks or annotations anywhere on the image"
+)
 
 
 def _resolve_service(ctx: ToolContext) -> MediaService:
     return ctx.media_service or get_default_media_service()
+
+
+def _resolve_reference_urls(ctx: ToolContext, params: dict, media_kind: str = "image") -> list[str]:
+    """Resolve project-scoped logical asset IDs before calling a provider."""
+    asset_ids = list(params.get("reference_asset_ids") or [])
+    if not asset_ids:
+        return list(params.get("reference_urls") or [])
+    if not ctx.db or not ctx.project_id:
+        raise ValueError("reference_asset_ids require a project-scoped database context")
+    return [item["url"] for item in resolve_asset_references(ctx.db, ctx.project_id, asset_ids, media_kind=media_kind)]
 
 
 def _build_character_prompt(character: dict, style: str = "cinematic") -> str:
@@ -77,6 +103,7 @@ class GenerateCharacterPortraitTool(BaseTool):
     estimated_time_sec = 25.0
     idempotent = False
     parameters = [
+        ToolParameter(name="reference_asset_ids", type="array", description="project-scoped reference asset IDs", required=False),
         ToolParameter(name="character", type="object", description="角色 dict（含 name/age/gender/appearance/personality）", required=True),
         ToolParameter(name="style", type="string", description="风格：cinematic | anime | realistic | illustration", required=False, default="cinematic"),
         ToolParameter(name="model_id", type="string", description="可选：指定模型 id", required=False),
@@ -90,12 +117,18 @@ class GenerateCharacterPortraitTool(BaseTool):
     async def execute(self, ctx: ToolContext, params: dict) -> dict:
         svc = _resolve_service(ctx)
         char = params["character"]
-        prompt = _build_character_prompt(char, style=params.get("style") or "cinematic")
+        source_prompt = f"{_build_character_prompt(char, style=params.get('style') or 'cinematic')}. {CHARACTER_DESIGN_SHEET_PROMPT}"
+        prompt, source_prompt = await optimize_generation_prompt(ctx, source_prompt, "image", {
+            "asset_kind": "character",
+            "character": char,
+            "canonical_layout": CHARACTER_DESIGN_SHEET_PROMPT,
+        })
         req = MediaRequest(
             kind="image",
             prompt=prompt,
             model_id=params.get("model_id"),
             width=1024, height=1024,
+            reference_urls=_resolve_reference_urls(ctx, params),
             extra={"asset_kind": "character", "character": char.get("name")},
         )
         result = await svc.generate(req)
@@ -106,6 +139,7 @@ class GenerateCharacterPortraitTool(BaseTool):
             "cost_usd": result.cost_usd,
             "elapsed_sec": result.elapsed_sec,
             "prompt": prompt,
+            "source_prompt": source_prompt,
         }
 
 
@@ -124,6 +158,7 @@ class GeneratePropImageTool(BaseTool):
     estimated_time_sec = 15.0
     idempotent = False
     parameters = [
+        ToolParameter(name="reference_asset_ids", type="array", description="project-scoped reference asset IDs", required=False),
         ToolParameter(name="prop", type="object", description="道具 dict", required=True),
         ToolParameter(name="model_id", type="string", description="可选：指定模型 id", required=False),
     ]
@@ -136,12 +171,14 @@ class GeneratePropImageTool(BaseTool):
     async def execute(self, ctx: ToolContext, params: dict) -> dict:
         svc = _resolve_service(ctx)
         prop = params["prop"]
-        prompt = _build_prop_prompt(prop)
+        source_prompt = _build_prop_prompt(prop)
+        prompt, source_prompt = await optimize_generation_prompt(ctx, source_prompt, "image", {"asset_kind": "prop", "prop": prop})
         req = MediaRequest(
             kind="image",
             prompt=prompt,
             model_id=params.get("model_id"),
             width=1024, height=1024,
+            reference_urls=_resolve_reference_urls(ctx, params),
             extra={"asset_kind": "prop", "prop": prop.get("name")},
         )
         result = await svc.generate(req)
@@ -152,6 +189,7 @@ class GeneratePropImageTool(BaseTool):
             "cost_usd": result.cost_usd,
             "elapsed_sec": result.elapsed_sec,
             "prompt": prompt,
+            "source_prompt": source_prompt,
         }
 
 
@@ -170,6 +208,7 @@ class GenerateSceneImageTool(BaseTool):
     estimated_time_sec = 25.0
     idempotent = False
     parameters = [
+        ToolParameter(name="reference_asset_ids", type="array", description="project-scoped reference asset IDs", required=False),
         ToolParameter(name="scene", type="object", description="场景 dict", required=True),
         ToolParameter(name="model_id", type="string", description="可选：指定模型 id", required=False),
     ]
@@ -182,12 +221,14 @@ class GenerateSceneImageTool(BaseTool):
     async def execute(self, ctx: ToolContext, params: dict) -> dict:
         svc = _resolve_service(ctx)
         scene = params["scene"]
-        prompt = _build_scene_prompt(scene)
+        source_prompt = _build_scene_prompt(scene)
+        prompt, source_prompt = await optimize_generation_prompt(ctx, source_prompt, "image", {"asset_kind": "scene", "scene": scene})
         req = MediaRequest(
             kind="image",
             prompt=prompt,
             model_id=params.get("model_id"),
             width=1280, height=720,  # 16:9 视频比例
+            reference_urls=_resolve_reference_urls(ctx, params),
             extra={"asset_kind": "scene", "scene": scene.get("name")},
         )
         result = await svc.generate(req)
@@ -198,6 +239,7 @@ class GenerateSceneImageTool(BaseTool):
             "cost_usd": result.cost_usd,
             "elapsed_sec": result.elapsed_sec,
             "prompt": prompt,
+            "source_prompt": source_prompt,
         }
 
 
@@ -216,8 +258,11 @@ class GenerateStoryboardImageTool(BaseTool):
     estimated_time_sec = 12.0
     idempotent = False
     parameters = [
+        ToolParameter(name="reference_asset_ids", type="array", description="project-scoped reference asset IDs", required=False),
         ToolParameter(name="shot", type="object", description="分镜 dict", required=True),
         ToolParameter(name="characters", type="array", description="可选：角色列表", required=False),
+        ToolParameter(name="scene_asset_id", type="string", description="场景参考资产 ID", required=False),
+        ToolParameter(name="props", type="array", description="可选：道具列表", required=False),
         ToolParameter(name="model_id", type="string", description="可选：指定模型 id", required=False),
     ]
 
@@ -229,12 +274,21 @@ class GenerateStoryboardImageTool(BaseTool):
     async def execute(self, ctx: ToolContext, params: dict) -> dict:
         svc = _resolve_service(ctx)
         shot = params["shot"]
-        prompt = _build_storyboard_prompt(shot, params.get("characters"))
+        source_prompt = _build_storyboard_prompt(shot, params.get("characters"))
+        ref_ids = collect_storyboard_reference_asset_ids(params, ctx.artifacts)
+        prompt, source_prompt = await optimize_generation_prompt(ctx, source_prompt, "image", {
+            "asset_kind": "storyboard",
+            "shot": shot,
+            "characters": params.get("characters") or [],
+            "props": params.get("props") or [],
+            "reference_asset_ids": ref_ids,
+        })
         req = MediaRequest(
             kind="image",
             prompt=prompt,
             model_id=params.get("model_id"),
             width=1280, height=720,
+            reference_urls=_resolve_reference_urls(ctx, {**params, "reference_asset_ids": ref_ids}),
             extra={"asset_kind": "shot", "shot_index": shot.get("index")},
         )
         result = await svc.generate(req)
@@ -245,4 +299,5 @@ class GenerateStoryboardImageTool(BaseTool):
             "cost_usd": result.cost_usd,
             "elapsed_sec": result.elapsed_sec,
             "prompt": prompt,
+            "source_prompt": source_prompt,
         }

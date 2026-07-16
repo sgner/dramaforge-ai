@@ -12,6 +12,9 @@ export interface TaskListProps {
    * 创建任务、轮询心跳、SSE 任务状态变化时都应递增。
    */
   refreshTrigger?: number;
+  /** 重试时使用画布当前步骤绑定，避免历史任务沿用失效模型。 */
+  retryProviderId?: string;
+  retryModelId?: string;
 }
 
 export const TaskList: React.FC<TaskListProps> = ({
@@ -19,6 +22,8 @@ export const TaskList: React.FC<TaskListProps> = ({
   onSelect,
   selectedId,
   refreshTrigger = 0,
+  retryProviderId,
+  retryModelId,
 }) => {
   const [tasks, setTasks] = useState<AgentTaskOut[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -63,7 +68,13 @@ export const TaskList: React.FC<TaskListProps> = ({
     try {
       if (action === 'resume') await api.resumeAgent(taskId);
       if (action === 'stop') await api.stopAgent(taskId);
-      if (action === 'retry') await api.retryAgent(taskId);
+      if (action === 'retry') {
+        const config = retryProviderId || retryModelId
+          ? { providerId: retryProviderId, modelId: retryModelId }
+          : undefined;
+        if (config) await api.retryAgent(taskId, config);
+        else await api.retryAgent(taskId);
+      }
       await loadRef.current();
     } catch (e) {
       console.warn(`TaskList: failed to ${action} task`, e);

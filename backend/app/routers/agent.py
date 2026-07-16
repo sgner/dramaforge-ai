@@ -24,6 +24,7 @@ from ..agent.tools import build_default_registry
 from ..agent.llm_factory import load_llm_configs, select_llm_for_task, NoLLMConfigured
 from ..agent.tools import list_tool_metadata
 from ..agent.media_service import DatabaseMediaService
+from ..agent.capabilities import CapabilityConfigurationError, resolve_capability_bindings
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -77,6 +78,11 @@ async def create_task(body: schemas.AgentTaskCreate, db: Session = Depends(get_d
     改为 async 后用 `asyncio.create_task` 把 runtime 调度到同一个 event loop，
     与 HTTP 请求交错执行，不消耗 threadpool。
     """
+    try:
+        capabilities = resolve_capability_bindings(db)
+    except CapabilityConfigurationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    llm_binding = capabilities["llm"]
     task = AgentTask(
         id=_gen_id(),
         project_id=body.project_id,
@@ -88,8 +94,8 @@ async def create_task(body: schemas.AgentTaskCreate, db: Session = Depends(get_d
         total_tokens=0,
         max_steps=body.max_steps,
         skip_confirm=body.skip_confirm,
-        llm_provider_id=body.llm_provider_id,
-        llm_model_id=body.llm_model_id,
+        llm_provider_id=llm_binding["provider_id"],
+        llm_model_id=llm_binding["model_id"],
     )
     db.add(task)
     db.commit()
@@ -287,6 +293,16 @@ async def _spawn_runtime(task_dict: dict) -> None:
         from ..database import SessionLocal
         with SessionLocal() as db:
             configs = load_llm_configs(db)
+            try:
+                capabilities = resolve_capability_bindings(db)
+            except CapabilityConfigurationError as e:
+                logger.error("[continue_runtime] task %s invalid capability bindings: %s", task_id, e)
+                await event_bus.publish(AgentEvent(
+                    task_id=task_id, type=EventType.TASK_FAILED,
+                    payload={"error": str(e), "reason_code": "capability_binding_invalid"},
+                ))
+                _update_task_status(task_id, "failed")
+                return
         try:
             llm = select_llm_for_task(
                 task_provider_id=task_dict.get("llm_provider_id"),
@@ -331,7 +347,11 @@ async def _spawn_runtime(task_dict: dict) -> None:
             db=runtime_db,
             max_steps=task_dict.get("max_steps", 30) or 30,
             skip_confirm=bool(task_dict.get("skip_confirm", False)),
-            media_service=DatabaseMediaService(runtime_db, task_dict.get("llm_provider_id")),
+            media_service=DatabaseMediaService(
+                runtime_db,
+                task_dict.get("llm_provider_id"),
+                capabilities,
+            ),
         )
 
         # 6. 注册 runtime
@@ -452,6 +472,8 @@ async def _continue_runtime(task_id: str) -> None:
         registry = build_default_registry()
         # 4. 构造 runtime，从 PAUSED 状态启动以匹配 pending_request
         # 恢复路径同样必须注入 DB，否则恢复后的 save_asset 仍会静默不落库。
+        with SessionLocal() as db:
+            capabilities = resolve_capability_bindings(db)
         runtime_db = SessionLocal()
         runtime = AgentRuntime(
             task_id=task_id,
@@ -462,7 +484,11 @@ async def _continue_runtime(task_id: str) -> None:
             db=runtime_db,
             max_steps=task_dict["max_steps"],
             skip_confirm=task_dict["skip_confirm"],
-            media_service=DatabaseMediaService(runtime_db, task_dict.get("llm_provider_id")),
+            media_service=DatabaseMediaService(
+                runtime_db,
+                task_dict.get("llm_provider_id"),
+                capabilities,
+            ),
         )
         # 恢复 step_count 与 state：基于 memory 现有 step 数量
         runtime._step_count = len(memory.short_term)
@@ -675,7 +701,11 @@ async def stop_task(task_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/tasks/{task_id}/retry")
-async def retry_task(task_id: str, db: Session = Depends(get_db)):
+async def retry_task(
+    task_id: str,
+    body: schemas.AgentTaskRetry | None = None,
+    db: Session = Depends(get_db),
+):
     """从头重试失败或已停止的任务。"""
     from ..models import AgentStep
 
@@ -693,6 +723,13 @@ async def retry_task(task_id: str, db: Session = Depends(get_db)):
     task.pending_response = None
     task.total_cost_usd = 0.0
     task.total_tokens = 0
+    # Agent 模式与普通画布共用步骤绑定。历史任务可能没有保存模型，
+    # 重试时用当前画布绑定覆盖，避免后端按 provider 的首个模型盲选。
+    if body is not None:
+        if body.llm_provider_id is not None:
+            task.llm_provider_id = body.llm_provider_id
+        if body.llm_model_id is not None:
+            task.llm_model_id = body.llm_model_id
     task.updated_at = _now()
     db.commit()
     db.refresh(task)

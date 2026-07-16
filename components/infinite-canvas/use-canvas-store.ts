@@ -15,13 +15,13 @@ import {
 import {
   ApiConfig,
   DEFAULT_PROVIDERS,
-  DEFAULT_STEP_BINDINGS,
   ModelConfig,
   Provider,
   ArtStyle,
   Language,
   getProviderForStep,
   getModelForStep,
+  normalizeModelBindings,
 } from '../../types';
 import { generateSoraVideo, generateCharacterDesign, generateStoryboardImage, generatePropImage } from '../../services/mediaService';
 import { expandIdeaToStory, generateScriptFromNovel, optimizeSoraPrompt } from '../../services/llmClient';
@@ -37,6 +37,34 @@ export type NodeRenderer = (node: CanvasNode) => React.ReactNode;
 
 // Pipeline AbortController 存储（运行时，不持久化）
 const pipelineAbortControllers = new Map<string, AbortController>();
+
+/** Return all image references feeding a generation node, preserving edge order. */
+export function connectedImageUrls(nodes: CanvasNode[], connections: Connection[], targetId: string): string[] {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  return connections
+    .filter((connection) => connection.to === targetId)
+    .map((connection) => byId.get(connection.from))
+    .filter((node): node is CanvasNode => node?.type === 'image' && typeof node.url === 'string' && node.url.trim().length > 0)
+    .map((node) => node.url!.trim());
+}
+
+async function optimizeCanvasMediaPrompt(
+  cfg: ApiConfig,
+  prompt: string,
+  style = 'cinematic',
+  language = 'zh',
+  signal?: AbortSignal,
+): Promise<string> {
+  const provider = getProviderForStep(cfg, 'promptOptimization');
+  const model = getModelForStep(cfg, 'promptOptimization');
+  if (!provider || !model) throw new Error('请先在 API 设置中绑定 LLM 模型能力');
+  let optimized = '';
+  for await (const chunk of optimizeSoraPrompt(provider, model, prompt, style, language, undefined, signal)) {
+    optimized = chunk;
+  }
+  if (!optimized.trim()) throw new Error('提示词优化未返回有效内容');
+  return optimized.trim();
+}
 
 // ============ 后端 API 包装（localStorage 已废弃，所有数据走 FastAPI + SQLite）============
 
@@ -231,7 +259,7 @@ function loadApiConfig(): ApiConfig {
     const raw = localStorage.getItem(API_CONFIG_KEY);
     if (!raw) return createDefaultApiConfig();
     const data = JSON.parse(raw);
-    if (data && data.providers && data.stepBindings) {
+    if (data && data.providers && (data.modelBindings || data.stepBindings)) {
       // Migrate old format: ensure providers have all fields
       data.providers = data.providers.map((p: any) => ({
         id: p.id || '',
@@ -257,13 +285,7 @@ function loadApiConfig(): ApiConfig {
         volcengineProjectName: p.volcengineProjectName || 'default',
         volcengineRegion: p.volcengineRegion || 'cn-beijing',
       }));
-      // Migrate old stepBindings format
-      data.stepBindings = (data.stepBindings || []).map((b: any) => ({
-        step: b.step,
-        providerId: b.providerId || b.provider_id || '',
-        modelId: b.modelId || b.model_id || '',
-      }));
-      return data;
+      return normalizeModelBindings(data);
     }
     return createDefaultApiConfig();
   } catch {
@@ -300,7 +322,7 @@ function createDefaultApiConfig(): ApiConfig {
       chatModels: [...p.chatModels],
       videoModels: [...p.videoModels],
     })),
-    stepBindings: DEFAULT_STEP_BINDINGS.map(b => ({ ...b })),
+    modelBindings: normalizeModelBindings({ providers: DEFAULT_PROVIDERS }).modelBindings,
   };
 }
 
@@ -465,12 +487,12 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
     })),
 
   addConnection: (from, to) =>
-    set((s) => ({
-      connections: [
-        ...s.connections,
-        { id: uid('c'), from, to },
-      ],
-    })),
+    set((s) => {
+      if (!from || !to || from === to || s.connections.some((connection) => connection.from === from && connection.to === to)) {
+        return s;
+      }
+      return { connections: [...s.connections, { id: uid('c'), from, to }] };
+    }),
 
   removeConnection: (id) =>
     set((s) => ({
@@ -652,14 +674,16 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
     get().updateNode(nodeId, { runStatus: 'running', runError: undefined, running: true });
 
     try {
-      const referenceImage = inputImageUrls[0];
+      get().updateNode(nodeId, { runError: '正在优化提示词…' });
+      const optimizedPrompt = await optimizeCanvasMediaPrompt(cfg, prompt);
+      get().updateNode(nodeId, { _assetSourcePrompt: prompt, _assetPrompt: optimizedPrompt });
       const videoUrl = await generateSoraVideo(
-        prompt,
+        optimizedPrompt,
         'cinematic',
         'zh',
         provider,
         model,
-        referenceImage,
+        inputImageUrls,
         (status) => {
           get().updateNode(nodeId, { runError: status });
         }
@@ -1419,14 +1443,18 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
       }
 
       let url = '';
-      const prompt = customPrompt || asset.prompt || asset.name || '';
+      const sourcePrompt = customPrompt || asset.prompt || asset.name || '';
+      const prompt = await optimizeCanvasMediaPrompt(cfg, sourcePrompt);
+      const referenceImages = canvasNode
+        ? connectedImageUrls(get().nodes, get().connections, canvasNode.id)
+        : [];
       if (asset.kind === 'character') {
         // 角色没有原始 char 对象，直接用 prompt 生成
-        url = await generatePropImage(prompt, provider, model, undefined);
+        url = await generatePropImage(prompt, provider, model, undefined, referenceImages);
       } else if (asset.kind === 'prop' || asset.kind === 'scene') {
-        url = await generatePropImage(prompt, provider, model, undefined);
+        url = await generatePropImage(prompt, provider, model, undefined, referenceImages);
       } else if (asset.kind === 'storyboard') {
-        url = await generateStoryboardImage(prompt, '', 'zh', '', [], provider, model, undefined);
+        url = await generateStoryboardImage(prompt, '', 'zh', '', referenceImages, provider, model, undefined);
       } else {
         throw new Error(t('canvasPanelRetryUnsupportedKind').replace('{0}', asset.kind));
       }
@@ -1446,6 +1474,7 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
           _assetFailed: false,
           _assetError: undefined,
           _assetPrompt: prompt,
+          _assetSourcePrompt: sourcePrompt,
           _assetProviderId: provider!.id,
           _assetProviderName: provider!.name,
           _assetModelId: model!.modelName,
@@ -1590,6 +1619,9 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
             h: IMG_H,
             url: typeof itemUrl === 'string' ? itemUrl : '',
             name: itemName,
+            generating: Boolean((item as any).generating),
+            _assetFailed: Boolean((item as any).failed),
+            _assetError: (item as any).error,
             // 资产元数据（image 节点原生支持）
             _assetPrompt: itemPrompt,
             _assetProviderId: itemProviderId,

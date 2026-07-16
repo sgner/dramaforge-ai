@@ -27,6 +27,8 @@ from .tools.base import (
     ToolRegistry,
     ToolValidationError,
 )
+from .media_assets import begin_media_asset, finish_media_asset
+from .. import models
 
 
 class AgentState(str, Enum):
@@ -179,7 +181,72 @@ class AgentRuntime:
             "requires_approval": self._requires_approval(tool_name),
         })
 
-        observation, status = await self._execute_tool(tool_name, action.get("params", {}))
+        tool_params = action.get("params", {})
+        media_asset = self._begin_media_asset(tool_name, tool_params)
+        media_batch_assets = self._begin_media_batch_assets(tool_params) if tool_name == "generate_media_batch" else []
+        if media_asset:
+            self.memory.artifacts.setdefault(media_asset["asset_kind"], []).append(media_asset)
+            await self._emit(EventType.ARTIFACT_CREATED, media_asset)
+        for pending_asset in media_batch_assets:
+            self.memory.artifacts.setdefault(pending_asset["asset_kind"], []).append(pending_asset)
+            await self._emit(EventType.ARTIFACT_CREATED, pending_asset)
+
+        asset_event = {
+            "inspect_asset": (EventType.ASSET_INSPECTION_STARTED, EventType.ASSET_INSPECTION_FINISHED),
+            "prepare_character_asset": (EventType.ASSET_NORMALIZATION_STARTED, EventType.ASSET_NORMALIZATION_FINISHED),
+        }.get(tool_name)
+        if asset_event:
+            await self._emit(asset_event[0], {
+                "asset_id": tool_params.get("asset_id"),
+                "source_asset_id": tool_params.get("source_asset_id"),
+                "text": "正在检查上传资产" if tool_name == "inspect_asset" else "正在准备标准化角色资产",
+            })
+        observation, status = await self._execute_tool(tool_name, tool_params)
+        if asset_event:
+            result_payload = observation.get("result") if isinstance(observation, dict) else None
+            await self._emit(asset_event[1], {
+                "asset_id": (result_payload or {}).get("asset_id") if isinstance(result_payload, dict) else tool_params.get("asset_id"),
+                "source_asset_id": (result_payload or {}).get("source_asset_id") if isinstance(result_payload, dict) else None,
+                "success": status == "success",
+                "error": observation.get("error") if isinstance(observation, dict) else None,
+                "text": "上传资产检查完成" if tool_name == "inspect_asset" and status == "success" else (
+                    "标准化角色资产已创建" if tool_name == "prepare_character_asset" and status == "success" else "资产处理失败"
+                ),
+            })
+
+        if media_asset:
+            result = observation.get("result") if isinstance(observation, dict) else None
+            url = result.get("url") if isinstance(result, dict) else None
+            error = observation.get("error") if isinstance(observation, dict) and status != "success" else None
+            result_prompt = result.get("prompt") if isinstance(result, dict) else None
+            updated_asset = finish_media_asset(self.db, media_asset["id"], url=url, error=error, prompt=result_prompt) if self.db else {
+                **media_asset, "url": url, "failed": bool(error), "error": error, "generating": False,
+            }
+            bucket = self.memory.artifacts.get(media_asset["asset_kind"], [])
+            self.memory.artifacts[media_asset["asset_kind"]] = [
+                updated_asset if item.get("id") == media_asset["id"] else item for item in bucket
+            ]
+            await self._emit(EventType.ARTIFACT_CREATED, updated_asset)
+
+        if media_batch_assets and self.db:
+            batch = observation.get("result") if isinstance(observation, dict) else None
+            results = (batch or {}).get("results", []) if isinstance(batch, dict) else []
+            by_index = {item.get("job_index"): item for item in results if isinstance(item, dict)}
+            for pending in media_batch_assets:
+                item = by_index.get(pending.get("extra", {}).get("job_index"), {})
+                if not isinstance(item, dict):
+                    continue
+                updated = finish_media_asset(
+                    self.db,
+                    pending["id"],
+                    url=item.get("url"),
+                    error=None if item.get("success") else str(item.get("error") or "media generation failed"),
+                    prompt=str(item.get("prompt") or ""),
+                )
+                asset_kind = pending["asset_kind"]
+                bucket = self.memory.artifacts.setdefault(asset_kind, [])
+                self.memory.artifacts[asset_kind] = [entry for entry in bucket if entry.get("id") != pending["id"]] + [updated]
+                await self._emit(EventType.ARTIFACT_CREATED, updated)
 
         if tool_name == "save_asset" and status == "success":
             saved_asset = observation.get("result") if isinstance(observation, dict) else None
@@ -214,6 +281,86 @@ class AgentRuntime:
             self.memory.plan = observation["result"]
 
         return False
+
+    def _begin_media_asset(self, tool_name: str, params: dict) -> dict | None:
+        """Create a visible canvas asset before a media provider request starts."""
+        if not self.db or tool_name not in {
+            "generate_character_portrait", "generate_prop_image", "generate_scene_image",
+            "generate_storyboard_image", "generate_video",
+        }:
+            return None
+        tool = self.registry.get(tool_name)
+        category = getattr(tool, "category", "image")
+        asset_kind = {
+            "generate_character_portrait": "character",
+            "generate_prop_image": "prop",
+            "generate_scene_image": "scene",
+            "generate_storyboard_image": "storyboard",
+            "generate_video": "video",
+        }[tool_name]
+        source = params.get("character") or params.get("prop") or params.get("scene") or params.get("shot") or {}
+        if not isinstance(source, dict):
+            source = {"description": str(source)}
+        name = source.get("name") or source.get("title") or source.get("index") or asset_kind
+        prompt = str(source.get("prompt") or source.get("description") or "")
+        if tool_name == "generate_character_portrait":
+            from .tools.image_tools import _build_character_prompt
+            prompt = _build_character_prompt(source, style=str(params.get("style") or "cinematic"))
+        elif tool_name == "generate_prop_image":
+            from .tools.image_tools import _build_prop_prompt
+            prompt = _build_prop_prompt(source)
+        elif tool_name == "generate_scene_image":
+            from .tools.image_tools import _build_scene_prompt
+            prompt = _build_scene_prompt(source)
+        elif tool_name == "generate_storyboard_image":
+            from .tools.image_tools import _build_storyboard_prompt
+            prompt = _build_storyboard_prompt(source, params.get("characters"))
+        elif tool_name == "generate_video":
+            video_parts = [
+                source.get("action", ""),
+                f"{source.get('camera', 'medium shot')}, {source.get('movement', 'static')}",
+                f"scene: {source.get('scene', '')}",
+                "cinematic, 24fps, high detail",
+            ]
+            if source.get("dialogue"):
+                video_parts.append(f"character says: {source['dialogue']}")
+            prompt = ", ".join(part for part in video_parts if part)
+        bindings = getattr(self.media_service, "capability_bindings", {}) or {}
+        binding = bindings.get("video" if category == "video" else "image", {})
+        return begin_media_asset(
+            self.db,
+            project_id=self.project_id,
+            kind="video" if category == "video" else "image",
+            asset_kind=asset_kind,
+            name=str(name),
+            prompt=prompt,
+            provider_id=binding.get("provider_id"),
+            model_id=binding.get("model_id"),
+        )
+
+    def _begin_media_batch_assets(self, params: dict) -> list[dict]:
+        if not self.db:
+            return []
+        assets: list[dict] = []
+        bindings = getattr(self.media_service, "capability_bindings", {}) or {}
+        for index, job in enumerate(params.get("jobs") or []):
+            if not isinstance(job, dict):
+                continue
+            kind = str(job.get("kind") or "image")
+            asset_kind = str(job.get("asset_kind") or ("video" if kind == "video" else "image"))
+            prompt = str(job.get("prompt") or "")
+            pending = begin_media_asset(
+                self.db,
+                project_id=self.project_id,
+                kind=kind,
+                asset_kind=asset_kind,
+                name=str(job.get("name") or asset_kind),
+                prompt=prompt,
+                model_id=(bindings.get(kind) or {}).get("model_id"),
+                extra={"job_index": index, "batch": True},
+            )
+            assets.append(pending)
+        return assets
 
     async def resume(self, user_response: Any) -> bool:
         """从 PAUSED 恢复，继续执行。
@@ -285,9 +432,39 @@ class AgentRuntime:
             artifacts=self.memory.artifacts,
             recent_steps=recent,
             tool_summaries=tool_summaries,
+            project_assets=self._project_asset_context(),
         )
         return [
             {"role": "system", "content": prompt},
+        ]
+
+    def _project_asset_context(self) -> list[dict]:
+        """Expose only current-project asset identity/status to the planner."""
+        if not self.db or not self.project_id:
+            return []
+        try:
+            rows = (
+                self.db.query(models.Asset)
+                .filter(models.Asset.project_id == self.project_id)
+                .order_by(models.Asset.created_at.asc())
+                .limit(30)
+                .all()
+            )
+        except Exception:
+            # Prompt construction must not make an otherwise valid Agent task fail.
+            return []
+        return [
+            {
+                "id": row.id,
+                "name": row.name,
+                "title": row.title,
+                "origin": row.origin,
+                "asset_kind": row.asset_kind,
+                "kind": row.kind,
+                "inspection_status": row.inspection_status,
+                "source_asset_id": row.source_asset_id,
+            }
+            for row in rows
         ]
 
     def _requires_approval(self, tool_name: str) -> bool:
@@ -318,13 +495,32 @@ class AgentRuntime:
             emit=lambda t, p: self._emit_sync(t, p),
         )
         # 用 RetryableTool 包装 BaseTool（自动重试 + fallback）
-        wrapped = RetryableTool(tool) if isinstance(tool, BaseTool) else tool
+        media_tools = {
+            "generate_character_portrait", "generate_prop_image", "generate_scene_image",
+            "generate_storyboard_image", "generate_video", "generate_media_batch",
+        }
+        wrapped = RetryableTool(tool, max_retries=0) if isinstance(tool, BaseTool) and tool_name in media_tools else (RetryableTool(tool) if isinstance(tool, BaseTool) else tool)
         try:
             result = await wrapped.call(ctx, params)
             return {"success": True, "result": result}, "success"
         except ToolValidationError as e:
             return {"error": str(e)}, "failed"
         except RetryableError as e:
+            if tool_name in media_tools:
+                recovery = {"success": False, "error": str(e), "worker": "media-recovery"}
+                await self._emit(EventType.MEDIA_RECOVERY_STARTED, {
+                    "tool": tool_name, "params": params, "worker": "media-recovery",
+                })
+                try:
+                    recovery_result = await RetryableTool(tool, max_retries=0).call(ctx, params)
+                    recovery = {"success": True, "result": recovery_result, "worker": "media-recovery"}
+                except Exception as recovery_error:
+                    recovery = {"success": False, "error": str(recovery_error), "worker": "media-recovery"}
+                await self._emit(EventType.MEDIA_RECOVERY_FINISHED, {
+                    "tool": tool_name, "success": recovery["success"],
+                    "error": recovery.get("error"), "worker": "media-recovery",
+                })
+                return {"error": str(e), "recovery": recovery}, "failed"
             # 挂起等待用户决策
             self.pending_request = {
                 "type": "tool_error",

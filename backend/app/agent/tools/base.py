@@ -84,6 +84,17 @@ class ToolContext:
             except Exception:
                 pass
 
+    async def generate_llm(self, messages: list[dict], **kwargs):
+        """Prefer provider SSE and surface text deltas to the Agent event stream."""
+        if self.llm_client is None:
+            raise RuntimeError("LLM client is not configured")
+        streaming = getattr(self.llm_client, "generate_streaming", None)
+        if callable(streaming):
+            async def emit_delta(text: str):
+                self.emit_event("text_delta", {"text": text})
+            return await streaming(messages, on_delta=emit_delta, **kwargs)
+        return await self.llm_client.generate(messages, **kwargs)
+
 
 # ========================
 # Tool 抽象
@@ -286,4 +297,3 @@ class RetryableTool:
     def __getattr__(self, name: str):
         """委托未定义属性给 self.tool。"""
         return getattr(self.tool, name)
-

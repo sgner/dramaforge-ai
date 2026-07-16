@@ -8,6 +8,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, cleanup, act } from '@testing-library/react';
 import App from '@/App';
+import { api } from '@/services/apiClient';
+import { useCanvasStore } from '@/components/infinite-canvas/use-canvas-store';
 
 // 用 vi.hoisted 让 mock 工厂能访问 MOCK_PROJECT（vi.mock 会被 hoist 到文件顶部）
 const { MOCK_PROJECT } = vi.hoisted(() => ({
@@ -100,7 +102,9 @@ describe('<App /> — Agent Mode 入口（位于 Canvas 工具栏）', () => {
       fireEvent.click(screen.getByTestId('enter-agent-mode'));
     });
     expect(screen.getByTestId('agent-mode')).toBeInTheDocument();
-    expect(screen.getByTestId('exit-agent-mode')).toBeInTheDocument();
+    expect(screen.queryByTestId('exit-agent-mode')).toBeNull();
+    expect(document.querySelectorAll('.canvas-root')).toHaveLength(1);
+    expect(screen.getByTestId('enter-agent-mode')).toHaveClass('active');
   });
 
   it('点击 AgentMode 内 "退出" 按钮后返回画布', async () => {
@@ -111,11 +115,12 @@ describe('<App /> — Agent Mode 入口（位于 Canvas 工具栏）', () => {
     });
     expect(screen.getByTestId('agent-mode')).toBeInTheDocument();
     await act(async () => {
-      fireEvent.click(screen.getByTestId('exit-agent-mode'));
+      fireEvent.click(screen.getByTestId('enter-agent-mode'));
     });
     expect(screen.queryByTestId('agent-mode')).toBeNull();
     // 重新出现 "Agent" 入口按钮（画布已恢复）
     expect(screen.getByTestId('enter-agent-mode')).toBeInTheDocument();
+    expect(document.querySelectorAll('.canvas-root')).toHaveLength(1);
   });
 
   it('URL ?agent=1 时自动进入 Agent Mode（自动选/建一个任务）', async () => {
@@ -126,5 +131,80 @@ describe('<App /> — Agent Mode 入口（位于 Canvas 工具栏）', () => {
       await new Promise((r) => setTimeout(r, 200));
     });
     expect(screen.getByTestId('agent-mode')).toBeInTheDocument();
+  });
+
+  it('loads canvas API settings into the store used by AgentMode', async () => {
+    vi.mocked(api.listProviders).mockResolvedValue([{
+      provider_id: 'custom-api',
+      name: 'Custom API',
+      base_url: 'https://example.test/v1',
+      protocol: 'openai',
+      enabled: true,
+      default_model: 'deepseek-v4-flash',
+      chat_models: ['deepseek-v4-flash'],
+      image_models: [],
+      video_models: [],
+    }] as any);
+    vi.mocked(api.getUserPreference).mockResolvedValue({
+      key: 'model_bindings',
+      value: [{ kind: 'llm', providerId: 'custom-api', modelId: 'deepseek-v4-flash' }],
+    } as any);
+
+    render(<App />);
+    await openCanvas();
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    expect(useCanvasStore.getState().apiConfig.modelBindings).toEqual([
+      { kind: 'llm', providerId: 'custom-api', modelId: 'deepseek-v4-flash' },
+      { kind: 'image', providerId: '', modelId: '' },
+      { kind: 'video', providerId: '', modelId: '' },
+    ]);
+  });
+
+  it('does not treat the masked provider key returned by the backend as an editable key', async () => {
+    vi.mocked(api.listProviders).mockResolvedValue([{
+      provider_id: 'custom-api',
+      name: 'Custom API',
+      base_url: 'https://example.test/v1',
+      protocol: 'openai',
+      enabled: true,
+      api_key: 'sk-F***k1hm',
+      has_key: true,
+      key_preview: 'sk-F***k1hm',
+      chat_models: ['chat-1'],
+      image_models: [],
+      video_models: [],
+    }] as any);
+    vi.mocked(api.getUserPreference).mockResolvedValue({ key: 'model_bindings', value: [] } as any);
+
+    render(<App />);
+    await openCanvas();
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    const loaded = useCanvasStore.getState().apiConfig.providers.find((p) => p.id === 'custom-api');
+    expect(loaded?.apiKey).toBe('');
+    expect(loaded?.hasKey).toBe(true);
+    expect(loaded?.keyPreview).toBe('sk-F***k1hm');
+  });
+
+  it('restores capability bindings from local backup when the provider API is unavailable', async () => {
+    vi.mocked(api.listProviders).mockRejectedValue(new Error('backend unavailable'));
+    localStorage.setItem('dramaforge_model_bindings', JSON.stringify([
+      { kind: 'llm', providerId: 'custom-api', modelId: 'chat-1' },
+    ]));
+
+    render(<App />);
+    await openCanvas();
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+
+    expect(useCanvasStore.getState().apiConfig.modelBindings).toEqual([
+      { kind: 'llm', providerId: 'custom-api', modelId: 'chat-1' },
+      { kind: 'image', providerId: '', modelId: '' },
+      { kind: 'video', providerId: '', modelId: '' },
+    ]);
   });
 });

@@ -30,11 +30,20 @@ class EventType(str, Enum):
     TASK_DONE = "task_done"
     TASK_FAILED = "task_failed"
     STEP_RETRYING = "step_retrying"
+    TEXT_DELTA = "text_delta"
+    PROMPT_OPTIMIZATION_STARTED = "prompt_optimization_started"
+    PROMPT_OPTIMIZATION_FINISHED = "prompt_optimization_finished"
     # Spec B: 工具失败恢复
     TOOL_RETRYING = "tool_retrying"
     TOOL_FALLBACK_MODEL = "tool_fallback_model"
     TOOL_ERROR = "tool_error"
     TOOL_RESUMED = "tool_resumed"
+    MEDIA_RECOVERY_STARTED = "media_recovery_started"
+    MEDIA_RECOVERY_FINISHED = "media_recovery_finished"
+    ASSET_INSPECTION_STARTED = "asset_inspection_started"
+    ASSET_INSPECTION_FINISHED = "asset_inspection_finished"
+    ASSET_NORMALIZATION_STARTED = "asset_normalization_started"
+    ASSET_NORMALIZATION_FINISHED = "asset_normalization_finished"
 
 
 class AgentEvent:

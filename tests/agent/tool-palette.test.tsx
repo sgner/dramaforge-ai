@@ -14,10 +14,10 @@ describe('<ToolPalette />', () => {
     }
   });
 
-  it('renders all 18 tool entries', () => {
+  it('renders all registered tool entries', () => {
     render(<ToolPalette tools={PALETTE_TOOLS} />);
     const items = screen.getAllByTestId('tool-palette-item');
-    expect(items).toHaveLength(18);
+    expect(items).toHaveLength(19);
   });
 
   it('shows tool name and description for each entry', () => {
@@ -43,11 +43,11 @@ describe('<ToolPalette />', () => {
     expect(items).toHaveLength(6);
   });
 
-  it('image category has 4 tools', () => {
+  it('image category has 5 tools', () => {
     render(<ToolPalette tools={PALETTE_TOOLS} />);
     const cat = screen.getByTestId('tool-palette-category-image');
     const items = within(cat).getAllByTestId('tool-palette-item');
-    expect(items).toHaveLength(4);
+    expect(items).toHaveLength(5);
   });
 
   it('video category has 1 tool', () => {

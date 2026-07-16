@@ -100,6 +100,13 @@ class Asset(Base):
     error = Column(Text, nullable=True)
     generating = Column(Boolean, default=False)
     extra = Column(JSON, default=dict)  # 其他扩展字段
+    origin = Column(String, nullable=False, default="generated")
+    source_asset_id = Column(String, ForeignKey("assets.id", ondelete="SET NULL"), nullable=True)
+    inspection_status = Column(String, nullable=False, default="pending")
+    inspection = Column(JSON, default=dict)
+    visual_identity = Column(JSON, default=dict)
+    reference_capabilities = Column(JSON, default=dict)
+    usage_count = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime, default=_now)
 
     project = relationship("Project", back_populates="assets")

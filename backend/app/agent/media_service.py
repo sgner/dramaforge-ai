@@ -41,28 +41,44 @@ class MediaServiceError(Exception):
 class DatabaseMediaService:
     """Adapter from Agent media tools to the unified provider configuration table."""
 
-    def __init__(self, db, preferred_provider_id: str | None = None):
+    def __init__(self, db, preferred_provider_id: str | None = None, capability_bindings: dict | None = None):
         self.db = db
         self.preferred_provider_id = preferred_provider_id
+        self.capability_bindings = capability_bindings or {}
 
     def _provider(self, request: MediaRequest) -> dict:
         from ..models import ProviderConfig
 
+        binding = self.capability_bindings.get(request.kind)
+        if request.kind in ("image", "video") and not binding:
+            raise MediaServiceError(f"{request.kind} capability binding is not configured")
         rows = self.db.query(ProviderConfig).filter(ProviderConfig.enabled.is_(True)).all()
-        if request.provider_id:
+        if binding:
+            rows = [row for row in rows if row.provider_id == binding["provider_id"]]
+            requested_model = binding["model_id"]
+        elif request.provider_id:
             rows = [row for row in rows if row.provider_id == request.provider_id]
+            requested_model = request.model_id
         elif self.preferred_provider_id:
             preferred = [row for row in rows if row.provider_id == self.preferred_provider_id]
             rows = preferred + [row for row in rows if row not in preferred]
+            requested_model = request.model_id
+        else:
+            requested_model = request.model_id
         for row in rows:
             cfg = row.to_internal_dict()
             models = cfg.get(f"{request.kind}_models", [])
             if not models:
                 continue
-            if request.model_id and request.model_id not in models:
+            if requested_model and requested_model not in models:
                 continue
             if cfg.get("base_url") and (cfg.get("api_key") or cfg.get("protocol") == "local"):
+                cfg["selected_model"] = requested_model or cfg.get("default_model") or models[0]
                 return cfg
+        if binding:
+            raise MediaServiceError(
+                f"bound {request.kind} provider/model is unavailable: {binding['provider_id']}/{binding['model_id']}"
+            )
         raise MediaServiceError(f"no enabled {request.kind} provider/model is configured")
 
     async def generate(self, request: MediaRequest) -> MediaResult:
@@ -73,29 +89,36 @@ class DatabaseMediaService:
 
         provider = self._provider(request)
         started = time.perf_counter()
-        if request.kind == "image":
-            body = ImageGenerateIn(
-                provider_id=provider["provider_id"],
-                model=request.model_id or provider.get("default_model") or (provider.get("image_models") or [None])[0],
-                prompt=request.prompt,
-                ref_urls=request.reference_urls,
-                aspect_ratio=request.extra.get("aspect_ratio", "1:1"),
-                extra=request.extra,
-            )
-            result = await _openai_image(provider, body)
-        elif request.kind == "video":
-            body = VideoGenerateIn(
-                provider_id=provider["provider_id"],
-                model=request.model_id or provider.get("default_model") or (provider.get("video_models") or [None])[0],
-                prompt=request.prompt,
-                ref_urls=request.reference_urls,
-                aspect_ratio=request.extra.get("aspect_ratio", "16:9"),
-                duration_sec=max(1, int(request.duration_sec)),
-                extra=request.extra,
-            )
-            result = await _openai_video(provider, body)
-        else:
-            raise MediaServiceError(f"unsupported media kind: {request.kind}")
+        try:
+            if request.kind == "image":
+                body = ImageGenerateIn(
+                    provider_id=provider["provider_id"],
+                    model=provider["selected_model"],
+                    prompt=request.prompt,
+                    ref_urls=request.reference_urls,
+                    aspect_ratio=request.extra.get("aspect_ratio", "1:1"),
+                    extra=request.extra,
+                )
+                result = await _openai_image(provider, body)
+            elif request.kind == "video":
+                body = VideoGenerateIn(
+                    provider_id=provider["provider_id"],
+                    model=provider["selected_model"],
+                    prompt=request.prompt,
+                    ref_urls=request.reference_urls,
+                    aspect_ratio=request.extra.get("aspect_ratio", "16:9"),
+                    duration_sec=max(1, int(request.duration_sec)),
+                    extra=request.extra,
+                )
+                result = await _openai_video(provider, body)
+            else:
+                raise MediaServiceError(f"unsupported media kind: {request.kind}")
+        except Exception as exc:
+            status_code = getattr(exc, "status_code", None)
+            if status_code in {408, 425, 429} or (isinstance(status_code, int) and status_code >= 500):
+                from .tools.base import RetryableError
+                raise RetryableError(str(getattr(exc, "detail", exc))) from exc
+            raise
         return MediaResult(
             url=result.url,
             kind=request.kind,

@@ -40,8 +40,10 @@ from .image_tools import (
     GenerateStoryboardImageTool,
 )
 from .video_tools import GenerateVideoTool
+from .media_batch import GenerateMediaBatchTool
 from .audio_tools import GenerateBgmTool, GenerateVoiceoverTool
 from .asset_tools import GetArtifactsTool, SaveAssetTool
+from .asset_intelligence_tools import InspectAssetTool, PrepareCharacterAssetTool
 
 
 # 18 个工具的元组，便于注册
@@ -64,12 +66,15 @@ ALL_TOOLS: tuple[type[BaseTool], ...] = (
     GenerateStoryboardImageTool,
     # video
     GenerateVideoTool,
+    GenerateMediaBatchTool,
     # audio
     GenerateVoiceoverTool,
     GenerateBgmTool,
     # asset
     SaveAssetTool,
     GetArtifactsTool,
+    InspectAssetTool,
+    PrepareCharacterAssetTool,
 )
 
 
@@ -130,12 +135,15 @@ __all__ = [
     "GenerateStoryboardImageTool",
     # video
     "GenerateVideoTool",
+    "GenerateMediaBatchTool",
     # audio
     "GenerateVoiceoverTool",
     "GenerateBgmTool",
     # asset
     "SaveAssetTool",
     "GetArtifactsTool",
+    "InspectAssetTool",
+    "PrepareCharacterAssetTool",
     "ALL_TOOLS",
     "build_default_registry",
     "list_tool_metadata",

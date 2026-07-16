@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from typing import List, Optional
 
+import httpx
 from ..database import get_db
 from ..models import ProviderConfig
 
@@ -49,6 +50,31 @@ def get_provider(provider_id: str, db: Session = Depends(get_db)):
     if not row:
         raise HTTPException(status_code=404, detail="provider not found")
     return row.to_dict(mask_key=True)
+
+
+@router.post("/{provider_id}/verify")
+async def verify_provider(provider_id: str, db: Session = Depends(get_db)):
+    """Verify a saved provider without exposing its API key to the browser."""
+    row = db.query(ProviderConfig).filter_by(provider_id=provider_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="provider not found")
+    base_url = (row.base_url or "").rstrip("/")
+    if not base_url:
+        raise HTTPException(status_code=400, detail="provider base_url is empty")
+
+    headers = {"Content-Type": "application/json"}
+    params = None
+    if row.protocol == "gemini":
+        params = {"key": row.api_key} if row.api_key else None
+    elif row.api_key:
+        headers["Authorization"] = f"Bearer {row.api_key}"
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(f"{base_url}/models", headers=headers, params=params)
+        return {"ok": response.is_success, "status": response.status_code}
+    except httpx.HTTPError as exc:
+        return {"ok": False, "status": 0, "error": str(exc)}
 
 
 class ProviderIn(BaseModel):

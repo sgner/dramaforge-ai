@@ -87,6 +87,18 @@ class AssetOut(BaseModel):
     asset_kind: Optional[str] = None
     title: str = ""
     name: str = ""
+    url: Optional[str] = None
+    prompt: Optional[str] = None
+    origin: str = "generated"
+    source_asset_id: Optional[str] = None
+    inspection_status: str = "pending"
+    inspection: Dict[str, Any] = Field(default_factory=dict)
+    visual_identity: Dict[str, Any] = Field(default_factory=dict)
+    reference_capabilities: Dict[str, Any] = Field(default_factory=dict)
+    usage_count: int = 0
+
+    class Config:
+        from_attributes = True
 
 
 # ========================
@@ -111,6 +123,12 @@ class AgentTaskUpdate(BaseModel):
     total_cost_usd: Optional[float] = None
     total_tokens: Optional[int] = None
     skip_confirm: Optional[bool] = None
+
+
+class AgentTaskRetry(BaseModel):
+    """重试时可覆盖为画布当前绑定的 LLM。"""
+    llm_provider_id: Optional[str] = None
+    llm_model_id: Optional[str] = None
 
 
 class AgentTaskOut(BaseModel):
@@ -186,6 +204,13 @@ class AssetCreate(BaseModel):
     error: Optional[str] = None
     generating: bool = False
     extra: Dict[str, Any] = Field(default_factory=dict)
+    origin: str = "generated"
+    source_asset_id: Optional[str] = None
+    inspection_status: str = "pending"
+    inspection: Dict[str, Any] = Field(default_factory=dict)
+    visual_identity: Dict[str, Any] = Field(default_factory=dict)
+    reference_capabilities: Dict[str, Any] = Field(default_factory=dict)
+    usage_count: int = 0
 
 
 class AssetUpdate(BaseModel):
@@ -198,6 +223,13 @@ class AssetUpdate(BaseModel):
     error: Optional[str] = None
     generating: Optional[bool] = None
     extra: Optional[Dict[str, Any]] = None
+    origin: Optional[str] = None
+    source_asset_id: Optional[str] = None
+    inspection_status: Optional[str] = None
+    inspection: Optional[Dict[str, Any]] = None
+    visual_identity: Optional[Dict[str, Any]] = None
+    reference_capabilities: Optional[Dict[str, Any]] = None
+    usage_count: Optional[int] = None
 
 
 # ============ DramaTask ============

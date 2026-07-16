@@ -25,6 +25,7 @@ vi.mock('@/services/apiClient', () => {
       listAgentTools: vi.fn(),
       respondAgent: vi.fn(),
       getAgentTask: vi.fn(),
+      upsertProvider: vi.fn().mockResolvedValue({}),
       // 新增：provider 列表（Plan 5 统一 endpoint）— 测试里默认返回空
       listProviders: vi.fn().mockResolvedValue([]),
     },
@@ -53,7 +54,18 @@ vi.mock('@/components/infinite-canvas/use-canvas-store', () => {
     // addAgentNodes / fitAgentView / resetViewportToAgentOrigin 内部读 cs.nodes
     nodes: [],
     // Task 6: startAgent now reads apiConfig.stepBindings to get LLM provider
-    apiConfig: { providers: [], stepBindings: [] },
+    apiConfig: {
+      providers: [{
+        id: 'custom-api', name: 'Custom API', baseUrl: 'https://example.test/v1',
+        protocol: 'openai', enabled: true, apiKey: '', defaultModel: '',
+        chatModels: ['chat-1'], imageModels: [], videoModels: [],
+      }],
+      modelBindings: [
+        { kind: 'llm', providerId: 'custom-api', modelId: 'chat-1' },
+        { kind: 'image', providerId: '', modelId: '' },
+        { kind: 'video', providerId: '', modelId: '' },
+      ],
+    },
   };
   const useCanvasStore: any = (selector?: any) =>
     selector ? selector(mockState) : mockState;
@@ -147,7 +159,7 @@ describe('<AgentMode /> e2e', () => {
     });
   });
 
-  it('shows progress bar in agent mode after task is created', async () => {
+  it('shows the Agent pet instead of the removed canvas progress capsule', async () => {
     render(<AgentMode projectId="p1" />);
     const input = screen.getByTestId('agent-mode-input');
     fireEvent.change(input, { target: { value: 'test goal' } });
@@ -157,8 +169,8 @@ describe('<AgentMode /> e2e', () => {
       expect(useAgentStore.getState().taskId).toBe('task-1');
     });
     // 进度条应该出现
-    const progress = await screen.findByTestId('agent-mode-progress');
-    expect(progress).toBeInTheDocument();
+    expect(screen.getByTestId('agent-pet-mascot')).toBeInTheDocument();
+    expect(screen.queryByTestId('agent-mode-progress')).toBeNull();
   });
 
   it('ThoughtStream shows action/observation/plan events (not just thought)', () => {
@@ -245,7 +257,7 @@ describe('<AgentMode /> e2e', () => {
     expect(useAgentStore.getState().status).toBe('running');
   });
 
-  it('progress bar shows real-time counts of thoughts/actions/observations', async () => {
+  it('Agent pet remains the status surface while events update the store', async () => {
     render(<AgentMode projectId="p1" />);
     const input = screen.getByTestId('agent-mode-input');
     fireEvent.change(input, { target: { value: 'test' } });
@@ -275,8 +287,9 @@ describe('<AgentMode /> e2e', () => {
     });
 
     // 进度条文字应该反映统计
-    const progress = screen.getByTestId('agent-mode-progress');
-    expect(progress.textContent).toContain('3');
-    expect(progress.textContent).toContain('2');
+    expect(screen.getByTestId('agent-pet-mascot')).toBeInTheDocument();
+    expect(useAgentStore.getState().thoughts).toHaveLength(3);
+    expect(useAgentStore.getState().actions).toHaveLength(2);
+    expect(screen.queryByTestId('agent-mode-progress')).toBeNull();
   });
 });

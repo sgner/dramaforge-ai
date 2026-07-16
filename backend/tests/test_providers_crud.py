@@ -4,6 +4,7 @@
 本 task 只测 GET endpoints，PUT/DELETE 留给 Task 2/3。
 """
 import pytest
+import app.routers.providers as providers_router
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -178,6 +179,37 @@ def test_upsert_provider_preserves_api_key_when_empty_string(client, db_session)
     assert r.status_code == 200
     row = db_session.query(ProviderConfig).filter_by(provider_id="custom-api").first()
     assert row.api_key == "sk-originalkey"
+
+
+def test_verify_provider_uses_the_unmasked_database_key(client, db_session, monkeypatch):
+    """验证必须由后端使用 DB 中的真实 key，不能依赖前端脱敏值。"""
+    db_session.add(ProviderConfig(
+        provider_id="custom-api", base_url="https://api.example.com/v1",
+        api_key="sk-real-secret", protocol="openai",
+    ))
+    db_session.commit()
+
+    class FakeResponse:
+        status_code = 200
+        is_success = True
+        text = '{"data": []}'
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def get(self, url, headers=None, params=None):
+            assert url == "https://api.example.com/v1/models"
+            assert headers["Authorization"] == "Bearer sk-real-secret"
+            return FakeResponse()
+
+    monkeypatch.setattr(providers_router.httpx, "AsyncClient", lambda **kwargs: FakeClient())
+    response = client.post("/api/providers/custom-api/verify")
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "status": 200}
 
 
 def test_upsert_provider_422_on_missing_base_url(client):
