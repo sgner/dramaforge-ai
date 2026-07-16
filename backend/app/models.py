@@ -474,3 +474,38 @@ def _parse_json_obj(raw: str | None) -> dict:
         return v if isinstance(v, dict) else {}
     except Exception:
         return {}
+
+
+class PromptTemplate(Base):
+    """提示词模板 — 内置 + 用户自定义。
+
+    内置模板 (is_builtin=True) 在 app startup 时 seed，可编辑不可删除。
+    用户模板 (is_builtin=False) 通过 API 增删改查。
+    """
+    __tablename__ = "prompt_templates"
+
+    id = Column(String, primary_key=True)  # "builtin_md_1" or "tpl_<hex12>"
+    name = Column(String, nullable=False)
+    category = Column(String, nullable=False, default="custom")
+    scene = Column(Text, default="")
+    positive = Column(Text, default="")
+    negative = Column(Text, default="")
+    params = Column(JSON, default=dict)
+    is_builtin = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=_now)
+    updated_at = Column(DateTime, default=_now, onupdate=_now)
+
+    def to_dict(self) -> dict:
+        """Serialize for API response."""
+        return {
+            "id": self.id,
+            "name": self.name,
+            "category": self.category,
+            "scene": self.scene or "",
+            "positive": self.positive or "",
+            "negative": self.negative or "",
+            "params": self.params or {},
+            "is_builtin": self.is_builtin,
+            "created_at": _iso(self.created_at),
+            "updated_at": _iso(self.updated_at),
+        }

@@ -289,3 +289,39 @@ class ToolMetadataOut(BaseModel):
     category: str
     requires_approval: bool
     model_config = ConfigDict(from_attributes=True)
+
+
+# ============ PromptTemplate ============
+class PromptTemplateOut(BaseModel):
+    id: str
+    name: str
+    category: str
+    scene: str = ""
+    positive: str = ""
+    negative: str = ""
+    params: dict = {}
+    is_builtin: bool = False
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class PromptTemplateCreate(BaseModel):
+    name: str
+    category: str = "custom"
+    scene: str = ""
+    positive: str = ""
+    negative: str = ""
+    params: dict = {}
+
+
+class PromptTemplateUpdate(BaseModel):
+    name: Optional[str] = None
+    category: Optional[str] = None
+    scene: Optional[str] = None
+    positive: Optional[str] = None
+    negative: Optional[str] = None
+    params: Optional[dict] = None
+
+
+class PromptTemplateBatchDelete(BaseModel):
+    ids: List[str] = []
