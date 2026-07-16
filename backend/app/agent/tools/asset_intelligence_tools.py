@@ -1,7 +1,7 @@
 """Agent tools for inspecting uploaded assets before generation."""
 
 from .base import BaseTool, ToolContext, ToolParameter
-from ..asset_intelligence import create_character_normalization_asset, inspect_asset
+from ..asset_intelligence import create_character_normalization_asset, inspect_asset, prepare_asset
 
 
 class InspectAssetTool(BaseTool):
@@ -46,12 +46,16 @@ class PrepareCharacterAssetTool(BaseTool):
         return None
 
     async def execute(self, ctx: ToolContext, params: dict) -> dict:
-        derivative = create_character_normalization_asset(ctx.db, ctx.project_id, params["asset_id"])
+        derivative = prepare_asset(ctx.db, ctx.project_id, params["asset_id"], "character")
         return {
             "ok": True,
             "asset_id": derivative.id,
             "source_asset_id": derivative.source_asset_id,
             "generating": derivative.generating,
             "prompt": derivative.prompt,
+            "status": derivative.status,
+            "version": derivative.version,
+            "reference_role": derivative.reference_role,
+            "derived_from": derivative.derived_from or [],
             "next": "generate_media_batch or generate_character_portrait",
         }

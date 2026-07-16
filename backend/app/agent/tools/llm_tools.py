@@ -323,11 +323,16 @@ class OptimizePromptTool(BaseTool):
                 + ("\n\n【上下文】\n" + json.dumps(params["context"], ensure_ascii=False) if params.get("context") else "")
             )},
         ]
-        resp = await ctx.generate_llm(messages, temperature=0.7, max_tokens=800)
+        # Use a complete response here. Some OpenAI-compatible providers
+        # acknowledge streaming requests but emit no usable data chunks,
+        # which would turn every optimized prompt into an empty string.
+        resp = await ctx.llm_client.generate(messages, temperature=0.7, max_tokens=800)
         optimized = (resp.content or "").strip()
         # 去掉可能的引号
         if optimized.startswith('"') and optimized.endswith('"'):
             optimized = optimized[1:-1]
+        if not optimized:
+            raise RuntimeError("prompt optimization returned an empty prompt")
         return {"optimized": optimized, "target": target}
 
 

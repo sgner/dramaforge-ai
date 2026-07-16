@@ -10,6 +10,7 @@ import re
 from typing import Any
 
 from .base import BaseTool, ToolContext, ToolParameter
+from ..task_profiles import classify_task
 
 
 # ========================
@@ -59,7 +60,11 @@ class ParseUserGoalTool(BaseTool):
             {"role": "user", "content": str(text)},
         ]
         resp = await ctx.llm_client.generate(messages, temperature=0.4, max_tokens=600)
-        return _coerce_json(resp.content) or {}
+        result = _coerce_json(resp.content) or {}
+        profile = classify_task(str(text), result, [])
+        result.setdefault("task_profile", profile.model_dump(mode="json"))
+        result.setdefault("rule_pack_id", profile.rule_pack_id)
+        return result
 
 
 class CreatePlanTool(BaseTool):
@@ -253,22 +258,56 @@ CREATE_PLAN_USER_PROMPT = """【目标】
 # 工具内辅助
 # ========================
 
-def _coerce_json(text: str | None) -> dict | None:
-    """宽松解析 LLM 输出。处理 markdown 代码块 + 顶层对象。"""
+def _extract_json_value(text: str | None) -> Any | None:
+    """从 LLM 输出中提取第一个完整 JSON 对象/数组。
+
+    模型有时会在 JSON 前后追加解释或 markdown。不能用非贪婪正则匹配
+    大括号，因为 action.params 等嵌套对象会在内部提前闭合。
+    """
     if not text:
         return None
     s = text.strip()
-    fence = re.search(r"```(?:json)?\s*(\{.*?\}|\[.*?\])\s*```", s, re.DOTALL)
-    if fence:
-        s = fence.group(1)
     try:
         return json.loads(s)
     except json.JSONDecodeError:
-        # 尝试找第一个 { ... } 块
-        m = re.search(r"\{.*\}", s, re.DOTALL)
-        if m:
-            try:
-                return json.loads(m.group(0))
-            except json.JSONDecodeError:
-                pass
-        return None
+        pass
+
+    for start, char in enumerate(s):
+        if char not in "[{":
+            continue
+        pairs = {"{": "}", "[": "]"}
+        stack: list[str] = []
+        in_string = False
+        escaped = False
+        for index in range(start, len(s)):
+            current = s[index]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif current == "\\":
+                    escaped = True
+                elif current == '"':
+                    in_string = False
+                continue
+            if current == '"':
+                in_string = True
+            elif current in "[{":
+                stack.append(pairs[current])
+            elif current in "]}":
+                if not stack or current != stack[-1]:
+                    break
+                stack.pop()
+                if not stack:
+                    try:
+                        return json.loads(s[start:index + 1])
+                    except json.JSONDecodeError:
+                        break
+    return None
+
+
+def _coerce_json(text: str | None) -> dict | None:
+    """宽松解析 LLM 输出，返回顶层 JSON 对象。"""
+    value = _extract_json_value(text)
+    if isinstance(value, dict):
+        return value
+    return None

@@ -91,6 +91,12 @@ class AssetOut(BaseModel):
     prompt: Optional[str] = None
     origin: str = "generated"
     source_asset_id: Optional[str] = None
+    status: str = "uploaded"
+    version: int = 1
+    derived_from: List[str] = Field(default_factory=list)
+    reference_role: Optional[str] = None
+    prompt_source: Optional[str] = None
+    prompt_optimized: Optional[str] = None
     inspection_status: str = "pending"
     inspection: Dict[str, Any] = Field(default_factory=dict)
     visual_identity: Dict[str, Any] = Field(default_factory=dict)
@@ -120,6 +126,7 @@ class AgentTaskUpdate(BaseModel):
     plan: Optional[list] = None
     artifacts: Optional[dict] = None
     pending_response: Optional[dict] = None
+    pending_question: Optional[dict] = None
     total_cost_usd: Optional[float] = None
     total_tokens: Optional[int] = None
     skip_confirm: Optional[bool] = None
@@ -139,6 +146,9 @@ class AgentTaskOut(BaseModel):
     plan: list = Field(default_factory=list)
     artifacts: dict = Field(default_factory=dict)
     pending_response: Optional[dict] = None
+    pending_question: Optional[dict] = None
+    task_profile: Optional[dict] = None
+    rule_pack_version: Optional[str] = None
     total_cost_usd: float = 0.0
     total_tokens: int = 0
     max_steps: int = 30
@@ -206,6 +216,12 @@ class AssetCreate(BaseModel):
     extra: Dict[str, Any] = Field(default_factory=dict)
     origin: str = "generated"
     source_asset_id: Optional[str] = None
+    status: str = "uploaded"
+    version: int = 1
+    derived_from: List[str] = Field(default_factory=list)
+    reference_role: Optional[str] = None
+    prompt_source: Optional[str] = None
+    prompt_optimized: Optional[str] = None
     inspection_status: str = "pending"
     inspection: Dict[str, Any] = Field(default_factory=dict)
     visual_identity: Dict[str, Any] = Field(default_factory=dict)
@@ -225,6 +241,12 @@ class AssetUpdate(BaseModel):
     extra: Optional[Dict[str, Any]] = None
     origin: Optional[str] = None
     source_asset_id: Optional[str] = None
+    status: Optional[str] = None
+    version: Optional[int] = None
+    derived_from: Optional[List[str]] = None
+    reference_role: Optional[str] = None
+    prompt_source: Optional[str] = None
+    prompt_optimized: Optional[str] = None
     inspection_status: Optional[str] = None
     inspection: Optional[Dict[str, Any]] = None
     visual_identity: Optional[Dict[str, Any]] = None

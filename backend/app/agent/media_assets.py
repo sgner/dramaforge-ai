@@ -21,25 +21,36 @@ def _asset_dict(row: Any) -> dict:
         "error": row.error,
         "generating": bool(row.generating),
         "extra": row.extra or {},
+        "status": getattr(row, "status", None),
+        "version": getattr(row, "version", None),
+        "source_asset_id": getattr(row, "source_asset_id", None),
+        "derived_from": getattr(row, "derived_from", None) or [],
+        "reference_role": getattr(row, "reference_role", None),
+        "prompt_source": getattr(row, "prompt_source", None),
+        "prompt_optimized": getattr(row, "prompt_optimized", None),
     }
 
 
 def begin_media_asset(db: Any, *, project_id: str | None, kind: str, asset_kind: str | None, name: str, prompt: str, provider_id: str | None = None, provider_name: str | None = None, model_id: str | None = None, extra: dict | None = None) -> dict:
     from ..models import Asset
 
-    existing = db.query(Asset).filter(
+    query = db.query(Asset).filter(
         Asset.project_id == project_id,
         Asset.kind == kind,
         Asset.asset_kind == asset_kind,
         Asset.name == (name or ""),
         Asset.prompt == prompt,
-        Asset.failed.is_(True),
-    ).order_by(Asset.created_at.desc()).first()
+        Asset.source_asset_id == (extra or {}).get("source_asset_id"),
+    )
+    if not (extra or {}).get("batch"):
+        query = query.filter(Asset.failed.is_(True))
+    existing = query.order_by(Asset.created_at.desc()).first()
     if existing:
         existing.generating = True
         existing.failed = False
         existing.error = None
         existing.url = None
+        existing.status = "processing"
         if provider_id is not None:
             existing.provider_id = provider_id
         if provider_name is not None:
@@ -66,6 +77,12 @@ def begin_media_asset(db: Any, *, project_id: str | None, kind: str, asset_kind:
         generating=True,
         failed=False,
         extra=extra or {},
+        status="processing",
+        version=1,
+        derived_from=[(extra or {}).get("source_asset_id")] if (extra or {}).get("source_asset_id") else [],
+        reference_role=(extra or {}).get("reference_role"),
+        prompt_source=(extra or {}).get("prompt_source") or prompt,
+        prompt_optimized=(extra or {}).get("prompt_optimized") or prompt,
     )
     db.add(row)
     db.commit()
@@ -73,7 +90,17 @@ def begin_media_asset(db: Any, *, project_id: str | None, kind: str, asset_kind:
     return _asset_dict(row)
 
 
-def finish_media_asset(db: Any, asset_id: str, *, url: str | None = None, error: str | None = None, prompt: str | None = None) -> dict:
+def finish_media_asset(
+    db: Any,
+    asset_id: str,
+    *,
+    url: str | None = None,
+    error: str | None = None,
+    prompt: str | None = None,
+    prompt_source: str | None = None,
+    prompt_optimized: str | None = None,
+    extra: dict | None = None,
+) -> dict:
     from ..models import Asset
 
     row = db.query(Asset).filter(Asset.id == asset_id).one()
@@ -84,6 +111,13 @@ def finish_media_asset(db: Any, asset_id: str, *, url: str | None = None, error:
         row.url = url
     if prompt is not None:
         row.prompt = prompt
+    if prompt_source is not None:
+        row.prompt_source = prompt_source
+    if prompt_optimized is not None:
+        row.prompt_optimized = prompt_optimized
+    if extra:
+        row.extra = {**(row.extra or {}), **extra}
+    row.status = "failed" if error else "ready"
     db.commit()
     db.refresh(row)
     return _asset_dict(row)

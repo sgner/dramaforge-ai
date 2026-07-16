@@ -133,6 +133,21 @@ async def test_create_plan_handles_markdown_fences():
     assert len(result) == 1
 
 
+@pytest.mark.asyncio
+async def test_create_plan_handles_leading_model_prose():
+    """模型在 JSON 前追加解释时，计划仍应能被提取。"""
+    plan_text = '下面是执行计划：\n{"steps": [{"description": "生成脚本", "tool": "generate_script", "depends_on": []}]}'
+
+    class _StubLLM:
+        async def generate(self, messages, tools=None, **kwargs):
+            from app.agent.llm import LLMResponse
+            return LLMResponse(content=plan_text)
+
+    ctx = ToolContext(task_id="t1", llm_client=_StubLLM())
+    result = await CreatePlanTool().call(ctx, {"goal": {"title": "短剧1"}})
+    assert result[0]["tool"] == "generate_script"
+
+
 # ========================
 # AskUserTool
 # ========================

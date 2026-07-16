@@ -20,6 +20,36 @@ def _resolve_reference_urls(ctx: ToolContext, params: dict) -> list[str]:
     return [item["url"] for item in resolve_asset_references(ctx.db, ctx.project_id, asset_ids, media_kind="video")]
 
 
+def _build_video_prompt(shot: dict, references: list[dict] | None = None) -> str:
+    ref_names = ", ".join(
+        str(item.get("name") or item.get("title") or item.get("asset_kind") or "").strip()
+        for item in (references or [])
+        if isinstance(item, dict) and (item.get("name") or item.get("title") or item.get("asset_kind"))
+    )
+    parts = [
+        shot.get("action", ""),
+        f"{shot.get('camera', 'medium shot')}, {shot.get('movement', 'static')}",
+        f"scene: {shot.get('scene', '')}",
+        "cinematic, 24fps, high detail",
+    ]
+    continuity = shot.get("continuity") or {}
+    if isinstance(continuity, dict):
+        continuity_bits = [
+            continuity.get("scene"),
+            continuity.get("characters"),
+            continuity.get("props"),
+            continuity.get("camera"),
+        ]
+        continuity_text = ", ".join(str(bit).strip() for bit in continuity_bits if bit)
+        if continuity_text:
+            parts.append(f"continuity: {continuity_text}")
+    if shot.get("dialogue"):
+        parts.append(f"character says: {shot['dialogue']}")
+    if ref_names:
+        parts.append(f"references: {ref_names}")
+    return ", ".join(p for p in parts if p)
+
+
 class GenerateVideoTool(BaseTool):
     """基于分镜生成视频片段。"""
 
@@ -45,23 +75,38 @@ class GenerateVideoTool(BaseTool):
     async def execute(self, ctx: ToolContext, params: dict) -> dict:
         svc = _resolve_service(ctx)
         shot = params["shot"]
-        parts = [
-            shot.get("action", ""),
-            f"{shot.get('camera', 'medium shot')}, {shot.get('movement', 'static')}",
-            f"scene: {shot.get('scene', '')}",
-            "cinematic, 24fps, high detail",
-        ]
-        if shot.get("dialogue"):
-            parts.append(f"character says: {shot['dialogue']}")
-        source_prompt = ", ".join(p for p in parts if p)
-        prompt, source_prompt = await optimize_generation_prompt(ctx, source_prompt, "video", {"asset_kind": "shot_video", "shot": shot})
+        ref_ids = list(params.get("reference_asset_ids") or [])
+        ref_payloads = [{"name": shot.get("scene") or "", "asset_kind": "scene"}]
+        source_prompt = _build_video_prompt(shot, ref_payloads)
+        prompt, source_prompt = await optimize_generation_prompt(ctx, source_prompt, "video", {
+            "asset_kind": "shot_video",
+            "shot": shot,
+            "reference_asset_ids": ref_ids,
+            "continuity": {
+                "scene": shot.get("scene"),
+                "characters": shot.get("characters") or shot.get("charactersInvolved") or [],
+                "props": shot.get("props") or [],
+                "camera": shot.get("camera"),
+                "movement": shot.get("movement"),
+            },
+        })
         req = MediaRequest(
             kind="video",
             prompt=prompt,
             model_id=params.get("model_id"),
             duration_sec=float(shot.get("duration_sec", 5)),
             reference_urls=_resolve_reference_urls(ctx, params),
-            extra={"asset_kind": "shot_video", "shot_index": shot.get("index")},
+            extra={
+                "asset_kind": "shot_video",
+                "shot_index": shot.get("index"),
+                "continuity": {
+                    "scene": shot.get("scene"),
+                    "characters": shot.get("characters") or shot.get("charactersInvolved") or [],
+                    "props": shot.get("props") or [],
+                    "camera": shot.get("camera"),
+                    "movement": shot.get("movement"),
+                },
+            },
         )
         result = await svc.generate(req)
         return {
@@ -73,4 +118,5 @@ class GenerateVideoTool(BaseTool):
             "elapsed_sec": result.elapsed_sec,
             "prompt": prompt,
             "source_prompt": source_prompt,
+            "continuity": req.extra.get("continuity"),
         }

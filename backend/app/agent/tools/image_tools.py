@@ -84,16 +84,42 @@ def _build_scene_prompt(scene: dict) -> str:
     return ", ".join(p for p in parts if p)
 
 
-def _build_storyboard_prompt(shot: dict, characters: list | None = None) -> str:
-    char_names = ", ".join(c.get("name", "") for c in (characters or []) if c.get("name"))
+def _build_storyboard_prompt(
+    shot: dict,
+    scene: dict | list | None = None,
+    characters: list | None = None,
+    props: list | None = None,
+) -> str:
+    if isinstance(scene, list) and characters is None:
+        characters = scene
+        scene = None
+    scene_data = scene if isinstance(scene, dict) else {}
+    char_names = ", ".join(c.get("name", "") for c in (characters or []) if isinstance(c, dict) and c.get("name"))
+    prop_names = ", ".join(p.get("name", "") for p in (props or []) if isinstance(p, dict) and p.get("name"))
     parts = [
         f"{shot.get('camera', 'medium shot')}",
         shot.get("movement", "static"),
         shot.get("action", ""),
         f"scene: {shot.get('scene', '')}",
     ]
+    if scene_data:
+        parts.append(
+            "scene reference: "
+            + ", ".join(
+                part
+                for part in [
+                    scene_data.get("name") or scene_data.get("title"),
+                    scene_data.get("description"),
+                    scene_data.get("mainStructure"),
+                    scene_data.get("lightAndColor"),
+                ]
+                if part
+            )
+        )
     if char_names:
         parts.append(f"featuring {char_names}")
+    if prop_names:
+        parts.append(f"with props {prop_names}")
     parts.append("storyboard frame, sketch style, cinematic framing")
     spec = get_spec_for_tool("image_storyboard")
     if spec:
@@ -287,11 +313,12 @@ class GenerateStoryboardImageTool(BaseTool):
     async def execute(self, ctx: ToolContext, params: dict) -> dict:
         svc = _resolve_service(ctx)
         shot = params["shot"]
-        source_prompt = _build_storyboard_prompt(shot, params.get("characters"))
+        source_prompt = _build_storyboard_prompt(shot, params.get("scene"), params.get("characters"), params.get("props"))
         ref_ids = collect_storyboard_reference_asset_ids(params, ctx.artifacts)
         prompt, source_prompt = await optimize_generation_prompt(ctx, source_prompt, "image", {
             "asset_kind": "storyboard",
             "shot": shot,
+            "scene": params.get("scene") or {},
             "characters": params.get("characters") or [],
             "props": params.get("props") or [],
             "reference_asset_ids": ref_ids,

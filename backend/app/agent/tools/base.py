@@ -58,6 +58,7 @@ class ToolContext:
         task_id: str,
         project_id: str | None = None,
         db: Any | None = None,
+        task_profile: Any | None = None,
         llm_client: Any | None = None,
         media_service: Any | None = None,
         api_config: Any | None = None,
@@ -69,6 +70,7 @@ class ToolContext:
         self.task_id = task_id
         self.project_id = project_id
         self.db = db
+        self.task_profile = task_profile
         self.llm_client = llm_client
         self.media_service = media_service
         self.api_config = api_config

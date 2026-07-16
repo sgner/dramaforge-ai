@@ -186,6 +186,22 @@ async def test_optimize_prompt_returns_optimized():
     assert "林尘" in result["optimized"]
 
 
+@pytest.mark.asyncio
+async def test_optimize_prompt_uses_complete_response_not_streaming():
+    class _Provider:
+        async def generate(self, messages, **kwargs):
+            from app.agent.llm import LLMResponse
+            return LLMResponse(content="complete optimized prompt")
+
+        async def generate_streaming(self, messages, **kwargs):
+            from app.agent.llm import LLMResponse
+            return LLMResponse(content=None)
+
+    ctx = ToolContext(task_id="t1", llm_client=_Provider())
+    result = await OptimizePromptTool().call(ctx, {"prompt": "source", "target": "image"})
+    assert result["optimized"] == "complete optimized prompt"
+
+
 # ========================
 # Unique names
 # ========================

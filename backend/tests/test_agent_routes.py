@@ -27,7 +27,7 @@ def db_session():
             from app.models import AgentTask, AgentStep
             from app.database import SessionLocal as _SL
             with _SL() as cleanup_db:
-                for tid in ("t-rec-1", "t-rec-2", "t-rec-3", "t-stop", "t-retry"):
+                for tid in ("t-rec-1", "t-rec-2", "t-rec-3", "t-stop", "t-retry", "t-retry-stale", "t-resume-running"):
                     cleanup_db.query(AgentStep).filter_by(task_id=tid).delete()
                     cleanup_db.query(AgentTask).filter_by(id=tid).delete()
                 cleanup_db.commit()
@@ -127,6 +127,18 @@ def test_sse_stream_endpoint_registered(client):
     stream_paths = [r.path for r in router.routes if hasattr(r, "path")]
     assert any("stream" in p for p in stream_paths), f"stream route not found in {stream_paths}"
 
+    # The route must be backed by stream_events and construct an actual SSE
+    # response. If the decorator is accidentally attached to a helper that
+    # returns a string, EventSource receives application/json and retries
+    # forever. Inspect the response object directly so this test does not
+    # wait for the intentionally long-lived stream.
+    import asyncio
+    from app.routers.agent import stream_events
+
+    response = asyncio.run(stream_events(task_id))
+    assert response.media_type == "text/event-stream"
+    asyncio.run(response.body_iterator.aclose())
+
 
 def test_post_user_response(client):
     """POST /api/agent/tasks/{id}/respond 注入用户响应。"""
@@ -191,6 +203,49 @@ def test_retry_failed_task_resets_state_and_restarts(client, db_session, monkeyp
     assert task.artifacts == {}
     assert task.total_cost_usd == 0
     assert task.total_tokens == 0
+
+
+def test_retry_failed_task_discards_stale_finished_runtime_handle(client, db_session, monkeypatch):
+    """失败状态不应被一个已结束的旧句柄永久阻塞重试。"""
+    task = AgentTask(
+        id="t-retry-stale", project_id="p1", user_goal="retry stale", status="failed",
+        plan=[], artifacts={}, total_cost_usd=0.0, total_tokens=0, max_steps=30, skip_confirm=False,
+    )
+    db_session.add(task)
+    db_session.commit()
+
+    class FinishedJob:
+        def done(self):
+            return True
+
+    from app.routers import agent as agent_router
+    monkeypatch.setitem(agent_router._RUNNING_TASKS, "t-retry-stale", FinishedJob())
+
+    async def noop_spawn(_task_dict):
+        return None
+
+    monkeypatch.setattr("app.routers.agent._spawn_runtime", noop_spawn)
+    response = client.post("/api/agent/tasks/t-retry-stale/retry")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "pending"
+
+
+def test_resume_running_task_is_idempotent(client, db_session, monkeypatch):
+    """回答提交与恢复请求并发时，已运行中的任务应返回成功而不是 400。"""
+    task = AgentTask(
+        id="t-resume-running", project_id="p1", user_goal="resume running", status="running",
+        plan=[], artifacts={}, total_cost_usd=0.0, total_tokens=0, max_steps=30, skip_confirm=False,
+    )
+    db_session.add(task)
+    db_session.commit()
+
+    from app.routers import agent as agent_router
+    monkeypatch.setitem(agent_router._RUNNING_TASKS, "t-resume-running", object())
+    response = client.post("/api/agent/tasks/t-resume-running/resume")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "already_running"
 
 
 class TestUserRespondRecovery:
