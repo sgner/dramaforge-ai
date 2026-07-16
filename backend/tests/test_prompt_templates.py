@@ -57,3 +57,44 @@ def test_schema_imports():
     assert PromptTemplateCreate is not None
     assert PromptTemplateUpdate is not None
     assert PromptTemplateBatchDelete is not None
+
+
+def test_seed_builtin_prompt_templates():
+    """seed_builtin_prompt_templates inserts 10 builtin templates, idempotent."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from app.database import Base
+    from app.agent.prompt_template_seed import seed_builtin_prompt_templates, BUILTIN_PROMPT_TEMPLATES
+    from app.models import PromptTemplate
+
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(bind=engine)
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+    # First call: seed 10 builtins
+    with SessionLocal() as db:
+        seed_builtin_prompt_templates(db)
+        count = db.query(PromptTemplate).filter(PromptTemplate.is_builtin == True).count()
+        assert count == 10
+
+    # Second call: no duplicates
+    with SessionLocal() as db:
+        seed_builtin_prompt_templates(db)
+        count = db.query(PromptTemplate).filter(PromptTemplate.is_builtin == True).count()
+        assert count == 10
+
+    # Check first template has expected fields
+    with SessionLocal() as db:
+        first = db.query(PromptTemplate).filter_by(id="builtin_md_1").first()
+        assert first is not None
+        assert first.name == "多机位九宫格"
+        assert first.category == "character"
+        assert len(first.positive) > 100
+        assert first.is_builtin is True
+
+    # Check all 10 have non-empty positive
+    with SessionLocal() as db:
+        builtins = db.query(PromptTemplate).filter(PromptTemplate.is_builtin == True).all()
+        for b in builtins:
+            assert len(b.positive) > 50, f"Template {b.id} has empty positive"
+            assert len(b.negative) > 20, f"Template {b.id} has empty negative"
