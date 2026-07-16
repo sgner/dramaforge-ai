@@ -9,6 +9,7 @@ from typing import Any
 
 from .base import BaseTool, ToolContext, ToolParameter
 from .planning import _coerce_json
+from ..specs import get_spec_for_tool
 
 
 # ========================
@@ -51,8 +52,12 @@ class GenerateScriptTool(BaseTool):
     async def execute(self, ctx: ToolContext, params: dict) -> dict:
         if not ctx.llm_client:
             raise RuntimeError("generate_script 需要 ctx.llm_client")
+        system_prompt = GENERATE_SCRIPT_SYSTEM_PROMPT
+        spec = get_spec_for_tool("generate_script")
+        if spec:
+            system_prompt = system_prompt + "\n\n【项目规范】\n" + spec
         messages = [
-            {"role": "system", "content": GENERATE_SCRIPT_SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": _format_goal(params) + "\n\n【小说】\n" + str(params["novel_text"])},
         ]
         resp = await ctx.generate_llm(messages, temperature=0.6, max_tokens=4000)
@@ -99,8 +104,12 @@ class ExtractCharactersTool(BaseTool):
     async def execute(self, ctx: ToolContext, params: dict) -> dict:
         if not ctx.llm_client:
             raise RuntimeError("extract_characters 需要 ctx.llm_client")
+        system_prompt = EXTRACT_CHARACTERS_SYSTEM_PROMPT
+        spec = get_spec_for_tool("extract_characters")
+        if spec:
+            system_prompt = system_prompt + "\n\n【项目规范】\n" + spec
         messages = [
-            {"role": "system", "content": EXTRACT_CHARACTERS_SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": "【脚本】\n" + json.dumps(params["script"], ensure_ascii=False)},
         ]
         resp = await ctx.generate_llm(messages, temperature=0.4, max_tokens=2000)
@@ -145,8 +154,12 @@ class ExtractPropsTool(BaseTool):
     async def execute(self, ctx: ToolContext, params: dict) -> dict:
         if not ctx.llm_client:
             raise RuntimeError("extract_props 需要 ctx.llm_client")
+        system_prompt = EXTRACT_PROPS_SYSTEM_PROMPT
+        spec = get_spec_for_tool("extract_props")
+        if spec:
+            system_prompt = system_prompt + "\n\n【项目规范】\n" + spec
         messages = [
-            {"role": "system", "content": EXTRACT_PROPS_SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": "【脚本】\n" + json.dumps(params["script"], ensure_ascii=False)},
         ]
         resp = await ctx.generate_llm(messages, temperature=0.4, max_tokens=1500)
@@ -185,8 +198,12 @@ class ExtractScenesTool(BaseTool):
     async def execute(self, ctx: ToolContext, params: dict) -> dict:
         if not ctx.llm_client:
             raise RuntimeError("extract_scenes 需要 ctx.llm_client")
+        system_prompt = EXTRACT_SCENES_SYSTEM_PROMPT
+        spec = get_spec_for_tool("extract_scenes")
+        if spec:
+            system_prompt = system_prompt + "\n\n【项目规范】\n" + spec
         messages = [
-            {"role": "system", "content": EXTRACT_SCENES_SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": "【脚本】\n" + json.dumps(params["script"], ensure_ascii=False)},
         ]
         resp = await ctx.generate_llm(messages, temperature=0.4, max_tokens=2000)
@@ -233,8 +250,12 @@ class ExtractShotsTool(BaseTool):
     async def execute(self, ctx: ToolContext, params: dict) -> dict:
         if not ctx.llm_client:
             raise RuntimeError("extract_shots 需要 ctx.llm_client")
+        system_prompt = EXTRACT_SHOTS_SYSTEM_PROMPT
+        spec = get_spec_for_tool("extract_shots")
+        if spec:
+            system_prompt = system_prompt + "\n\n【项目规范】\n" + spec
         messages = [
-            {"role": "system", "content": EXTRACT_SHOTS_SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": (
                 "【脚本】\n" + json.dumps(params["script"], ensure_ascii=False)
                 + "\n\n【场景】\n" + json.dumps(params["scenes"], ensure_ascii=False)
@@ -291,8 +312,12 @@ class OptimizePromptTool(BaseTool):
         if not ctx.llm_client:
             raise RuntimeError("optimize_prompt 需要 ctx.llm_client")
         target = params.get("target") or "image"
+        system_prompt = OPTIMIZE_PROMPT_SYSTEM_PROMPT.format(target=target)
+        spec = get_spec_for_tool("optimize_prompt")
+        if spec:
+            system_prompt = system_prompt + "\n\n【项目规范】\n" + spec
         messages = [
-            {"role": "system", "content": OPTIMIZE_PROMPT_SYSTEM_PROMPT.format(target=target)},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": (
                 "【原始 prompt】\n" + str(params["prompt"])
                 + ("\n\n【上下文】\n" + json.dumps(params["context"], ensure_ascii=False) if params.get("context") else "")
