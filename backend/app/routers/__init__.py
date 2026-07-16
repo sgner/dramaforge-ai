@@ -12,6 +12,7 @@ from . import (
     providers,
     drama_tasks,
     user_preferences,
+    prompt_templates,
 )
 
 __all__ = [
@@ -25,4 +26,5 @@ __all__ = [
     "providers",
     "drama_tasks",
     "user_preferences",
+    "prompt_templates",
 ]

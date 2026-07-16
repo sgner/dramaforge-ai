@@ -8,7 +8,7 @@ from pathlib import Path
 import logging
 
 from .database import init_db
-from .routers import projects, assets, uploads, agent, llm_providers, media_providers, media, providers, drama_tasks, user_preferences
+from .routers import projects, assets, uploads, agent, llm_providers, media_providers, media, providers, drama_tasks, user_preferences, prompt_templates
 
 BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / "uploads"
@@ -44,6 +44,11 @@ app.mount("/files", StaticFiles(directory=str(UPLOAD_DIR)), name="files")
 @app.on_event("startup")
 def on_startup():
     init_db()
+    # Seed builtin prompt templates
+    from .database import SessionLocal
+    from .agent.prompt_template_seed import seed_builtin_prompt_templates
+    with SessionLocal() as db:
+        seed_builtin_prompt_templates(db)
 
 # 路由
 app.include_router(projects.router, prefix="/api/projects", tags=["projects"])
@@ -56,6 +61,7 @@ app.include_router(media.router, prefix="/api/media", tags=["media"])
 app.include_router(providers.router, prefix="/api/providers", tags=["providers"])
 app.include_router(drama_tasks.router, prefix="/api/drama-tasks", tags=["drama-tasks"])
 app.include_router(user_preferences.router, prefix="/api/user-preferences", tags=["user-preferences"])
+app.include_router(prompt_templates.router, prefix="/api/prompt-templates", tags=["prompt-templates"])
 
 
 @app.get("/api/health")
