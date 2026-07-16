@@ -44,6 +44,14 @@ def test_parse_decision_with_markdown_fences():
     assert d["action"]["tool"] == "a"
 
 
+def test_parse_decision_extracts_json_after_model_prose():
+    """模型偶尔会在决策 JSON 前追加说明文字，仍应解析出完整对象。"""
+    raw = '我将继续执行下一步：\n{"thought": "继续规划", "action": {"tool": "create_plan", "params": {"goal": {"title": "天帝之怒"}}}}'
+    d = parse_decision(raw)
+    assert d["action"]["tool"] == "create_plan"
+    assert d["action"]["params"]["goal"]["title"] == "天帝之怒"
+
+
 def test_parse_decision_invalid_raises():
     """无效 JSON 抛错。"""
     with pytest.raises(ValueError):
@@ -178,6 +186,70 @@ async def test_runtime_does_not_execute_after_cancel_during_llm_call():
 
 
 @pytest.mark.asyncio
+async def test_runtime_pauses_before_media_when_script_is_missing():
+    """A vague goal must ask for a script before creating any media asset."""
+    from app.agent.events import event_bus
+
+    task_id = "t-script-required"
+    event_bus.clear_log(task_id)
+    llm = _StubLLM([{
+        "tool_name": "generate_media_batch",
+        "tool_args": {"jobs": [{"kind": "image", "prompt": "a martial arts master"}]},
+        "content": None,
+    }])
+    memory = AgentMemory(user_goal="功夫", plan=[])
+    runtime = AgentRuntime(task_id=task_id, llm=llm, memory=memory)
+
+    done = await runtime.step()
+
+    assert done is False
+    assert runtime.state == AgentState.PAUSED
+    assert runtime.pending_request["type"] == "ask_user"
+    assert runtime.pending_request["options"] == ["由 agent 编写脚本"]
+    assert runtime.pending_request["allow_custom"] is True
+    assert memory.short_term[-1].action["tool"] == "ask_user"
+    assert memory.short_term[-1].observation["reason"] == "script_required_before_media"
+    assert not any(event.type == EventType.ACTION for event in event_bus.get_replay(task_id))
+
+
+@pytest.mark.asyncio
+async def test_script_requirement_answer_resumes_into_script_generation():
+    """Answering the precondition question must return to Agent execution."""
+    class _GenerateScriptTool(BaseTool):
+        name = "generate_script"
+        description = "generate script"
+        category = "llm"
+        parameters = []
+
+        async def execute(self, ctx, params):
+            return {"title": "功夫", "scenes": []}
+
+    llm = _StubLLM([
+        {
+            "tool_name": "generate_media_batch",
+            "tool_args": {"jobs": []},
+            "content": None,
+        },
+        {
+            "tool_name": "generate_script",
+            "tool_args": {},
+            "content": None,
+        },
+    ])
+    memory = AgentMemory(user_goal="功夫", plan=[])
+    runtime = AgentRuntime(task_id="t-script-resume", llm=llm, memory=memory)
+    runtime.registry.register(_GenerateScriptTool())
+
+    await runtime.step()
+    await runtime.resume("由 agent 编写脚本")
+
+    assert llm.call_count == 2
+    assert runtime.state == AgentState.RUNNING
+    assert memory.short_term[-1].action["tool"] == "generate_script"
+    assert memory.short_term[-1].status == "success"
+
+
+@pytest.mark.asyncio
 async def test_runtime_projects_saved_asset_into_memory_artifacts():
     """save_asset 成功后必须进入 artifacts，供前端生成普通资产节点。"""
     llm = _StubLLM([{"tool_name": "save_asset", "tool_args": {}, "content": None}])
@@ -188,6 +260,26 @@ async def test_runtime_projects_saved_asset_into_memory_artifacts():
     await runtime.step()
 
     assert memory.artifacts["script"][0]["id"] == "asset-1"
+
+
+@pytest.mark.asyncio
+async def test_runtime_fills_missing_thought_for_action_only_decision():
+    from app.agent.events import event_bus
+
+    task_id = "t-missing-thought"
+    event_bus.clear_log(task_id)
+    llm = _StubLLM([{
+        "content": '{"action": {"tool": "echo", "params": {"text": "x"}}}',
+        "tool_name": None,
+    }])
+    runtime = AgentRuntime(task_id=task_id, llm=llm, memory=AgentMemory(user_goal="x"))
+    runtime.registry.register(_EchoTool())
+
+    await runtime.step()
+
+    thoughts = [event for event in event_bus.get_replay(task_id) if event.type == "thought"]
+    assert thoughts
+    assert thoughts[-1].payload["text"] == "准备执行：echo"
 
 
 @pytest.mark.asyncio
@@ -251,6 +343,64 @@ async def test_runtime_handles_tool_failure():
     assert "error" in memory.short_term[0].observation
     # runtime 不应标记为 done（允许重试）
     assert runtime.state == AgentState.RUNNING
+
+
+@pytest.mark.asyncio
+async def test_add_failed_step_emits_observation_on_parse_error():
+    """LLM 输出格式错误时，_add_failed_step 必须发射 OBSERVATION 事件，让前端看到反馈。
+
+    回归问题：此前 _add_failed_step 只记录到 memory 不发事件，前端在连续格式错误时
+    看不到任何反馈，agent 看似"卡住"，直到 max_steps 耗尽才收到 TASK_FAILED。
+    """
+    from app.agent.events import event_bus
+
+    task_id = "t-parse-error"
+    event_bus.clear_log(task_id)
+    llm = _StubLLM([
+        # LLM 返回无效 JSON，触发 parse_decision 失败
+        {"content": "not json at all", "tool_name": None},
+    ])
+    memory = AgentMemory(user_goal="x", plan=[])
+    runtime = AgentRuntime(task_id=task_id, llm=llm, memory=memory)
+
+    await runtime.step()
+
+    # 验证 memory 中有 failed step
+    assert memory.short_term[0].status == "failed"
+    assert "error" in memory.short_term[0].observation
+
+    # 验证发射了 OBSERVATION 事件（前端能看到格式错误反馈）
+    observations = [
+        event for event in event_bus.get_replay(task_id)
+        if event.type == "observation"
+    ]
+    assert observations, "前端应收到 OBSERVATION 事件，否则格式错误时 agent 看似卡住"
+    assert observations[-1].payload["success"] is False
+    assert observations[-1].payload["error"]
+
+
+@pytest.mark.asyncio
+async def test_add_failed_step_emits_observation_on_empty_response():
+    """LLM 返回空响应时，_add_failed_step 也应发射 OBSERVATION 事件。"""
+    from app.agent.events import event_bus
+
+    task_id = "t-empty-response"
+    event_bus.clear_log(task_id)
+    llm = _StubLLM([
+        {"content": None, "tool_name": None},
+    ])
+    memory = AgentMemory(user_goal="x", plan=[])
+    runtime = AgentRuntime(task_id=task_id, llm=llm, memory=memory)
+
+    await runtime.step()
+
+    observations = [
+        event for event in event_bus.get_replay(task_id)
+        if event.type == "observation"
+    ]
+    assert observations, "空响应也应发射 OBSERVATION 事件"
+    assert observations[-1].payload["success"] is False
+    assert observations[-1].payload["error"]
 
 
 @pytest.mark.asyncio

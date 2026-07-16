@@ -28,6 +28,10 @@ from .tools.base import (
     ToolValidationError,
 )
 from .media_assets import begin_media_asset, finish_media_asset
+from .tools.planning import _coerce_json
+from .task_profiles import TaskProfile, classify_task
+from .rule_packs import get_rule_pack
+from .prompt_engineering import build_prompt_rule_context
 from .. import models
 
 
@@ -41,16 +45,12 @@ class AgentState(str, Enum):
 
 
 def parse_decision(raw: str) -> dict:
-    """从 LLM 文本输出中解析决策 JSON。处理 markdown 代码块。"""
-    text = raw.strip()
-    # 去掉 markdown 代码块
-    fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
-    if fence_match:
-        text = fence_match.group(1)
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid decision JSON: {e}\n{text[:200]}")
+    """从 LLM 文本输出中解析决策 JSON，允许前后存在说明文字。"""
+    data = _coerce_json(raw)
+    if isinstance(data, dict):
+        return data
+    text = (raw or "").strip()
+    raise ValueError(f"Invalid decision JSON: unable to extract an object\n{text[:200]}")
 
 
 # ========================
@@ -75,6 +75,7 @@ class AgentRuntime:
         max_steps: int = DEFAULT_MAX_STEPS,
         skip_confirm: bool = False,
         pending_request: dict | None = None,
+        profile: TaskProfile | None = None,
     ):
         self.task_id = task_id
         self.llm = llm
@@ -87,6 +88,7 @@ class AgentRuntime:
         self.max_steps = max_steps
         self.skip_confirm = skip_confirm
         self.pending_request = pending_request
+        self.profile = profile
         self.state = AgentState.PENDING
         self._step_count = 0
 
@@ -126,8 +128,11 @@ class AgentRuntime:
             except ValueError as e:
                 await self._add_failed_step(str(e), {})
                 return False
-            thought = decision.get("thought", "")
-            action = decision.get("action", {})
+            thought = str(decision.get("thought") or "").strip()
+            action = decision.get("action") or {}
+            if not thought:
+                tool = action.get("tool") if isinstance(action, dict) else None
+                thought = f"准备执行：{tool}" if tool else "正在分析下一步"
         else:
             thought = "(structured tool call)"
             action = {"tool": response.tool_name, "params": response.tool_args or {}}
@@ -174,6 +179,13 @@ class AgentRuntime:
             return False
 
         # 3. 执行工具
+        # Story media requires a script. Pause before creating canvas
+        # placeholders or invoking prompt optimization when it is missing.
+        profile = self._selected_task_profile()
+        if self._is_media_tool(tool_name) and not self._has_source_for_profile(profile):
+            await self._pause_for_script_requirement(thought, response, profile)
+            return False
+
         await self._emit(EventType.ACTION, {
             "tool": tool_name,
             "params": action.get("params", {}),
@@ -219,7 +231,16 @@ class AgentRuntime:
             url = result.get("url") if isinstance(result, dict) else None
             error = observation.get("error") if isinstance(observation, dict) and status != "success" else None
             result_prompt = result.get("prompt") if isinstance(result, dict) else None
-            updated_asset = finish_media_asset(self.db, media_asset["id"], url=url, error=error, prompt=result_prompt) if self.db else {
+            updated_asset = finish_media_asset(
+                self.db,
+                media_asset["id"],
+                url=url,
+                error=error,
+                prompt=result_prompt,
+                prompt_source=result.get("source_prompt") if isinstance(result, dict) else None,
+                prompt_optimized=result_prompt,
+                extra={"continuity": result.get("continuity")} if isinstance(result, dict) and result.get("continuity") is not None else None,
+            ) if self.db else {
                 **media_asset, "url": url, "failed": bool(error), "error": error, "generating": False,
             }
             bucket = self.memory.artifacts.get(media_asset["asset_kind"], [])
@@ -242,6 +263,9 @@ class AgentRuntime:
                     url=item.get("url"),
                     error=None if item.get("success") else str(item.get("error") or "media generation failed"),
                     prompt=str(item.get("prompt") or ""),
+                    prompt_source=str(item.get("source_prompt") or item.get("prompt") or ""),
+                    prompt_optimized=str(item.get("prompt") or ""),
+                    extra={"continuity": item.get("continuity")} if item.get("continuity") is not None else None,
                 )
                 asset_kind = pending["asset_kind"]
                 bucket = self.memory.artifacts.setdefault(asset_kind, [])
@@ -279,8 +303,141 @@ class AgentRuntime:
         # bridge: create_plan → memory.plan
         if tool_name == "create_plan" and isinstance(observation, dict) and isinstance(observation.get("result"), list):
             self.memory.plan = observation["result"]
+            # Notify connected clients immediately; persistence alone only
+            # makes the plan appear after a refresh.
+            await self._emit(EventType.PLAN_READY, {"plan": self.memory.plan})
 
         return False
+
+    @staticmethod
+    def _is_media_tool(tool_name: str) -> bool:
+        return tool_name in {
+            "generate_character_portrait", "generate_prop_image", "generate_scene_image",
+            "generate_storyboard_image", "generate_video", "generate_media_batch",
+        }
+
+    def _has_script_context(self) -> bool:
+        """Return whether this task can derive media prompts from a script."""
+        scripts = self.memory.artifacts.get("script", [])
+        if any(isinstance(item, dict) and not item.get("failed") for item in scripts):
+            return True
+        for step in self.memory.short_term:
+            if step.status != "success" or not isinstance(step.action, dict):
+                continue
+            tool_name = step.action.get("tool")
+            result = step.observation.get("result") if isinstance(step.observation, dict) else None
+            if tool_name == "generate_script" and isinstance(result, dict) and result:
+                return True
+            if tool_name == "save_asset" and isinstance(result, dict):
+                asset_kind = result.get("asset_kind") or result.get("kind")
+                if asset_kind == "script":
+                    return True
+        if self.db and self.project_id:
+            try:
+                script_asset = (
+                    self.db.query(models.Asset)
+                    .filter(
+                        models.Asset.project_id == self.project_id,
+                        models.Asset.asset_kind == "script",
+                    )
+                    .first()
+                )
+                if script_asset:
+                    return True
+            except Exception:
+                pass
+        return False
+
+    def _selected_task_profile(self) -> TaskProfile:
+        profile = self.hydrate_profile()
+        source_context = self._answered_source_context(profile)
+        if profile.needs_clarification and source_context:
+            parsed_goal = dict(self._latest_parsed_goal() or {})
+            parsed_goal.update(source_context)
+            refreshed = classify_task(
+                self.memory.user_goal,
+                parsed_goal,
+                self._project_asset_context(),
+            )
+            if refreshed.task_type == profile.task_type:
+                self.profile = refreshed
+                profile = refreshed
+        return profile
+
+    def _answered_source_context(self, profile: TaskProfile) -> dict:
+        """Project a completed missing-source answer into current profile state."""
+        if profile.task_type not in {"promotion", "commercial", "custom"}:
+            return {}
+        for step in reversed(self.memory.short_term):
+            if step.status != "success" or (step.action or {}).get("tool") != "ask_user":
+                continue
+            params = (step.action or {}).get("params") or {}
+            if not params.get("missing_inputs"):
+                continue
+            observation = step.observation if isinstance(step.observation, dict) else {}
+            user_response = observation.get("user_response")
+            if isinstance(user_response, dict):
+                source = user_response.get("custom_text") or user_response.get("response")
+            else:
+                source = user_response
+            if source in (None, "", [], {}):
+                continue
+            if profile.task_type == "promotion":
+                return {"brief": source}
+            if profile.task_type == "commercial":
+                return {"product": source}
+            return {"source": source}
+        return {}
+
+    def hydrate_profile(self) -> TaskProfile:
+        """Return the persisted profile, deriving it once for legacy tasks."""
+        if self.profile is None:
+            self.profile = classify_task(
+                self.memory.user_goal,
+                self._latest_parsed_goal(),
+                self._project_asset_context(),
+            )
+        return self.profile
+
+    def _has_source_for_profile(self, profile: TaskProfile) -> bool:
+        """Return whether the profile's structured source gate is satisfied."""
+        if profile.task_type in {"drama_short", "documentary"}:
+            return self._has_script_context()
+        if not profile.needs_clarification:
+            return True
+        return False
+
+    async def _pause_for_script_requirement(self, thought: str, response: Any, profile: TaskProfile | None = None) -> None:
+        profile = profile or self._selected_task_profile()
+        source_label = {
+            "promotion": "promotion brief",
+            "commercial": "product brief or product information",
+            "custom": "structured source and agreed deliverables",
+        }.get(profile.task_type, "complete story script")
+        question = {
+            "type": "ask_user",
+            "step_id": "clarify_source",
+            "missing_inputs": list(profile.missing_inputs),
+            "question": (
+                f"当前缺少可供拆解和生成提示词的{source_label}。"
+                f"请提供{source_label}，我会先完成来源确认再生成媒体资产。"
+            ),
+            "options": ["由 agent 编写脚本"],
+            "selection_mode": "text",
+            "allow_custom": True,
+        }
+        self.pending_request = question
+        self.memory.add_step(
+            step_number=self._step_count,
+            thought=thought,
+            action={"tool": "ask_user", "params": question},
+            observation={"pending": "awaiting_user_input", "reason": "script_required_before_media"},
+            status="pending",
+            cost_usd=response.cost_usd,
+            tokens=response.total_tokens,
+        )
+        await self._emit(EventType.REQUEST_USER_INPUT, question)
+        self.state = AgentState.PAUSED
 
     def _begin_media_asset(self, tool_name: str, params: dict) -> dict | None:
         """Create a visible canvas asset before a media provider request starts."""
@@ -314,19 +471,23 @@ class AgentRuntime:
             prompt = _build_scene_prompt(source)
         elif tool_name == "generate_storyboard_image":
             from .tools.image_tools import _build_storyboard_prompt
-            prompt = _build_storyboard_prompt(source, params.get("characters"))
+            prompt = _build_storyboard_prompt(source, params.get("scene"), params.get("characters"), params.get("props"))
         elif tool_name == "generate_video":
-            video_parts = [
-                source.get("action", ""),
-                f"{source.get('camera', 'medium shot')}, {source.get('movement', 'static')}",
-                f"scene: {source.get('scene', '')}",
-                "cinematic, 24fps, high detail",
-            ]
-            if source.get("dialogue"):
-                video_parts.append(f"character says: {source['dialogue']}")
-            prompt = ", ".join(part for part in video_parts if part)
+            from .tools.video_tools import _build_video_prompt
+            prompt = _build_video_prompt(source, params.get("reference_asset_ids"))
         bindings = getattr(self.media_service, "capability_bindings", {}) or {}
         binding = bindings.get("video" if category == "video" else "image", {})
+        extra = {
+            "prompt_source": prompt,
+            "prompt_optimized": prompt,
+            "reference_asset_ids": list(params.get("reference_asset_ids") or []),
+        }
+        if tool_name == "generate_video":
+            extra["continuity"] = {
+                "scene": source.get("scene"),
+                "shot": source.get("shot"),
+                "characters": params.get("characters") or params.get("character") or [],
+            }
         return begin_media_asset(
             self.db,
             project_id=self.project_id,
@@ -336,6 +497,7 @@ class AgentRuntime:
             prompt=prompt,
             provider_id=binding.get("provider_id"),
             model_id=binding.get("model_id"),
+            extra=extra,
         )
 
     def _begin_media_batch_assets(self, params: dict) -> list[dict]:
@@ -390,6 +552,7 @@ class AgentRuntime:
                 status="success",
             )
         self.pending_request = None
+        self._selected_task_profile()
         self.state = AgentState.RUNNING
         await self._emit(EventType.USER_INPUT_RECEIVED, {"response": user_response})
         return await self.step()
@@ -434,9 +597,30 @@ class AgentRuntime:
             tool_summaries=tool_summaries,
             project_assets=self._project_asset_context(),
         )
+        assets = self._project_asset_context()
+        parsed_goal = self._latest_parsed_goal()
+        profile = self.hydrate_profile()
+        rule_context = build_prompt_rule_context(get_rule_pack(profile.rule_pack_id), "agent_planning")
+        prompt += (
+            "\n\n[SELECTED TASK PROFILE]\n"
+            + json.dumps(profile.model_dump(mode="json"), ensure_ascii=False)
+            + "\n[RULE PACK SUMMARY]\n"
+            + json.dumps(rule_context, ensure_ascii=False)
+            + "\nBefore any media tool, ask the user for missing structured source inputs "
+            "listed in the profile and wait until they are available."
+        )
         return [
             {"role": "system", "content": prompt},
         ]
+
+    def _latest_parsed_goal(self) -> dict | None:
+        for step in reversed(self.memory.short_term):
+            if not isinstance(step.action, dict) or step.action.get("tool") != "parse_user_goal":
+                continue
+            result = step.observation.get("result") if isinstance(step.observation, dict) else None
+            if isinstance(result, dict):
+                return result
+        return None
 
     def _project_asset_context(self) -> list[dict]:
         """Expose only current-project asset identity/status to the planner."""
@@ -491,6 +675,7 @@ class AgentRuntime:
             api_config=self.api_config,
             media_service=self.media_service,
             artifacts=self.memory.artifacts,
+            task_profile=self._selected_task_profile(),
             skip_confirm=self.skip_confirm,
             emit=lambda t, p: self._emit_sync(t, p),
         )
@@ -627,6 +812,15 @@ class AgentRuntime:
             observation={"error": error},
             status="failed",
         )
+        # 发射 OBSERVATION 事件，让前端能看到 LLM 输出格式错误的反馈
+        # （此前只记录到 memory 不发事件，前端在连续格式错误时看不到任何反馈，
+        # agent 看似"卡住"，直到 max_steps 耗尽才收到 TASK_FAILED）
+        await self._emit(EventType.OBSERVATION, {
+            "step": self._step_count,
+            "success": False,
+            "result": None,
+            "error": error,
+        })
 
     async def _emit(self, event_type: str, payload: dict) -> None:
         event = AgentEvent(
