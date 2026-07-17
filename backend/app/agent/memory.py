@@ -55,6 +55,11 @@ class AgentMemory:
         self.plan: list[dict] = list(plan or [])
         self.short_term: list[StepRecord] = []
         self.artifacts: dict[str, list[dict]] = {}
+        # 多轮对话记忆：每轮用户消息 + agent 完成摘要
+        # 结构: [{"turn": 1, "user_message": "...", "agent_summary": "...", "step_range": [1, 15]}]
+        self.conversation_turns: list[dict] = []
+        # 被压缩的早期步骤摘要（控制 prompt token 预算）
+        self.compressed_summary: str = ""
 
     # ---------------- 写操作 ----------------
 
@@ -89,6 +94,25 @@ class AgentMemory:
     def update_plan(self, plan: list[dict]) -> None:
         self.plan = list(plan)
 
+    def add_conversation_turn(
+        self,
+        turn: int,
+        user_message: str,
+        agent_summary: str,
+        step_range: list[int],
+    ) -> None:
+        """追加一轮对话摘要（在 continue_conversation 压缩后调用）。"""
+        self.conversation_turns.append({
+            "turn": turn,
+            "user_message": user_message,
+            "agent_summary": agent_summary,
+            "step_range": step_range,
+        })
+
+    def should_compress(self, threshold: int = 15) -> bool:
+        """判断是否需要压缩早期步骤（步数超过阈值且未被压缩过）。"""
+        return len(self.short_term) > threshold
+
     # ---------------- 读操作 ----------------
 
     @property
@@ -110,6 +134,8 @@ class AgentMemory:
             "plan": self.plan,
             "short_term": [s.to_dict() for s in self.short_term],
             "artifacts": self.artifacts,
+            "conversation_turns": self.conversation_turns,
+            "compressed_summary": self.compressed_summary,
             "total_cost_usd": self.total_cost_usd,
             "total_tokens": self.total_tokens,
         }
@@ -119,4 +145,6 @@ class AgentMemory:
         m = cls(user_goal=d.get("user_goal", ""), plan=d.get("plan", []))
         m.short_term = [StepRecord.from_dict(s) for s in d.get("short_term", [])]
         m.artifacts = d.get("artifacts", {})
+        m.conversation_turns = d.get("conversation_turns", [])
+        m.compressed_summary = d.get("compressed_summary", "")
         return m

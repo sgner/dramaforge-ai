@@ -74,6 +74,19 @@ REACT_SYSTEM_PROMPT = """你是 DramaForge Director Agent —— 一个拥有 20
 5. 如果所有任务完成，调 finish_task 工具
 6. 不要重复调同一个工具在相同输入上（避免死循环）
 
+【任务流程选择（重要）】
+- 完整短剧/纪录片/广告：走完整流程 parse_user_goal → create_plan → generate_script → extract_* → generate_*_image → generate_video
+- 单一资产生成（用户只要角色图/场景图/道具图等）：不需要先生成脚本。直接 parse_user_goal → 调用对应的 generate_* 工具。
+  例如用户说"给我画一个赛博朋克女主角角色图"，直接调 generate_character_portrait，character 参数填结构化字段。
+- 如果不确定用户要什么，先 ask_user 澄清，不要假设必须走脚本流程。
+
+【工具参数规范（重要）】
+- generate_character_portrait 的 character 参数：只填 name / age / gender / appearance / personality 等结构化字段
+- 禁止把 thought（思考内容）塞进 character.description 或 character.prompt 字段
+- appearance 字段写具体的外貌描述（如"黑色短发，绿色眼睛，穿皮夹克"），不要写思考过程
+- generate_prop_image 的 prop 参数：只填 name / description（用途和外观），不要写思考内容
+- generate_scene_image 的 scene 参数：只填 name / time / weather / mood / description（环境细节）
+
 【输出格式（严格 JSON）】
 {
   "thought": "我决定先...因为...",
@@ -124,12 +137,31 @@ def build_react_prompt(
     recent_steps: list[dict],
     tool_summaries: list[dict],
     project_assets: list[dict] | None = None,
+    compressed_summary: str = "",
+    conversation_turns: list[dict] | None = None,
 ) -> str:
     """构造单步 ReAct prompt。"""
     parts = [REACT_SYSTEM_PROMPT, MEDIA_PARALLEL_POLICY, ASSET_INTELLIGENCE_POLICY]
 
     # 用户目标
     parts.append(f"【用户目标】\n{user_goal}")
+
+    # 压缩的早期记忆摘要（多轮对话时避免早期决策丢失）
+    if compressed_summary:
+        parts.append(f"【早期执行摘要】\n{compressed_summary}")
+
+    # 历史对话轮次（每轮用户消息 + agent 完成摘要）
+    if conversation_turns:
+        turn_lines = []
+        for t in conversation_turns:
+            turn = t.get("turn", "?")
+            user_msg = t.get("user_message", "")
+            summary = t.get("agent_summary", "")
+            step_range = t.get("step_range", [])
+            range_str = f"步骤 {step_range[0]}-{step_range[1]}" if len(step_range) == 2 else ""
+            turn_lines.append(f"第 {turn} 轮 {range_str}：用户「{user_msg}」→ {summary}")
+        if turn_lines:
+            parts.append("【历史对话轮次】\n" + "\n".join(turn_lines))
 
     # 计划
     if plan:
@@ -204,6 +236,53 @@ def build_react_prompt(
         parts.append("【可用工具】\n" + "\n".join(tool_lines))
 
     return "\n\n".join(parts)
+
+
+def build_compression_prompt(
+    user_goal: str,
+    steps_to_compress: list[dict],
+    artifacts: dict,
+) -> list[dict]:
+    """构造压缩早期步骤的 LLM prompt。
+
+    把已经被压缩范围之外的早期步骤喂给 LLM，生成一段结构化摘要，
+    用于替换原始 steps 控制 prompt token 预算。摘要需保留：
+    - 已完成的关键里程碑
+    - 关键决策（parse_user_goal 结果、用户确认的选项）
+    - 已生成资产清单（与 artifacts 交叉校验）
+    - 失败/重试的关键教训
+    """
+    step_lines = []
+    for s in steps_to_compress:
+        n = s.get("step_number", "?")
+        thought = s.get("thought", "")
+        action = s.get("action", {})
+        tool = action.get("tool") if isinstance(action, dict) else None
+        status = s.get("status", "?")
+        observation = s.get("observation")
+        observation_text = ""
+        if observation:
+            try:
+                observation_text = json.dumps(observation, ensure_ascii=False, default=str)[:2000]
+            except (TypeError, ValueError):
+                observation_text = str(observation)[:2000]
+        step_lines.append(f"#{n} [{status}] {thought} → {tool} | {observation_text}")
+
+    system = (
+        "你是 Agent 记忆压缩器。把以下早期执行步骤压缩成一段简洁的中文摘要，"
+        "保留：(1) 已完成的关键里程碑 (2) 关键决策与用户确认 "
+        "(3) 已生成资产清单 (4) 失败/重试的教训。\n"
+        "输出格式：纯文本段落，不超过 800 字，不要 JSON。"
+    )
+    user = (
+        f"【用户目标】\n{user_goal}\n\n"
+        f"【已生成资产】\n{json.dumps(artifacts, ensure_ascii=False, default=str)[:2000]}\n\n"
+        f"【待压缩步骤】\n" + "\n".join(step_lines)
+    )
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
 
 
 # ========================

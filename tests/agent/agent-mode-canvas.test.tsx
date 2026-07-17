@@ -18,6 +18,7 @@ describe('<AgentMode /> canvas integration', () => {
     useCanvasStore.setState({ nodes: [], connections: [], nodeOverrides: {}, theme: 'light' });
     vi.restoreAllMocks();
     vi.spyOn(api, 'listAgentTasks').mockResolvedValue([]);
+    vi.spyOn(api, 'listAgentSteps').mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -156,6 +157,65 @@ describe('<AgentMode /> canvas integration', () => {
       expect(s.pendingQuestion?.question).toBe('B 在问什么？');
       expect(s.totalCostUsd).toBe(0.5);
       expect(s.totalTokens).toBe(123);
+    });
+  });
+
+  it('selecting a task restores thoughts/actions/observations from persisted steps (checkpoint)', async () => {
+    // 检查点模式：从 DB AgentStep 表恢复执行历史，不依赖 SSE 内存重放
+    vi.spyOn(api, 'listAgentTasks').mockResolvedValue([
+      { id: 't-D', user_goal: 'D 的目标', status: 'paused' } as any,
+    ]);
+    vi.spyOn(api, 'getAgentTask').mockResolvedValue({
+      id: 't-D',
+      user_goal: 'D 的目标',
+      status: 'paused',
+      plan: [],
+      artifacts: {},
+      pending_response: { question: 'D 在等回复', options: [] },
+    } as any);
+    vi.spyOn(api, 'listAgentSteps').mockResolvedValue([
+      {
+        id: 's1',
+        task_id: 't-D',
+        step_number: 1,
+        thought: '第一步想法',
+        action: { tool: 'write_script', params: { topic: 'test' } },
+        observation: { success: true, result: { text: '剧本完成' } },
+        status: 'success',
+        cost_usd: 0.01,
+        tokens: 50,
+      },
+      {
+        id: 's2',
+        task_id: 't-D',
+        step_number: 2,
+        thought: '第二步想法',
+        action: { tool: 'ask_user', params: {} },
+        observation: {},
+        status: 'pending',
+        cost_usd: 0,
+        tokens: 0,
+      },
+    ] as any);
+
+    render(<AgentMode projectId="p1" />);
+    const row = await waitFor(() => screen.getByTestId('task-list-row-t-D'));
+    fireEvent.click(row);
+
+    await waitFor(() => {
+      const s = useAgentStore.getState();
+      expect(s.taskId).toBe('t-D');
+      // 检查点：steps 历史被恢复到 thoughts/actions/observations
+      expect(s.thoughts).toHaveLength(2);
+      expect(s.thoughts[0].payload.text).toBe('第一步想法');
+      expect(s.thoughts[1].payload.text).toBe('第二步想法');
+      expect(s.actions).toHaveLength(2);
+      expect(s.actions[0].payload.tool).toBe('write_script');
+      expect(s.actions[1].payload.tool).toBe('ask_user');
+      expect(s.observations).toHaveLength(1);
+      expect(s.observations[0].payload.success).toBe(true);
+      // pending_question 也应从 snapshot 恢复
+      expect(s.pendingQuestion?.question).toBe('D 在等回复');
     });
   });
 

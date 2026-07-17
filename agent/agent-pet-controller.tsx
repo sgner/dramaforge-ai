@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Sparkles } from 'lucide-react';
+import { Sparkles, RefreshCw } from 'lucide-react';
 import { useAgentStore, type AgentStatus } from './use-agent-store';
 import { AskUserResponse } from './ask-user-response';
+import { retryNow } from './agent-stream-manager';
 
 export interface AgentPetPosition { x: number; y: number }
 export interface AgentPetSize { width: number; height: number }
@@ -71,8 +72,14 @@ export const AgentPetController: React.FC<AgentPetControllerProps> = ({
   const plan = useAgentStore((s) => s.plan);
   const artifacts = useAgentStore((s) => s.artifacts);
   const streamingText = useAgentStore((s) => s.streamingText);
+  const continueConversation = useAgentStore((s) => s.continueConversation);
+  // SSE 连接状态：当 connectionStatus !== 'connected' 时显示提示横幅 + 重试按钮
+  const connectionStatus = useAgentStore((s) => s.connectionStatus);
+  const connectionDetail = useAgentStore((s) => s.connectionDetail);
   const [position, setPosition] = useState<AgentPetPosition | null>(null);
   const [panelOpen, setPanelOpen] = useState(true);
+  const [followUpMessage, setFollowUpMessage] = useState('');
+  const [continueSubmitting, setContinueSubmitting] = useState(false);
   const petRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ pointerId: number; offsetX: number; offsetY: number } | null>(null);
 
@@ -155,6 +162,31 @@ export const AgentPetController: React.FC<AgentPetControllerProps> = ({
     >
       {panelOpen && <div data-testid="agent-pet-panel" className="agent-pet-panel" onMouseDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
         <div className="agent-pet-panel-status"><span className={`agent-pet-status-dot ${status}`} />{statusText[status]}</div>
+        {/* SSE 连接状态横幅：断线 / 重连时让用户知道 agent 的实时反馈可能丢失
+            并提供"手动重连"出口（重连预算耗尽后由用户主动重置 retryCount）。 */}
+        {connectionStatus !== 'connected' && taskId && (
+          <div
+            data-testid={`agent-pet-connection-${connectionStatus}`}
+            className={`agent-pet-connection agent-pet-connection-${connectionStatus}`}
+            role="status"
+            aria-live="polite"
+          >
+            <span className="agent-pet-connection-dot" />
+            <span className="agent-pet-connection-text">
+              {connectionStatus === 'reconnecting' ? '正在重连…' : '连接已断开'}
+              {connectionDetail ? ` · ${connectionDetail}` : ''}
+            </span>
+            <button
+              type="button"
+              data-testid="agent-pet-connection-retry"
+              className="agent-pet-connection-retry"
+              onClick={() => retryNow()}
+              title="手动重试连接"
+            >
+              <RefreshCw size={12} /> 重连
+            </button>
+          </div>
+        )}
         <div className="agent-pet-panel-stats">
           <span>思考 {thoughts.length}</span><span>动作 {actions.length}</span><span>观察 {observations.length}</span><span>计划 {plan.length}</span>
         </div>
@@ -180,6 +212,60 @@ export const AgentPetController: React.FC<AgentPetControllerProps> = ({
           </button>
         </div>}
         {error && <div data-testid="agent-pet-error" className="agent-pet-panel-error">{error}</div>}
+        {status === 'done' && taskId && (
+          <div className="agent-pet-continue" data-testid="agent-pet-continue">
+            <div className="agent-pet-continue-label">任务已完成 · 追加需求继续对话</div>
+            <textarea
+              data-testid="agent-pet-continue-input"
+              className="agent-pet-continue-input"
+              value={followUpMessage}
+              onChange={(e) => setFollowUpMessage(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  const submit = async () => {
+                    const msg = followUpMessage.trim();
+                    if (!msg || continueSubmitting) return;
+                    setContinueSubmitting(true);
+                    try {
+                      await continueConversation(msg);
+                      setFollowUpMessage('');
+                    } catch (err) {
+                      // 错误由 store/SSE 处理，此处只恢复按钮
+                    } finally {
+                      setContinueSubmitting(false);
+                    }
+                  };
+                  submit();
+                }
+              }}
+              placeholder="例如：再生成一个反派角色 / 把场景改成夜晚"
+              rows={2}
+              disabled={continueSubmitting}
+            />
+            <button
+              data-testid="agent-pet-continue-submit"
+              type="button"
+              className="agent-pet-continue-btn"
+              disabled={continueSubmitting || !followUpMessage.trim()}
+              onClick={async () => {
+                const msg = followUpMessage.trim();
+                if (!msg || continueSubmitting) return;
+                setContinueSubmitting(true);
+                try {
+                  await continueConversation(msg);
+                  setFollowUpMessage('');
+                } catch {
+                  /* 错误由 store/SSE 处理 */
+                } finally {
+                  setContinueSubmitting(false);
+                }
+              }}
+            >
+              {continueSubmitting ? '发送中…' : '继续对话'}
+            </button>
+          </div>
+        )}
         <div className="agent-pet-panel-actions">
           {onToggleThought && <button data-testid="agent-mode-thought-toggle" type="button" className={thoughtOpen ? 'active' : ''} onClick={onToggleThought}>思考流</button>}
           {onToggleTools && <button data-testid="agent-mode-tool-drawer-toggle" type="button" className={toolDrawerOpen ? 'active' : ''} onClick={onToggleTools}>工具</button>}

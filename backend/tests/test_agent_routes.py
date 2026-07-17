@@ -27,7 +27,7 @@ def db_session():
             from app.models import AgentTask, AgentStep
             from app.database import SessionLocal as _SL
             with _SL() as cleanup_db:
-                for tid in ("t-rec-1", "t-rec-2", "t-rec-3", "t-stop", "t-retry", "t-retry-stale", "t-resume-running"):
+                for tid in ("t-rec-1", "t-rec-2", "t-rec-3", "t-stop", "t-retry", "t-retry-stale", "t-resume-running", "t-rollback-1", "t-rollback-2", "t-continue-1", "t-continue-bad"):
                     cleanup_db.query(AgentStep).filter_by(task_id=tid).delete()
                     cleanup_db.query(AgentTask).filter_by(id=tid).delete()
                 cleanup_db.commit()
@@ -346,3 +346,155 @@ class TestUserRespondRecovery:
         db_session.refresh(task)
         assert task.pending_response["response"] == ["古风", "悬疑"]
         assert task.pending_response["custom_text"] == "节奏偏快"
+
+
+def test_continue_runtime_failure_rolls_back_to_paused(client, db_session, monkeypatch):
+    """resume 后 step 失败时，task 状态应回滚为 paused，pending_response 保留。
+
+    场景：用户回复提问 → resumeAgent 成功 → runtime.step() 抛错（LLM 网络错误等）。
+    旧实现把 task 状态置为 failed，pending_request/pending_response 已被 consume，
+    用户输入丢失，前端回复卡消失，无法重试。
+
+    新实现：把 task.status 回滚为 paused，如果 pending_response 已被清空，
+    从最近 ask_user step 的 observation.user_response 重建。
+    """
+    from unittest.mock import AsyncMock, patch
+    from app.models import AgentStep
+
+    task_id = "t-rollback-1"
+    task = AgentTask(
+        id=task_id, project_id="p1", user_goal="失败回滚测试",
+        status="paused",  # 真实场景：用户已 respond，task 仍是 paused
+        plan=[], artifacts={}, total_cost_usd=0.0, total_tokens=0,
+        max_steps=30, skip_confirm=False,
+    )
+    db_session.add(task)
+    db_session.commit()
+    # 模拟 runtime 已 consume pending_response 并把 ask_user step 标为 success
+    db_session.add(AgentStep(
+        id=f"{task_id}-s1", task_id=task_id, step_number=1,
+        thought="问用户", action={"tool": "ask_user", "params": {"question": "题材？"}},
+        observation={"success": True, "user_response": "古风"},
+        status="success",
+    ))
+    db_session.commit()
+    # 模拟 runtime.resume 后 pending_response 已被清空
+    task.pending_response = None
+    db_session.commit()
+
+    # 让 _run_runtime_loop 抛错
+    async def boom(*args, **kwargs):
+        raise RuntimeError("simulated LLM failure")
+
+    from app.routers import agent as agent_router
+    monkeypatch.setattr(agent_router, "_run_runtime_loop", boom)
+    # 清空 in-memory handles，强制走 _continue_runtime
+    agent_router._RUNNING_RUNTIMES.pop(task_id, None)
+    agent_router._RUNNING_TASKS.pop(task_id, None)
+
+    # 触发：调 /resume
+    resp = client.post(f"/api/agent/tasks/{task_id}/resume")
+    # 200 是因为路由立即 return {"ok": True, "status": "resuming"}，
+    # 真正的 _continue_runtime 在后台 task 跑
+    assert resp.status_code == 200, resp.text
+
+    # 等后台 task 跑完
+    import time
+    for _ in range(20):
+        db_session.refresh(task)
+        if task.status != "paused":
+            break
+        time.sleep(0.1)
+
+    db_session.refresh(task)
+    assert task.status == "paused", f"expected paused, got {task.status}"
+    # pending_response 已被清空 → 从 memory 重建回去
+    assert task.pending_response is not None
+    assert task.pending_response["response"] == "古风"
+
+
+def test_continue_runtime_failure_preserves_pending_response(client, db_session, monkeypatch):
+    """失败发生在 resume 之前 → pending_response 仍存在，task 应回滚为 paused 且保留。"""
+    from unittest.mock import AsyncMock
+    from app.models import AgentStep
+
+    task_id = "t-rollback-2"
+    task = AgentTask(
+        id=task_id, project_id="p1", user_goal="pending_response 保留测试",
+        status="paused", plan=[], artifacts={}, total_cost_usd=0.0, total_tokens=0,
+        max_steps=30, skip_confirm=False,
+    )
+    db_session.add(task)
+    db_session.commit()
+    # pending_response 仍存在（resume 前的失败）
+    task.pending_response = {"response": "悬疑"}
+    db_session.commit()
+
+    async def boom(*args, **kwargs):
+        raise RuntimeError("simulated LLM failure")
+
+    from app.routers import agent as agent_router
+    monkeypatch.setattr(agent_router, "_run_runtime_loop", boom)
+    agent_router._RUNNING_RUNTIMES.pop(task_id, None)
+    agent_router._RUNNING_TASKS.pop(task_id, None)
+
+    resp = client.post(f"/api/agent/tasks/{task_id}/resume")
+    assert resp.status_code == 200, resp.text
+
+    import time
+    for _ in range(20):
+        db_session.refresh(task)
+        if task.status != "paused":
+            break
+        time.sleep(0.1)
+
+    db_session.refresh(task)
+    assert task.status == "paused", f"expected paused, got {task.status}"
+    assert task.pending_response == {"response": "悬疑"}
+
+
+def test_continue_conversation_endpoint_rejects_non_done_task(client, db_session):
+    """/continue 只允许 status=done 的任务调用。"""
+    task = AgentTask(id="t-continue-bad", user_goal="x", status="running")
+    db_session.add(task)
+    db_session.commit()
+
+    resp = client.post(f"/api/agent/tasks/t-continue-bad/continue", json={"message": "追加需求"})
+    assert resp.status_code == 400
+    assert "only 'done' tasks can be continued" in resp.text
+
+
+def test_continue_conversation_endpoint_rejects_empty_message(client, db_session):
+    """/continue 拒绝空消息。"""
+    task = AgentTask(id="t-continue-1", user_goal="x", status="done")
+    db_session.add(task)
+    db_session.commit()
+
+    resp = client.post(f"/api/agent/tasks/t-continue-1/continue", json={"message": "   "})
+    assert resp.status_code == 400
+    assert "empty" in resp.text
+
+
+def test_continue_conversation_endpoint_sets_pending_and_schedules(client, db_session, monkeypatch):
+    """/continue 把 continue_message 写入 pending_response 并调度 _continue_runtime。"""
+    task = AgentTask(id="t-continue-1", user_goal="原始目标", status="done")
+    db_session.add(task)
+    db_session.commit()
+
+    scheduled = {}
+    async def fake_continue(task_id):
+        scheduled["task_id"] = task_id
+        scheduled["called"] = True
+    from app.routers import agent as agent_router
+    monkeypatch.setattr(agent_router, "_continue_runtime", fake_continue)
+    agent_router._RUNNING_RUNTIMES.pop("t-continue-1", None)
+    agent_router._RUNNING_TASKS.pop("t-continue-1", None)
+
+    resp = client.post(f"/api/agent/tasks/t-continue-1/continue", json={"message": "再生成一个反派角色"})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "continuing"
+
+    db_session.refresh(task)
+    assert task.status == "paused"
+    assert task.pending_response["continue_message"] == "再生成一个反派角色"

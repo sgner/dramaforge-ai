@@ -17,6 +17,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { X, RotateCw } from 'lucide-react';
 import { useAgentStore } from './use-agent-store';
+// 启动全局 SSE manager：原来由 App.tsx 顶层副作用 import 触发，会强制首屏加载整个 agent 子树。
+// 现改为 AgentMode 首次挂载时按需 import，避免首屏 transform 瀑布。
+async function ensureStreamManagerStarted(): Promise<void> {
+  await import('./agent-stream-manager');
+}
 // useAgentStream 由全局 agent-stream-manager 管理（App 启动时引入），
 // 此处不再调用，避免与全局管理器创建重复连接。
 import { useAgentTools } from './use-agent-tools';
@@ -83,6 +88,12 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId, canvasContainer
       state.reset();
     }
   }, [projectId]);
+
+  // 启动全局 SSE manager：模块级副作用 import 会让首屏 transform 瀑布变深，
+  // 改为 AgentMode 首次挂载时按需加载，触发 useAgentStore.subscribe 自动管理连接。
+  useEffect(() => {
+    void ensureStreamManagerStarted();
+  }, []);
 
   // 投影：useAgentStore 状态变化 → useCanvasStore.addAgentNodes
   useEffect(() => {
@@ -275,24 +286,34 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId, canvasContainer
             // Use the list snapshot immediately so a failed/paused task never
             // flashes as "running" while the detail request is in flight.
             setTask(id, (listedStatus || 'running') as any, projectId);
-            // 2. 异步 hydrate：从后端拉 task 的持久化状态（plan/artifacts/status/
-            //    成本/pending_response），立即让 UI 显示"非空"内容。
-            //    SSE 也会同时连接并重放历史 events（thought/action/observation），
-            //    两者互补：hydrate 来自 DB（永久），SSE replay 来自内存（短期）。
+            // 2. 异步 hydrate：并行拉取 task 快照 + 历史步骤（检查点模式）。
+            //    - snapshot：plan/artifacts/status/成本/pending_response
+            //    - steps：每一步的 thought/action/observation（持久化在 DB）
+            //    两者互补：snapshot 恢复"当前状态"，steps 恢复"执行历史"。
+            //    SSE 也会重放历史 events，但 SSE buffer 在内存中，后端重启后丢失；
+            //    steps 来自 DB（永久），是可靠的检查点。
             try {
-              const snapshot = await api.getAgentTask(id);
+              const [snapshot, steps] = await Promise.all([
+                api.getAgentTask(id),
+                api.listAgentSteps(id),
+              ]);
               setTask(id, snapshot.status as any, projectId);
               useAgentStore.getState().hydrate({
                 user_goal: snapshot.user_goal,
                 status: snapshot.status,
                 plan: snapshot.plan,
                 artifacts: (snapshot.artifacts as any) || {},
+                pending_question: snapshot.pending_question,
                 pending_response: snapshot.pending_response,
                 total_cost_usd: snapshot.total_cost_usd,
                 total_tokens: snapshot.total_tokens,
                 llm_provider_id: snapshot.llm_provider_id,
                 llm_model_id: snapshot.llm_model_id,
               });
+              // 检查点：从 DB steps 恢复 thoughts/actions/observations 历史。
+              // 在 hydrate 之后调用，避免被 setTask 的 reset 清空。
+              // SSE 重放的相同 step 事件会被 hasEvent 去重，不会重复。
+              useAgentStore.getState().hydrateSteps(steps);
               // 顶栏 goal 输入框：让用户能看到这个 task 当时的目标
               if (typeof snapshot.user_goal === 'string' && snapshot.user_goal) {
                 setGoal(snapshot.user_goal);

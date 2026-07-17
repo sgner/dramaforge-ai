@@ -198,6 +198,14 @@ class AgentUserResponse(BaseModel):
         from_attributes = True
 
 
+class ContinueConversationRequest(BaseModel):
+    """任务完成后继续对话的请求体。"""
+    message: str
+
+    class Config:
+        from_attributes = True
+
+
 class AssetCreate(BaseModel):
     id: Optional[str] = None  # 前端可传入 id 保持一致；后端默认生成
     project_id: Optional[str] = None

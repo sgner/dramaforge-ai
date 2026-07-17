@@ -44,6 +44,9 @@ class EventType(str, Enum):
     ASSET_INSPECTION_FINISHED = "asset_inspection_finished"
     ASSET_NORMALIZATION_STARTED = "asset_normalization_started"
     ASSET_NORMALIZATION_FINISHED = "asset_normalization_finished"
+    # 多轮对话记忆
+    CONVERSATION_CONTINUED = "conversation_continued"
+    MEMORY_COMPRESSED = "memory_compressed"
 
 
 class AgentEvent:

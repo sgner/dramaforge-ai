@@ -8,6 +8,7 @@
  * - pendingQuestion（用户输入卡）
  */
 import { create } from 'zustand';
+import { api, type AgentStepOut } from '@/services/apiClient';
 
 export type AgentStatus =
   | 'idle'
@@ -86,10 +87,26 @@ export interface AgentState {
   pendingQuestion: PendingQuestion | null;
   pendingPlan: any[] | null;
   pendingErrorRecovery: PendingErrorRecovery | null;
+  /**
+   * 用户已对当前 pendingQuestion 提交了回复，等待 backend 消费。
+   * 关键：放在 store 而不是组件 useState，否则 forceReconnect / rehydrate 触发后
+   * `useEffect([draftKey])` 不会重跑，导致 answered 状态丢失、UI 重新变可编辑。
+   * 真正"已锁定"的判定：pendingQuestionAnswered=true。
+   */
+  pendingQuestionAnswered: boolean;
 
   // LLM 模式
   llmMode: 'real' | 'stub' | null;
   llmFallbackReason: string | null;
+
+  // SSE 连接状态（用于 UI 提示"连接已断开" / "正在重连" / "已重连"）
+  connectionStatus: 'connected' | 'reconnecting' | 'disconnected';
+  connectionDetail: string | null;
+  /**
+   * SSE 累计重连失败次数，达到上限（8）后 connectionStatus=disconnected，
+   * store 持有这个值，UI 借此知道"已放弃重连，需要用户手动操作"。
+   */
+  reconnectAttempt: number;
 
   // 成本
   totalCostUsd: number;
@@ -98,6 +115,14 @@ export interface AgentState {
   // 错误
   error: string | null;
   streamingText: string;
+
+  // 资产完成度（TASK_DONE 时由后端校验后填入，用于展示真实生成情况）
+  assetsSummary: Record<string, number> | null;
+  missingDeliverables: string[];
+
+  // 多轮对话记忆
+  conversationTurns: Array<{ turn: number; user_message: string; agent_summary: string; step_range: number[] }>;
+  memoryCompressed: boolean;
 
   // actions
   setTask: (taskId: string, status: AgentStatus, projectId?: string | null) => void;
@@ -120,9 +145,36 @@ export interface AgentState {
     llm_provider_id?: string | null;
     llm_model_id?: string | null;
   }) => void;
+  /**
+   * 从后端 AgentStep 表加载历史步骤，转换成 thoughts/actions/observations
+   * 事件灌入 store。用于重开历史任务时恢复完整的执行历史（检查点模式），
+   * 不依赖 SSE 内存重放 buffer（后端重启后 buffer 丢失）。
+   *
+   * 每个 step 的 step_number 作为去重键：后续 SSE 重放的相同 step 事件
+   * 会被 applyEvent 的 hasEvent 去重，不会重复追加。
+   */
+  hydrateSteps: (steps: AgentStepOut[]) => void;
   applyEvent: (event: AgentEventLike) => void;
   clearPendingQuestion: () => void;
   clearErrorRecovery: () => void;
+  /**
+   * 用户已对当前 pendingQuestion 提交了回复。
+   * 锁定 UI，避免 forceReconnect / rehydrate 重新打开回复组件。
+   * pendingQuestion 清空时由 reducer 自动重置为 false。
+   */
+  markPendingQuestionAnswered: () => void;
+  /**
+   * 显式更新 SSE 连接状态，由 agent-stream-manager 调用。
+   * 详见 connectionStatus 字段注释。
+   */
+  setConnectionStatus: (status: 'connected' | 'reconnecting' | 'disconnected', detail?: string | null) => void;
+  setReconnectAttempt: (n: number) => void;
+  /**
+   * 任务完成后继续对话：调用后端 /continue 端点注入用户追加需求。
+   * 后端会压缩早期记忆、追加 user_goal、发 CONVERSATION_CONTINUED 事件。
+   * 前端只需调 API，事件由 SSE stream handler 接收。
+   */
+  continueConversation: (message: string) => Promise<void>;
   reset: () => void;
 }
 
@@ -139,12 +191,20 @@ const INITIAL: Pick<
   | 'pendingQuestion'
   | 'pendingPlan'
   | 'pendingErrorRecovery'
+  | 'pendingQuestionAnswered'
   | 'llmMode'
   | 'llmFallbackReason'
+  | 'connectionStatus'
+  | 'connectionDetail'
+  | 'reconnectAttempt'
   | 'totalCostUsd'
   | 'totalTokens'
   | 'error'
   | 'streamingText'
+  | 'assetsSummary'
+  | 'missingDeliverables'
+  | 'conversationTurns'
+  | 'memoryCompressed'
 > = {
   taskId: null,
   projectId: null,
@@ -158,17 +218,71 @@ const INITIAL: Pick<
   pendingQuestion: null,
   pendingPlan: null,
   pendingErrorRecovery: null,
+  pendingQuestionAnswered: false,
   llmMode: null,
   llmFallbackReason: null,
+  connectionStatus: 'connected',
+  connectionDetail: null,
+  reconnectAttempt: 0,
   totalCostUsd: 0,
   totalTokens: 0,
   error: null,
   streamingText: '',
+  assetsSummary: null,
+  missingDeliverables: [],
+  conversationTurns: [],
+  memoryCompressed: false,
 };
 
 function bucketOf(assetKind: string | undefined): string {
   // 资产按细类分桶；未知细类归入 "other"
   return assetKind || 'other';
+}
+
+/**
+ * deliverables 名字到 artifacts asset_kind 的归一化映射。
+ * 与后端 runtime.py 的 _DELIVERABLE_ASSET_KIND_MAP 保持一致。
+ */
+const DELIVERABLE_ASSET_KIND_MAP: Record<string, string> = {
+  script: 'script',
+  commercial_script: 'script',
+  storyboard: 'storyboard',
+  video: 'video',
+  promotional_video: 'video',
+  commercial_video: 'video',
+  research_summary: 'research_summary',
+  campaign_brief: 'campaign_brief',
+  agreed_deliverables: 'agreed_deliverables',
+};
+
+/**
+ * 从 store.artifacts 计算资产摘要（每个 asset_kind 的可用数量）。
+ * 用于 hydrate 已完成任务时恢复 assetsSummary（TASK_DONE 事件可能已随
+ * 后端重启丢失），以及前端 UI 实时展示。
+ */
+function computeAssetsSummaryFromArtifacts(
+  artifacts: Record<string, ArtifactItem[]>,
+): Record<string, number> {
+  const summary: Record<string, number> = {};
+  for (const [kind, items] of Object.entries(artifacts || {})) {
+    if (!Array.isArray(items)) continue;
+    const count = items.filter(
+      (item) => item && typeof item === 'object' && !item.failed && !item.generating,
+    ).length;
+    if (count > 0) summary[kind] = count;
+  }
+  return summary;
+}
+
+function computeMissingDeliverablesFromSummary(
+  summary: Record<string, number>,
+  deliverables: string[] | undefined,
+): string[] {
+  if (!Array.isArray(deliverables) || deliverables.length === 0) return [];
+  return deliverables.filter((deliverable) => {
+    const assetKind = DELIVERABLE_ASSET_KIND_MAP[deliverable] ?? deliverable;
+    return (summary[assetKind] ?? 0) === 0;
+  });
 }
 
 function hasEvent(events: AgentEventLike[], event: AgentEventLike): boolean {
@@ -206,7 +320,7 @@ function normalizeQuestion(payload: Record<string, any>): PendingQuestion {
   };
 }
 
-export const useAgentStore = create<AgentState>((set) => ({
+export const useAgentStore = create<AgentState>((set, get) => ({
   ...INITIAL,
 
   setTask: (taskId, status, projectId = null) =>
@@ -246,14 +360,35 @@ export const useAgentStore = create<AgentState>((set) => ({
       if (snapshot.llm_provider_id || snapshot.llm_model_id) {
         mode = 'real';
       }
+      const nextArtifacts =
+        snapshot.artifacts && typeof snapshot.artifacts === 'object'
+          ? (snapshot.artifacts as Record<string, ArtifactItem[]>)
+          : state.artifacts;
+      const nextStatus = (snapshot.status as AgentStatus) || state.status;
+      const nextProfile = snapshot.task_profile ?? state.taskProfile;
+      // 已完成任务恢复时，TASK_DONE 事件可能已随后端重启丢失，
+      // 从 artifacts + taskProfile 重新计算资产摘要，确保 UI 仍能展示
+      // 真实生成情况和缺失项。
+      const shouldComputeSummary = nextStatus === 'done' && !state.assetsSummary;
+      const computedSummary = shouldComputeSummary
+        ? computeAssetsSummaryFromArtifacts(nextArtifacts)
+        : null;
+      const computedMissing = shouldComputeSummary && nextProfile
+        ? computeMissingDeliverablesFromSummary(computedSummary ?? {}, nextProfile.deliverables)
+        : [];
+      // 计算 hydrate 后是否仍有 pending question，用于决定 answered 是否保留
+      const hasPendingQFromSnapshot = nextStatus === 'paused' && (
+        (snapshot.pending_question && typeof snapshot.pending_question === 'object' && typeof snapshot.pending_question.question === 'string') ||
+        (snapshot.pending_response &&
+          typeof snapshot.pending_response === 'object' &&
+          !('response' in snapshot.pending_response) &&
+          typeof (snapshot.pending_response as any).question === 'string')
+      );
       return {
-        status: (snapshot.status as AgentStatus) || state.status,
+        status: nextStatus,
         plan: Array.isArray(snapshot.plan) ? snapshot.plan : state.plan,
-        artifacts:
-          snapshot.artifacts && typeof snapshot.artifacts === 'object'
-            ? (snapshot.artifacts as Record<string, ArtifactItem[]>)
-            : state.artifacts,
-        taskProfile: snapshot.task_profile ?? state.taskProfile,
+        artifacts: nextArtifacts,
+        taskProfile: nextProfile,
         totalCostUsd:
           typeof snapshot.total_cost_usd === 'number'
             ? snapshot.total_cost_usd
@@ -263,12 +398,23 @@ export const useAgentStore = create<AgentState>((set) => ({
             ? snapshot.total_tokens
             : state.totalTokens,
         llmMode: mode,
+        assetsSummary: computedSummary ?? state.assetsSummary,
+        missingDeliverables: computedMissing.length ? computedMissing : state.missingDeliverables,
+        conversationTurns: Array.isArray(snapshot.conversation_turns)
+          ? snapshot.conversation_turns as typeof state.conversationTurns
+          : state.conversationTurns,
+        memoryCompressed: Boolean(snapshot.memory_summary) || state.memoryCompressed,
         // pending_response 可能是 ask_user 的 question（response 还没填），
         // 也可能是用户已 respond 完等待 runtime resume 的载荷。
         // 只有前者才需要恢复成 pendingQuestion；后者由 SSE 的
         // user_input_received / task_resumed 事件处理。
-        pendingQuestion:
-          snapshot.pending_question && typeof snapshot.pending_question === 'object' && typeof snapshot.pending_question.question === 'string'
+        // 关键：只在 status === 'paused' 时恢复。
+        // 覆盖 rehydrate 时序问题：用户刚提交回复、forceReconnect 触发 rehydrate，
+        // 但后端 resume 是异步的——snapshot.status 此时可能已是 running。
+        // 此时不恢复 pendingQuestion，让 UI 立即前进，避免"卡在回复卡"循环。
+        pendingQuestion: nextStatus !== 'paused'
+          ? null
+          : snapshot.pending_question && typeof snapshot.pending_question === 'object' && typeof snapshot.pending_question.question === 'string'
             ? normalizeQuestion(snapshot.pending_question)
             : snapshot.pending_response &&
           typeof snapshot.pending_response === 'object' &&
@@ -276,7 +422,41 @@ export const useAgentStore = create<AgentState>((set) => ({
           typeof (snapshot.pending_response as any).question === 'string'
             ? normalizeQuestion(snapshot.pending_response as Record<string, any>)
             : state.pendingQuestion,
+        // 已回答状态：仅在"恢复后的 pendingQuestion 仍然非空"时保留（重开历史 paused 任务），
+        // 否则强制清零（task 已 running / done / failed / 不再有 pending question）。
+        pendingQuestionAnswered: hasPendingQFromSnapshot ? state.pendingQuestionAnswered : false,
       };
+    }),
+
+  hydrateSteps: (steps) =>
+    set((state) => {
+      const thoughts: AgentEventLike[] = [];
+      const actions: AgentEventLike[] = [];
+      const observations: AgentEventLike[] = [];
+      for (const s of steps) {
+        // thought 可能为 null 或空字符串，跳过空值避免 ThoughtStream 出现空白卡片
+        if (typeof s.thought === 'string' && s.thought.trim()) {
+          thoughts.push({
+            type: 'thought',
+            payload: { text: s.thought, step: s.step_number },
+          });
+        }
+        // action: { tool, params } — 非空才灌入
+        if (s.action && (s.action.tool || s.action.params)) {
+          actions.push({
+            type: 'action',
+            payload: { ...s.action, step: s.step_number },
+          });
+        }
+        // observation: { success, result/error } — 非空才灌入
+        if (s.observation && (s.observation.success !== undefined || s.observation.result !== undefined || s.observation.error)) {
+          observations.push({
+            type: 'observation',
+            payload: { ...s.observation, step: s.step_number },
+          });
+        }
+      }
+      return { thoughts, actions, observations };
     }),
 
   applyEvent: (event) =>
@@ -311,9 +491,17 @@ export const useAgentStore = create<AgentState>((set) => ({
                 // Replayed history can contain thoughts before the original
                 // request_user_input event. Keep the draft question mounted
                 // while paused so reconnects cannot erase the user's typing.
-                ...(state.status === 'paused' && state.pendingQuestion
+                //
+                // 用户已回答后（pendingQuestionAnswered=true），灰色卡片需保持可见，
+                // 让用户知道"agent 正在处理我的回答"。仅在以下情况清空：
+                //   1. status === 'failed' / 'done' / 'cancelled'（任务结束）
+                //   2. 新的 request_user_input 事件（handled below）
+                //   3. 用户显式调用 clearPendingQuestion
+                // 注：清空 pendingQuestion 时同时清 answered，否则下次 ask_user
+                // 会带着"已答完"状态显示，UI 永远变灰。
+                ...((state.status === 'paused' && state.pendingQuestion) || state.pendingQuestionAnswered
                   ? {}
-                  : { pendingQuestion: null }),
+                  : { pendingQuestion: null, pendingQuestionAnswered: false }),
               };
         case 'text_delta':
           return { streamingText: `${state.streamingText}${String(p.text || '')}` };
@@ -326,9 +514,10 @@ export const useAgentStore = create<AgentState>((set) => ({
             ? {}
             : {
                 actions: [...state.actions, event],
-                ...(state.status === 'paused' && state.pendingQuestion
+                // 与 thought 同样的清理规则：已回答的灰色 question 保持可见
+                ...((state.status === 'paused' && state.pendingQuestion) || state.pendingQuestionAnswered
                   ? {}
-                  : { pendingQuestion: null }),
+                  : { pendingQuestion: null, pendingQuestionAnswered: false }),
               };
         case 'observation':
           return hasEvent(state.observations, event) ? {} : { observations: [...state.observations, event], streamingText: '' };
@@ -367,7 +556,8 @@ export const useAgentStore = create<AgentState>((set) => ({
           };
         }
         case 'request_user_input':
-          return { pendingQuestion: normalizeQuestion(p), status: 'paused' };
+          // 收到新的提问 → 重置 answered 状态（旧 answered 必然属于上一个问题）
+          return { pendingQuestion: normalizeQuestion(p), status: 'paused', pendingQuestionAnswered: false };
         case 'user_input_received':
           // Keep the question visible until the resumed runtime emits its
           // first thought/action. If resume fails after this event, the user
@@ -429,12 +619,47 @@ export const useAgentStore = create<AgentState>((set) => ({
         case 'task_resumed':
           return { status: 'running' };
         case 'task_done':
-          return { status: 'done' };
+          return {
+            status: 'done',
+            assetsSummary:
+              p.assets_summary && typeof p.assets_summary === 'object'
+                ? p.assets_summary as Record<string, number>
+                : state.assetsSummary,
+            missingDeliverables: Array.isArray(p.missing_deliverables)
+              ? p.missing_deliverables as string[]
+              : state.missingDeliverables,
+            // 任务完成：清空已答的灰色 question 残留，避免与"继续对话"输入框同时显示
+            pendingQuestion: null,
+            pendingQuestionAnswered: false,
+          };
         case 'task_failed':
           return {
             status: p.cancelled ? 'cancelled' : 'failed',
             error: p.error || 'task failed',
+            // 任务失败/取消：清空灰色 question（如果还有 pending_response 残留也要清）
+            pendingQuestion: null,
+            pendingQuestionAnswered: false,
           };
+        case 'conversation_continued':
+          // 继续对话：状态切回 running，记录轮次
+          return {
+            status: 'running',
+            error: null,
+            conversationTurns: p.turn && p.user_message
+              ? [
+                  ...state.conversationTurns,
+                  {
+                    turn: p.turn as number,
+                    user_message: p.user_message as string,
+                    agent_summary: '',
+                    step_range: [],
+                  },
+                ]
+              : state.conversationTurns,
+          };
+        case 'memory_compressed':
+          // 记忆压缩完成：标记已压缩，后续可从 hydrate 恢复
+          return { memoryCompressed: true };
         case 'cost_update':
           return {
             totalCostUsd: state.totalCostUsd + Number(p.cost_usd || 0),
@@ -445,9 +670,28 @@ export const useAgentStore = create<AgentState>((set) => ({
       }
     }),
 
-  clearPendingQuestion: () => set({ pendingQuestion: null }),
+  clearPendingQuestion: () => set({ pendingQuestion: null, pendingQuestionAnswered: false }),
 
   clearErrorRecovery: () => set({ pendingErrorRecovery: null }),
+
+  markPendingQuestionAnswered: () => set({ pendingQuestionAnswered: true }),
+
+  setConnectionStatus: (status, detail = null) => set({ connectionStatus: status, connectionDetail: detail }),
+
+  setReconnectAttempt: (n) => set({ reconnectAttempt: Math.max(0, n) }),
+
+  continueConversation: async (message: string) => {
+    const { taskId } = get();
+    if (!taskId) throw new Error('no active task');
+    const trimmed = message.trim();
+    if (!trimmed) throw new Error('message must not be empty');
+    // 乐观清空 done 状态的资产摘要显示，避免与新轮次混淆
+    set({ error: null });
+    await api.continueConversation(taskId, trimmed);
+    // 后端会发 CONVERSATION_CONTINUED + TASK_RESUMED 事件，
+    // applyEvent 会把 status 切回 running。此处不手动改状态，
+    // 避免与 SSE 事件竞争。
+  },
 
   reset: () => set({ ...INITIAL }),
 }));

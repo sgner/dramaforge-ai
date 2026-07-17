@@ -65,10 +65,70 @@ def _is_upload_only_request(text: str) -> bool:
     )
 
 
+# 单一资产生成意图的关键词映射。
+# 当用户目标只要求生成某类资产（如"给我画一个赛博朋克女主角角色图"），
+# 不需要走 drama_short 的 script → storyboard → video 全流程，
+# 直接允许 agent 调用对应的 generate_* 工具。
+# key: deliverable 名称（与 TaskProfile.deliverables 对齐）
+# keywords: 触发该 deliverable 的中英文关键词
+_SINGLE_ASSET_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "character": (
+        "角色图", "角色设计", "角色卡", "人物图", "人物设计", "角色立绘", "角色 portrait",
+        "character portrait", "character design", "character sheet", "character image",
+        "角色形象", "角色画", "画个角色", "画一个角色", "生成角色", "生成一个角色",
+    ),
+    "scene": (
+        "场景图", "场景设计", "场景概念图", "场景画", "scene image", "scene concept",
+        "scene design", "环境图", "背景图", "生成场景", "画一个场景",
+    ),
+    "prop": (
+        "道具图", "道具设计", "物品图", "prop image", "prop design", "生成道具",
+    ),
+    "storyboard": (
+        "分镜图", "分镜画", "storyboard image", "storyboard frame", "生成分镜",
+    ),
+}
+
+
+def _detect_single_asset_intent(text: str) -> list[str]:
+    """检测用户目标是否只要求生成单一类型的资产。
+
+    返回匹配到的 deliverable 列表（通常为 1 项）。空列表表示不是单一资产意图。
+    用于绕过 drama_short 全流程的 script gate，让 agent 直接生成所需资产。
+    """
+    normalized = text.lower()
+    matched: list[str] = []
+    for deliverable, keywords in _SINGLE_ASSET_KEYWORDS.items():
+        if any(kw.lower() in normalized for kw in keywords):
+            matched.append(deliverable)
+    return matched
+
+
 def classify_task(user_goal: str, parsed_goal: dict | None, project_assets: list[dict]) -> TaskProfile:
     """Classify a goal without network/provider calls or mutable state."""
     text = _text(user_goal, parsed_goal)
     asset_count = len(project_assets or [])
+
+    # 单一资产生成意图检测：用户只要求生成角色图/场景图/道具图等，
+    # 不需要走 drama_short 的 script → storyboard → video 全流程。
+    # 这种任务直接允许 agent 调用对应的 generate_* 工具，不要求 script source。
+    single_asset_deliverables = _detect_single_asset_intent(text)
+    if single_asset_deliverables and not any(
+        word in text for word in ("drama", "短剧", "剧情", "script", "脚本", "剧本", "视频", "video")
+    ):
+        return TaskProfile(
+            task_type="custom",
+            input_mode="single_asset",
+            source_kind="topic",
+            script_required=False,
+            needs_clarification=False,
+            deliverables=single_asset_deliverables,
+            asset_strategy="request or create required assets",
+            confidence=0.85,
+            missing_inputs=[],
+            rule_pack_id="custom.v1",
+        )
+
     has_script = _has_source(parsed_goal, ("script", "screenplay", "script_text")) or any(
         isinstance(asset, dict) and asset.get("asset_kind") == "script" for asset in project_assets or []
     )

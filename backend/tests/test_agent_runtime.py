@@ -319,6 +319,184 @@ async def test_runtime_finish_task_marks_done():
     assert runtime.state == AgentState.DONE
 
 
+# ========================
+# finish_task 资产完成度校验测试
+# ========================
+
+def _drama_profile(deliverables=("script", "storyboard", "video")) -> "TaskProfile":
+    from app.agent.task_profiles import TaskProfile
+    return TaskProfile(
+        task_type="drama_short",
+        input_mode="complete_script",
+        source_kind="script",
+        script_required=True,
+        needs_clarification=False,
+        deliverables=list(deliverables),
+        asset_strategy="reuse_inspected_assets",
+        confidence=0.95,
+        missing_inputs=[],
+        rule_pack_id="drama_short.v1",
+    )
+
+
+@pytest.mark.asyncio
+async def test_finish_task_emits_assets_summary_and_missing_deliverables():
+    """finish_task 必须在 TASK_DONE payload 中包含真实资产统计和缺失项。
+
+    回归问题：此前 finish_task 分支只传 summary 参数，不校验 artifacts，
+    导致 agent 仅生成文本就能"假完成"，前端无法发现实际资产未生成。
+    """
+    from app.agent.events import event_bus
+
+    task_id = "t-finish-empty"
+    event_bus.clear_log(task_id)
+    llm = _StubLLM([{"tool_name": "finish_task", "tool_args": {}, "content": None}])
+    memory = AgentMemory(user_goal="功夫短剧", plan=[])
+    runtime = AgentRuntime(
+        task_id=task_id, llm=llm, memory=memory, profile=_drama_profile(),
+    )
+    runtime.registry.register(_FinishLLMTool())
+
+    is_done = await runtime.step()
+
+    assert is_done is True
+    assert runtime.state == AgentState.DONE
+    done_events = [e for e in event_bus.get_replay(task_id) if e.type == EventType.TASK_DONE]
+    assert done_events, "应发射 TASK_DONE 事件"
+    payload = done_events[-1].payload
+    # 空 artifacts → 全部 deliverables 缺失
+    assert payload["assets_summary"] == {}
+    assert set(payload["missing_deliverables"]) == {"script", "storyboard", "video"}
+    assert payload["incomplete"] is True
+    assert payload["total_assets"] == 0
+    # memory 中的 step observation 也应包含摘要（用于持久化恢复）
+    assert memory.short_term[-1].observation["assets_summary"] == {}
+    assert "missing_deliverables" in memory.short_term[-1].observation
+
+
+@pytest.mark.asyncio
+async def test_finish_task_with_partial_assets_reports_partial_completion():
+    """部分资产已生成时，assets_summary 应反映真实数量，missing_deliverables 只列缺失项。"""
+    from app.agent.events import event_bus
+
+    task_id = "t-finish-partial"
+    event_bus.clear_log(task_id)
+    llm = _StubLLM([{"tool_name": "finish_task", "tool_args": {}, "content": None}])
+    memory = AgentMemory(user_goal="功夫短剧", plan=[])
+    # 预置一个 script 资产（模拟 generate_script 成功后的 artifacts）
+    memory.set_artifact("script", {
+        "id": "script-1", "kind": "text", "asset_kind": "script",
+        "name": "功夫短剧剧本", "url": "/assets/script-1.txt", "failed": False,
+    })
+    runtime = AgentRuntime(
+        task_id=task_id, llm=llm, memory=memory, profile=_drama_profile(),
+    )
+    runtime.registry.register(_FinishLLMTool())
+
+    is_done = await runtime.step()
+
+    assert is_done is True
+    done_events = [e for e in event_bus.get_replay(task_id) if e.type == EventType.TASK_DONE]
+    payload = done_events[-1].payload
+    # script 已生成，storyboard 和 video 缺失
+    assert payload["assets_summary"] == {"script": 1}
+    assert set(payload["missing_deliverables"]) == {"storyboard", "video"}
+    assert payload["incomplete"] is True
+    assert payload["total_assets"] == 1
+
+
+@pytest.mark.asyncio
+async def test_finish_task_complete_when_all_deliverables_present():
+    """所有 deliverables 都已生成时，incomplete 应为 False，missing_deliverables 为空。"""
+    from app.agent.events import event_bus
+
+    task_id = "t-finish-complete"
+    event_bus.clear_log(task_id)
+    llm = _StubLLM([{"tool_name": "finish_task", "tool_args": {}, "content": None}])
+    memory = AgentMemory(user_goal="功夫短剧", plan=[])
+    memory.set_artifact("script", {"id": "s1", "failed": False})
+    memory.set_artifact("storyboard", {"id": "sb1", "failed": False})
+    memory.set_artifact("video", {"id": "v1", "failed": False})
+    runtime = AgentRuntime(
+        task_id=task_id, llm=llm, memory=memory, profile=_drama_profile(),
+    )
+    runtime.registry.register(_FinishLLMTool())
+
+    await runtime.step()
+
+    done_events = [e for e in event_bus.get_replay(task_id) if e.type == EventType.TASK_DONE]
+    payload = done_events[-1].payload
+    assert payload["assets_summary"] == {"script": 1, "storyboard": 1, "video": 1}
+    assert payload["missing_deliverables"] == []
+    assert payload["incomplete"] is False
+    assert payload["total_assets"] == 3
+
+
+def test_compute_assets_summary_excludes_failed_and_generating():
+    """compute_assets_summary 应排除 failed 和 generating 状态的资产。"""
+    from app.agent.runtime import compute_assets_summary
+
+    artifacts = {
+        "script": [
+            {"id": "s1", "failed": False},
+            {"id": "s2", "failed": True},
+        ],
+        "scene": [
+            {"id": "sc1", "generating": True},
+            {"id": "sc2", "generating": False},
+        ],
+        "character": [
+            {"id": "c1"},
+            {"id": "c2"},
+        ],
+    }
+    summary = compute_assets_summary(artifacts)
+    assert summary == {"script": 1, "scene": 1, "character": 2}
+
+
+def test_compute_missing_deliverables_normalizes_promotional_video():
+    """compute_missing_deliverables 应把 promotional_video 归一到 video asset_kind。"""
+    from app.agent.runtime import compute_missing_deliverables
+
+    summary = {"video": 1, "storyboard": 2}
+    deliverables = ["script", "storyboard", "promotional_video"]
+    missing = compute_missing_deliverables(summary, deliverables)
+    assert "storyboard" not in missing
+    assert "promotional_video" not in missing
+    assert "script" in missing
+
+
+def test_begin_media_asset_rejects_thought_as_prompt():
+    """_begin_media_asset 不应把 character.description（可能含 thought 文本）作为 prompt。
+
+    回归问题：LLM 把思考内容塞进 character.description，_begin_media_asset
+    用 source.get("prompt") or source.get("description") 作为 prompt，
+    导致 thought 被写入 Asset 节点浮窗。
+    修复后强制使用 _build_character_prompt 等结构化构建函数。
+    """
+    from app.agent.tools.image_tools import _build_character_prompt
+
+    # 模拟 LLM 把 thought 塞进 description
+    character_with_thought = {
+        "name": "林尘",
+        "age": 25,
+        "gender": "女",
+        "appearance": "黑色短发，绿色眼睛，穿皮夹克",
+        "personality": "冷静果断",
+        "description": "我需要先构思一个赛博朋克风格的女主角，她应该有冷酷的气质...",
+        "prompt": "这是一个思考过程的 prompt，不应该被使用",
+    }
+
+    # _build_character_prompt 只用结构化字段，忽略 prompt/description
+    prompt = _build_character_prompt(character_with_thought, style="cinematic")
+    assert "林尘" in prompt
+    assert "黑色短发" in prompt
+    assert "皮夹克" in prompt
+    # thought 文本不应出现在 prompt 中
+    assert "我需要先构思" not in prompt
+    assert "思考过程" not in prompt
+
+
 @pytest.mark.asyncio
 async def test_runtime_handles_tool_failure():
     """工具失败时 observation 标记 failed。"""
@@ -424,6 +602,155 @@ async def test_runtime_max_steps_protection():
     is_done = await runtime.step()
     assert is_done is True
     assert runtime.state == AgentState.FAILED
+
+
+# ========================
+# 继续对话 + 记忆压缩测试
+# ========================
+
+@pytest.mark.asyncio
+async def test_continue_conversation_rejects_when_not_done():
+    """continue_conversation 只能在 DONE 状态调用。"""
+    from app.agent.events import event_bus
+
+    task_id = "t-continue-not-done"
+    event_bus.clear_log(task_id)
+    llm = _StubLLM([])
+    memory = AgentMemory(user_goal="x", plan=[])
+    runtime = AgentRuntime(task_id=task_id, llm=llm, memory=memory)
+    runtime.state = AgentState.RUNNING
+
+    result = await runtime.continue_conversation("追加需求")
+
+    assert result is False
+    assert runtime.state == AgentState.RUNNING
+
+
+@pytest.mark.asyncio
+async def test_continue_conversation_injects_followup_and_resumes():
+    """DONE 状态下 continue_conversation 注入 user_followup step 并切回 RUNNING。"""
+    from app.agent.events import event_bus
+
+    task_id = "t-continue-basic"
+    event_bus.clear_log(task_id)
+    llm = _StubLLM([
+        # continue_conversation 调用后 step() 会消费这个响应
+        {"tool_name": "finish_task", "tool_args": {}, "content": None},
+    ])
+    memory = AgentMemory(user_goal="原始目标", plan=[])
+    runtime = AgentRuntime(task_id=task_id, llm=llm, memory=memory)
+    runtime.registry.register(_FinishLLMTool())
+    runtime.state = AgentState.DONE
+
+    result = await runtime.continue_conversation("再生成一个反派角色")
+
+    assert result is True  # step() 跑完后 finish_task 返回 True
+    # user_goal 应追加用户消息
+    assert "[用户追加] 再生成一个反派角色" in memory.user_goal
+    assert "原始目标" in memory.user_goal
+    # 应注入 user_followup step
+    followup_steps = [s for s in memory.short_term if s.action.get("tool") == "user_followup"]
+    assert len(followup_steps) == 1
+    assert followup_steps[0].observation["user_message"] == "再生成一个反派角色"
+    # 应发射 CONVERSATION_CONTINUED 事件
+    continued_events = [e for e in event_bus.get_replay(task_id) if e.type == EventType.CONVERSATION_CONTINUED]
+    assert continued_events, "应发射 CONVERSATION_CONTINUED 事件"
+    assert continued_events[-1].payload["user_message"] == "再生成一个反派角色"
+
+
+@pytest.mark.asyncio
+async def test_continue_conversation_empty_message_rejected():
+    """空消息应被拒绝，不改变状态。"""
+    llm = _StubLLM([])
+    memory = AgentMemory(user_goal="x", plan=[])
+    runtime = AgentRuntime(task_id="t1", llm=llm, memory=memory)
+    runtime.state = AgentState.DONE
+
+    result = await runtime.continue_conversation("   ")
+
+    assert result is False
+    assert runtime.state == AgentState.DONE
+
+
+@pytest.mark.asyncio
+async def test_compress_conversation_memory_compresses_early_steps():
+    """步数超过阈值时，_compress_conversation_memory 把早期步骤压缩为摘要。"""
+    from app.agent.events import event_bus
+
+    task_id = "t-compress"
+    event_bus.clear_log(task_id)
+    # 压缩用 LLM 返回摘要文本
+    llm = _StubLLM([
+        {"content": "已生成脚本和 3 个角色，用户确认了武侠风格。", "tool_name": None, "tool_args": None},
+    ])
+    memory = AgentMemory(user_goal="武侠短剧", plan=[])
+    # 预置 20 个 step（超过阈值 15）
+    for i in range(1, 21):
+        memory.add_step(
+            step_number=i,
+            thought=f"思考 {i}",
+            action={"tool": "echo", "params": {"text": str(i)}},
+            observation={"result": {"ok": True, "text": str(i)}},
+            status="success",
+        )
+    runtime = AgentRuntime(task_id=task_id, llm=llm, memory=memory)
+
+    await runtime._compress_conversation_memory(
+        turn=1, user_message="继续生成场景", keep_recent=10,
+    )
+
+    # 早期 10 步被压缩，只保留最近 10 步
+    assert len(memory.short_term) == 10
+    assert memory.short_term[0].step_number == 11  # 保留的是 11-20
+    # 摘要应被存入 compressed_summary
+    assert "武侠" in memory.compressed_summary or "脚本" in memory.compressed_summary
+    # conversation_turns 应记录这一轮
+    assert len(memory.conversation_turns) == 1
+    turn = memory.conversation_turns[0]
+    assert turn["turn"] == 1
+    assert turn["user_message"] == "继续生成场景"
+    assert turn["step_range"] == [1, 10]
+    # 应发射 MEMORY_COMPRESSED 事件
+    compressed_events = [e for e in event_bus.get_replay(task_id) if e.type == EventType.MEMORY_COMPRESSED]
+    assert compressed_events, "应发射 MEMORY_COMPRESSED 事件"
+    assert compressed_events[-1].payload["compressed_count"] == 10
+
+
+@pytest.mark.asyncio
+async def test_compress_skips_when_below_threshold():
+    """步数不超过 keep_recent 时不压缩。"""
+    llm = _StubLLM([])
+    memory = AgentMemory(user_goal="x", plan=[])
+    for i in range(1, 6):  # 只有 5 步
+        memory.add_step(step_number=i, thought="t", action={}, observation={}, status="success")
+    runtime = AgentRuntime(task_id="t1", llm=llm, memory=memory)
+
+    await runtime._compress_conversation_memory(turn=1, user_message="msg", keep_recent=10)
+
+    assert len(memory.short_term) == 5  # 未变
+    assert memory.compressed_summary == ""
+    assert len(memory.conversation_turns) == 0
+
+
+def test_build_react_prompt_includes_compressed_summary_and_turns():
+    """build_react_prompt 应注入 compressed_summary 和 conversation_turns 段落。"""
+    from app.agent.llm import build_react_prompt
+
+    prompt = build_react_prompt(
+        user_goal="武侠短剧",
+        plan=[],
+        artifacts={},
+        recent_steps=[],
+        tool_summaries=[],
+        compressed_summary="第 1 轮已完成脚本生成和 3 个角色。",
+        conversation_turns=[
+            {"turn": 1, "user_message": "生成武侠短剧", "agent_summary": "已生成脚本", "step_range": [1, 10]},
+        ],
+    )
+    assert "【早期执行摘要】" in prompt
+    assert "第 1 轮已完成脚本生成" in prompt
+    assert "【历史对话轮次】" in prompt
+    assert "生成武侠短剧" in prompt
 
 
 class TestRuntimeToolErrorRecovery:

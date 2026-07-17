@@ -227,9 +227,13 @@ async def stream_events(task_id: str):
             #    这是修复"前端显示 0 想法 0 动作"的关键——runtime 在 create_task
             #    返回后立即启动并开始 emit，而 EventSource 在前端 setTask 之后才
             #    打开，中间的所有事件都进不了 SSE；重放保证不丢。
-            for past in event_bus.get_replay(task_id):
+            replay_events = event_bus.get_replay(task_id)
+            for idx, past in enumerate(replay_events):
                 yield past.to_sse(event_id=int(past.timestamp * 1000))
-                if past.type in (EventType.TASK_DONE, EventType.TASK_FAILED):
+                # 只有当 TASK_DONE/TASK_FAILED 是最后一个事件时才关闭 stream。
+                # 如果不是最后一个（说明 task 之前失败过但后来 retry/resume 了），
+                # 继续重放后续事件，避免前端误判 task 已结束。
+                if past.type in (EventType.TASK_DONE, EventType.TASK_FAILED) and idx == len(replay_events) - 1:
                     # task 已结束，没有 live 事件了；直接关闭 stream
                     return
 
@@ -468,10 +472,14 @@ async def _continue_runtime(task_id: str) -> None:
                 "artifacts": dict(task_row.artifacts or {}),
                 "task_profile": task_row.task_profile,
                 "rule_pack_version": task_row.rule_pack_version,
+                "conversation_turns": list(task_row.conversation_turns or []),
+                "memory_summary": task_row.memory_summary or "",
             }
             steps = db.query(AgentStep).filter_by(task_id=task_id).order_by(AgentStep.step_number).all()
             memory = AgentMemory(user_goal=task_dict["user_goal"], plan=task_dict["plan"])
             memory.artifacts = task_dict["artifacts"]
+            memory.conversation_turns = task_dict["conversation_turns"]
+            memory.compressed_summary = task_dict["memory_summary"]
             for s in steps:
                 memory.short_term.append(StepRecord(
                     step_number=s.step_number,
@@ -561,13 +569,23 @@ async def _continue_runtime(task_id: str) -> None:
 
         # 6. 注入用户响应
         pending_response = task_dict.get("pending_response") or {}
-        user_response = pending_response
-        if runtime.state == AgentState.PAUSED and user_response is not None:
-            # resume() 会把 user_response 注入 memory 并跑一步；后续主循环会接管
-            await runtime.resume(user_response)
-            # 把刚 step 出来的 step 落库
+        continue_message = pending_response.get("continue_message")
+        if continue_message:
+            # 继续对话路径：任务已完成，用户追加需求。
+            # continue_conversation 要求 state == DONE，先设好再调用。
+            runtime.state = AgentState.DONE
+            await runtime.continue_conversation(continue_message)
             _persist_steps(task_id, memory, runtime)
             _sync_task_artifacts(task_id, memory, runtime)
+            _sync_conversation_memory(task_id, memory)
+        else:
+            user_response = pending_response
+            if runtime.state == AgentState.PAUSED and user_response is not None:
+                # resume() 会把 user_response 注入 memory 并跑一步；后续主循环会接管
+                await runtime.resume(user_response)
+                # 把刚 step 出来的 step 落库
+                _persist_steps(task_id, memory, runtime)
+                _sync_task_artifacts(task_id, memory, runtime)
 
         # 7. 跑主循环
         _update_task_status(task_id, "running")
@@ -575,11 +593,38 @@ async def _continue_runtime(task_id: str) -> None:
 
     except Exception as e:  # noqa: BLE001
         logger.exception("continue_runtime for task %s failed", task_id)
-        _update_task_status(task_id, "failed")
+        # 失败回滚策略：
+        # 区分 resume 前失败（pending_response 还没被 consume）vs resume 后失败
+        # （pending_request 已被清空但 step 已注入）。两种情况都把 task 状态
+        # 回滚为 paused，并尽量保留 pending_response 字段，让用户重新调
+        # /resume 重试（重复 resume 的副作用是 memory 多一个 observation，
+        # 但不会卡死；好过丢失用户输入）。
+        with SessionLocal() as db:
+            task_row = db.query(AgentTask).filter_by(id=task_id).first()
+            if task_row is not None and task_row.status == "running":
+                # pending_response 仍存在 → 未被 consume，保留
+                # pending_response 已被清空 → 找最近 ask_user step 的
+                # observation.user_response 重建回去（用户输入不丢）
+                if not task_row.pending_response:
+                    from ..models import AgentStep as _Step
+                    last_ask = (
+                        db.query(_Step)
+                        .filter_by(task_id=task_id, status="success")
+                        .order_by(_Step.step_number.desc())
+                        .first()
+                    )
+                    if last_ask and (last_ask.action or {}).get("tool") == "ask_user":
+                        ur = (last_ask.observation or {}).get("user_response")
+                        if ur is not None:
+                            task_row.pending_response = {"response": ur}
+                            db.commit()
+                task_row.status = "paused"
+                task_row.updated_at = _now()
+                db.commit()
         try:
             await event_bus.publish(AgentEvent(
                 task_id=task_id, type=EventType.TASK_FAILED,
-                payload={"error": str(e)},
+                payload={"error": str(e), "recoverable": True, "hint": "task rolled back to paused; pending_response preserved; call /resume to retry"},
             ))
         except Exception:
             pass
@@ -623,6 +668,12 @@ async def _run_runtime_loop(task_id: str, runtime: AgentRuntime, memory: AgentMe
     if runtime.state == AgentState.CANCELLED:
         _update_task_status(task_id, "cancelled")
         return
+    if runtime.state == AgentState.DONE:
+        # finish_task 分支已发 TASK_DONE（含 assets_summary / missing_deliverables
+        # 等详情），这里只更新 DB 状态，不重复发事件，避免覆盖详细 payload。
+        _update_task_status(task_id, "done")
+        return
+    # 兜底：理论上不会走到这里（loop 退出时 state 必为 PAUSED/FAILED/CANCELLED/DONE）
     final_status = "done" if runtime.state.value == "done" else "failed"
     _update_task_status(task_id, final_status)
     await event_bus.publish(AgentEvent(
@@ -694,6 +745,9 @@ def _sync_task_artifacts(task_id: str, memory: AgentMemory, runtime: AgentRuntim
                 t.artifacts = dict(memory.artifacts)
             t.total_cost_usd = memory.total_cost_usd
             t.total_tokens = memory.total_tokens
+            # 多轮对话记忆持久化
+            t.conversation_turns = list(memory.conversation_turns)
+            t.memory_summary = memory.compressed_summary or None
             if runtime is not None and runtime.profile is not None:
                 t.task_profile = runtime.profile.model_dump(mode="json")
                 t.rule_pack_version = runtime.profile.rule_pack_id.rsplit(".", 1)[-1]
@@ -701,6 +755,22 @@ def _sync_task_artifacts(task_id: str, memory: AgentMemory, runtime: AgentRuntim
             db.commit()
     except Exception as e:
         logger.warning("failed to sync artifacts for %s: %s", task_id, e)
+
+
+def _sync_conversation_memory(task_id: str, memory: AgentMemory) -> None:
+    """单独同步多轮对话记忆字段（压缩后立即调用）。"""
+    try:
+        with SessionLocal() as db:
+            t = db.query(AgentTask).filter_by(id=task_id).first()
+            if not t:
+                return
+            t.conversation_turns = list(memory.conversation_turns)
+            t.memory_summary = memory.compressed_summary or None
+            t.user_goal = memory.user_goal
+            t.updated_at = _now()
+            db.commit()
+    except Exception as e:
+        logger.warning("failed to sync conversation memory for %s: %s", task_id, e)
 
 
 # ========================
@@ -784,6 +854,10 @@ async def retry_task(
             except asyncio.TimeoutError as exc:
                 raise HTTPException(409, "Task is still running") from exc
     db.query(AgentStep).filter_by(task_id=task_id).delete()
+    # 清空 SSE 事件日志：retry 是全新生命周期，旧的 TASK_FAILED 等终态事件
+    # 如果留在 _event_log 中，SSE 重连重放时会立即关闭连接（stream 遇到
+    # TASK_DONE/TASK_FAILED 就 return），导致前端误判 task 已结束。
+    event_bus.clear_log(task_id)
     task.status = "pending"
     task.plan = []
     task.artifacts = {}
@@ -852,3 +926,35 @@ async def resume_task(task_id: str, db: Session = Depends(get_db)):
         await _continue_runtime(task_id)
     _schedule_runtime(task_id, _spawn())
     return {"ok": True, "task_id": task_id, "status": "resuming"}
+
+
+@router.post("/tasks/{task_id}/continue")
+async def continue_conversation(task_id: str, body: schemas.ContinueConversationRequest, db: Session = Depends(get_db)):
+    """任务完成后继续对话。
+
+    用户对已完成任务追加需求时调用。后端把 message 写入
+    pending_response.continue_message，状态改为 paused，然后
+    调度 _continue_runtime 走 continue_conversation 路径。
+    """
+    task = db.query(AgentTask).filter_by(id=task_id).first()
+    if not task:
+        raise HTTPException(404, f"Task {task_id} not found")
+    if task.status != "done":
+        raise HTTPException(400, f"Cannot continue task in status {task.status}; only 'done' tasks can be continued")
+    message = (body.message or "").strip()
+    if not message:
+        raise HTTPException(400, "message must not be empty")
+
+    task.pending_response = {"continue_message": message}
+    task.status = "paused"
+    task.updated_at = _now()
+    db.commit()
+
+    await event_bus.publish(AgentEvent(
+        task_id=task_id, type=EventType.TASK_RESUMED,
+        payload={"continue_message": message},
+    ))
+    async def _spawn_continue() -> None:
+        await _continue_runtime(task_id)
+    _schedule_runtime(task_id, _spawn_continue())
+    return {"ok": True, "task_id": task_id, "status": "continuing"}

@@ -102,4 +102,37 @@ describe('AgentPetController', () => {
     expect(screen.getByTestId('agent-pet-media-prompt')).toHaveTextContent('four-view warrior portrait');
     expect(screen.getByTestId('agent-pet-media-model')).toHaveTextContent('gpt-image-2');
   });
+
+  it('shows the SSE reconnecting banner with a retry button when connectionStatus is reconnecting', () => {
+    useAgentStore.setState({ taskId: 't-conn', projectId: 'p1', status: 'running' });
+    useAgentStore.getState().setConnectionStatus('reconnecting', '第 1/8 次重连');
+    const container = createContainer();
+    render(<AgentPetController projectId="p1" containerRef={{ current: container }} />);
+
+    const banner = screen.getByTestId('agent-pet-connection-reconnecting');
+    expect(banner).toBeInTheDocument();
+    expect(banner.textContent).toContain('正在重连');
+    expect(screen.getByTestId('agent-pet-connection-retry')).toBeInTheDocument();
+  });
+
+  it('shows the SSE disconnected banner when the retry budget is exhausted', () => {
+    useAgentStore.setState({ taskId: 't-conn', projectId: 'p1', status: 'running' });
+    useAgentStore.getState().setConnectionStatus('disconnected', '已尝试 8 次仍失败');
+    const container = createContainer();
+    render(<AgentPetController projectId="p1" containerRef={{ current: container }} />);
+
+    const banner = screen.getByTestId('agent-pet-connection-disconnected');
+    expect(banner).toBeInTheDocument();
+    expect(banner.textContent).toContain('连接已断开');
+    expect(screen.getByTestId('agent-pet-connection-retry')).toBeInTheDocument();
+  });
+
+  it('hides the connection banner when status is connected', () => {
+    useAgentStore.setState({ taskId: 't-conn', projectId: 'p1', status: 'running', connectionStatus: 'connected', connectionDetail: null });
+    const container = createContainer();
+    render(<AgentPetController projectId="p1" containerRef={{ current: container }} />);
+
+    expect(screen.queryByTestId('agent-pet-connection-reconnecting')).toBeNull();
+    expect(screen.queryByTestId('agent-pet-connection-disconnected')).toBeNull();
+  });
 });

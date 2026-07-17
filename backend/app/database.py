@@ -1,6 +1,6 @@
 """SQLite 数据库 — SQLAlchemy ORM"""
 import logging
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, inspect, text, event
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 logger = logging.getLogger("dramaforge.db")
@@ -15,6 +15,18 @@ engine = create_engine(
     connect_args={"check_same_thread": False},
 )
 
+# 启用 SQLite WAL 模式 + 优化 pragma
+# WAL 模式下读不阻塞写、写不阻塞读，显著缓解高并发场景下的锁竞争
+# （如 TaskList 轮询读 + 保存 API 配置写同时发生时不再卡顿）。
+# busy_timeout 让写操作在锁冲突时等待 5s 而不是立即报错。
+@event.listens_for(engine, "connect")
+def _set_sqlite_pragma(dbapi_connection, connection_record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.execute("PRAGMA busy_timeout=5000")
+    cursor.close()
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -25,6 +37,7 @@ def init_db():
     Base.metadata.create_all(bind=engine)
     _migrate_asset_intelligence_columns()
     _migrate_performance_indexes()
+    _migrate_agent_conversation_columns()
 
 
 def _migrate_performance_indexes():
@@ -111,6 +124,25 @@ def _migrate_asset_intelligence_columns():
             END
             WHERE derived_from IS NULL
         """))
+
+
+def _migrate_agent_conversation_columns():
+    """Add conversation memory columns to agent_tasks for multi-turn dialogue.
+
+    - conversation_turns: JSON list of {turn, user_message, agent_summary, step_range}
+    - memory_summary: TEXT compressed summary of early steps (token budget control)
+    """
+    existing = {column["name"] for column in inspect(engine).get_columns("agent_tasks")}
+    missing = {
+        "conversation_turns": "JSON",
+        "memory_summary": "TEXT",
+    }
+    to_add = [(name, definition) for name, definition in missing.items() if name not in existing]
+    if not to_add:
+        return
+    with engine.begin() as connection:
+        for name, definition in to_add:
+            connection.execute(text(f'ALTER TABLE agent_tasks ADD COLUMN "{name}" {definition}'))
 
 
 def get_db():

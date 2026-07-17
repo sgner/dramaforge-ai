@@ -7,77 +7,90 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Tailwind Play CDN 改成 defer + 异步加载，不阻塞首屏渲染。
+         原来放 head 是 blocking，会在 DOMContentLoaded 之前下载 1.5MB+ 的
+         Tailwind 编译器并扫描所有 DOM 重新生成 CSS class，导致首屏卡 3-10s。
+         现在 React mount 后再加载 Tailwind，UI 先用 style.css 的 fallback 渲染，
+         Tailwind 接管只是 class 重写（视觉上无缝切换）。 -->
+    <script defer src="https://cdn.tailwindcss.com" onload="window.__tailwindLoaded=true"></script>
     <script>
-      tailwind.config = {
-        theme: {
-          extend: {
-            colors: {
-              brand: {
-                950: '#ffffff',
-                900: '#f8fafc',
-                800: '#f1f5f9',
-                700: '#e8edf3',
-                600: '#111827',
-                500: '#374151',
-                400: '#64748b',
-                300: '#94a3b8',
+      window.__tailwindReady = new Promise((resolve) => {
+        if (window.__tailwindLoaded) { resolve(); return; }
+        const check = setInterval(() => {
+          if (window.tailwind) { clearInterval(check); resolve(); }
+        }, 50);
+      });
+      window.__tailwindReady.then(() => {
+        window.tailwind.config = {
+          theme: {
+            extend: {
+              colors: {
+                brand: {
+                  950: '#ffffff',
+                  900: '#f8fafc',
+                  800: '#f1f5f9',
+                  700: '#e8edf3',
+                  600: '#111827',
+                  500: '#374151',
+                  400: '#64748b',
+                  300: '#94a3b8',
+                },
+                accent: {
+                  600: '#1e40af',
+                  500: '#2563eb',
+                  400: '#3b82f6',
+                  300: '#60a5fa',
+                }
               },
-              accent: {
-                600: '#1e40af',
-                500: '#2563eb',
-                400: '#3b82f6',
-                300: '#60a5fa',
+              fontFamily: {
+                display: ['Inter', 'system-ui', 'sans-serif'],
+                sans: ['Inter', 'system-ui', 'sans-serif'],
+                mono: ['JetBrains Mono', 'monospace'],
+              },
+              animation: {
+                'fade-in': 'fadeIn 0.4s ease-out forwards',
+                'fade-in-up': 'fadeInUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+                'scale-in': 'scaleIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+                'slide-up': 'slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+                'slide-in-right': 'slideInRight 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+                'shimmer': 'shimmer 2s linear infinite',
+                'spin-slow': 'spin 2s linear infinite',
+                'page-enter': 'pageEnter 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+              },
+              keyframes: {
+                fadeIn: {
+                  '0%': { opacity: '0' },
+                  '100%': { opacity: '1' },
+                },
+                fadeInUp: {
+                  '0%': { transform: 'translateY(12px)', opacity: '0' },
+                  '100%': { transform: 'translateY(0)', opacity: '1' },
+                },
+                scaleIn: {
+                  '0%': { transform: 'scale(0.96)', opacity: '0' },
+                  '100%': { transform: 'scale(1)', opacity: '1' },
+                },
+                slideUp: {
+                  '0%': { transform: 'translateY(20px)', opacity: '0' },
+                  '100%': { transform: 'translateY(0)', opacity: '1' },
+                },
+                slideInRight: {
+                  '0%': { transform: 'translateX(30px)', opacity: '0' },
+                  '100%': { transform: 'translateX(0)', opacity: '1' },
+                },
+                shimmer: {
+                  '0%': { backgroundPosition: '-200% 0' },
+                  '100%': { backgroundPosition: '200% 0' },
+                },
+                pageEnter: {
+                  '0%': { transform: 'translateY(8px)', opacity: '0' },
+                  '100%': { transform: 'translateY(0)', opacity: '1' },
+                },
               }
-            },
-            fontFamily: {
-              display: ['Inter', 'system-ui', 'sans-serif'],
-              sans: ['Inter', 'system-ui', 'sans-serif'],
-              mono: ['JetBrains Mono', 'monospace'],
-            },
-            animation: {
-              'fade-in': 'fadeIn 0.4s ease-out forwards',
-              'fade-in-up': 'fadeInUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards',
-              'scale-in': 'scaleIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards',
-              'slide-up': 'slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards',
-              'slide-in-right': 'slideInRight 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards',
-              'shimmer': 'shimmer 2s linear infinite',
-              'spin-slow': 'spin 2s linear infinite',
-              'page-enter': 'pageEnter 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards',
-            },
-            keyframes: {
-              fadeIn: {
-                '0%': { opacity: '0' },
-                '100%': { opacity: '1' },
-              },
-              fadeInUp: {
-                '0%': { transform: 'translateY(12px)', opacity: '0' },
-                '100%': { transform: 'translateY(0)', opacity: '1' },
-              },
-              scaleIn: {
-                '0%': { transform: 'scale(0.96)', opacity: '0' },
-                '100%': { transform: 'scale(1)', opacity: '1' },
-              },
-              slideUp: {
-                '0%': { transform: 'translateY(20px)', opacity: '0' },
-                '100%': { transform: 'translateY(0)', opacity: '1' },
-              },
-              slideInRight: {
-                '0%': { transform: 'translateX(30px)', opacity: '0' },
-                '100%': { transform: 'translateX(0)', opacity: '1' },
-              },
-              shimmer: {
-                '0%': { backgroundPosition: '-200% 0' },
-                '100%': { backgroundPosition: '200% 0' },
-              },
-              pageEnter: {
-                '0%': { transform: 'translateY(8px)', opacity: '0' },
-                '100%': { transform: 'translateY(0)', opacity: '1' },
-              },
             }
           }
-        }
-      }
+        };
+      });
     </script>
     <style>
       :root {

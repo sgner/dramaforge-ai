@@ -54,6 +54,63 @@ def parse_decision(raw: str) -> dict:
 
 
 # ========================
+# 资产完成度校验
+# ========================
+
+# deliverables 名字（来自 TaskProfile）到 artifacts asset_kind 的归一化映射。
+# 例如 promotional_video / commercial_video 都归一到 "video"，因为媒体工具
+# 实际写入 artifacts 时用的 asset_kind 是 "video"。
+_DELIVERABLE_ASSET_KIND_MAP: dict[str, str] = {
+    "script": "script",
+    "commercial_script": "script",
+    "storyboard": "storyboard",
+    "video": "video",
+    "promotional_video": "video",
+    "commercial_video": "video",
+    "research_summary": "research_summary",
+    "campaign_brief": "campaign_brief",
+    "agreed_deliverables": "agreed_deliverables",
+}
+
+
+def compute_assets_summary(artifacts: dict[str, list[dict]]) -> dict[str, int]:
+    """统计 memory.artifacts 中每个 asset_kind 的可用资产数量。
+
+    artifacts 的键已经是 asset_kind（如 "script"/"character"/"scene"）。
+    统计时排除 failed / generating 状态的条目，确保只反映"真实可用"的资产。
+    文本和脚本同样作为一类资产统计（asset_kind="script" 或 "text" 等）。
+    """
+    summary: dict[str, int] = {}
+    for kind, items in (artifacts or {}).items():
+        if not isinstance(items, list):
+            continue
+        count = sum(
+            1
+            for item in items
+            if isinstance(item, dict)
+            and not item.get("failed")
+            and not item.get("generating")
+        )
+        if count > 0:
+            summary[kind] = count
+    return summary
+
+
+def compute_missing_deliverables(summary: dict[str, int], deliverables: list[str]) -> list[str]:
+    """对照 TaskProfile.deliverables 找出尚未生成的交付物。
+
+    deliverables 中的名字（如 "promotional_video"）和 artifacts 的 asset_kind
+    （如 "video"）可能不一致，通过 _DELIVERABLE_ASSET_KIND_MAP 归一化后再比较。
+    """
+    missing: list[str] = []
+    for deliverable in deliverables or []:
+        asset_kind = _DELIVERABLE_ASSET_KIND_MAP.get(deliverable, deliverable)
+        if summary.get(asset_kind, 0) == 0:
+            missing.append(deliverable)
+    return missing
+
+
+# ========================
 # AgentRuntime
 # ========================
 
@@ -144,17 +201,38 @@ class AgentRuntime:
         if self.state == AgentState.CANCELLED:
             return True
         if tool_name == "finish_task":
+            # 资产完成度校验：防止 agent 仅生成文本就假完成。
+            # 统计 memory.artifacts 中真实可用的资产，对照 TaskProfile.deliverables
+            # 找出缺失项，一并放入 TASK_DONE payload 供前端展示。
+            profile = self.hydrate_profile()
+            deliverables = list(profile.deliverables) if profile else []
+            assets_summary = compute_assets_summary(self.memory.artifacts)
+            missing_deliverables = compute_missing_deliverables(assets_summary, deliverables)
+            finish_params = action.get("params", {}) or {}
+            task_done_payload = {
+                "summary": finish_params,
+                "assets_summary": assets_summary,
+                "deliverables": deliverables,
+                "missing_deliverables": missing_deliverables,
+                "total_assets": sum(assets_summary.values()),
+                "incomplete": bool(missing_deliverables),
+            }
             # 记录 finish_task 这一步到 memory（与正常 tool 步骤一致，便于持久化）
             self.memory.add_step(
                 step_number=self._step_count,
                 thought=thought,
                 action=action,
-                observation={"summary": action.get("params", {})},
+                observation={
+                    "summary": finish_params,
+                    "assets_summary": assets_summary,
+                    "deliverables": deliverables,
+                    "missing_deliverables": missing_deliverables,
+                },
                 status="success",
                 cost_usd=response.cost_usd,
                 tokens=response.total_tokens,
             )
-            await self._emit(EventType.TASK_DONE, {"summary": action.get("params", {})})
+            await self._emit(EventType.TASK_DONE, task_done_payload)
             self.state = AgentState.DONE
             return True
 
@@ -403,6 +481,15 @@ class AgentRuntime:
         """Return whether the profile's structured source gate is satisfied."""
         if profile.task_type in {"drama_short", "documentary"}:
             return self._has_script_context()
+        # custom 任务：如果 deliverables 只含媒体资产（character/scene/prop/storyboard）
+        # 且不含 script/video，说明是单一资产生成任务，不需要 structured source。
+        # 这让"给我画一个角色图"这类非线性任务能直接调用 generate_* 工具。
+        if profile.task_type == "custom":
+            media_only_deliverables = {"character", "scene", "prop", "storyboard"}
+            if profile.deliverables and all(
+                d in media_only_deliverables for d in profile.deliverables
+            ):
+                return True
         if not profile.needs_clarification:
             return True
         return False
@@ -459,7 +546,10 @@ class AgentRuntime:
         if not isinstance(source, dict):
             source = {"description": str(source)}
         name = source.get("name") or source.get("title") or source.get("index") or asset_kind
-        prompt = str(source.get("prompt") or source.get("description") or "")
+        # 强制使用结构化构建函数生成 prompt，拒绝 LLM 在 character/prop/scene 对象中
+        # 塞入的 prompt/description 原文（此前 LLM 会把 thought 文本塞进 description，
+        # 导致 thought 被当作生成提示词写入 Asset 节点浮窗）。
+        # 只有结构化字段（name/age/gender/appearance/personality 等）会被采用。
         if tool_name == "generate_character_portrait":
             from .tools.image_tools import _build_character_prompt
             prompt = _build_character_prompt(source, style=str(params.get("style") or "cinematic"))
@@ -475,6 +565,8 @@ class AgentRuntime:
         elif tool_name == "generate_video":
             from .tools.video_tools import _build_video_prompt
             prompt = _build_video_prompt(source, params.get("reference_asset_ids"))
+        else:
+            prompt = str(source.get("name") or source.get("title") or asset_kind)
         bindings = getattr(self.media_service, "capability_bindings", {}) or {}
         binding = bindings.get("video" if category == "video" else "image", {})
         extra = {
@@ -557,6 +649,114 @@ class AgentRuntime:
         await self._emit(EventType.USER_INPUT_RECEIVED, {"response": user_response})
         return await self.step()
 
+    async def continue_conversation(self, user_message: str) -> bool:
+        """从 DONE 状态恢复，注入用户追加需求并继续 ReAct 循环。
+
+        多轮对话入口：任务完成后用户不满意或想追加要求时调用。
+        会先压缩上一轮的早期步骤（控制 token 预算），再把新消息
+        作为新的 step 注入，状态转为 RUNNING。
+        """
+        if self.state != AgentState.DONE:
+            return False
+        if not user_message or not user_message.strip():
+            return False
+
+        # 1. 压缩早期步骤（如果步数超过阈值）
+        compress_threshold = 15
+        if self.memory.should_compress(threshold=compress_threshold):
+            await self._compress_conversation_memory(
+                turn=len(self.memory.conversation_turns) + 1,
+                user_message=user_message,
+                keep_recent=10,
+            )
+
+        # 2. 追加用户目标（保留原始 goal，追加后续需求）
+        self.memory.user_goal = (
+            f"{self.memory.user_goal}\n\n[用户追加] {user_message.strip()}"
+        )
+
+        # 3. 注入新 step：标记用户追加需求
+        self._step_count += 1
+        self.memory.add_step(
+            step_number=self._step_count,
+            thought="(用户追加需求，继续对话)",
+            action={"tool": "user_followup", "params": {"message": user_message.strip()}},
+            observation={"awaiting_agent_response": True, "user_message": user_message.strip()},
+            status="success",
+        )
+
+        # 4. 状态转为 RUNNING，通知前端
+        self.state = AgentState.RUNNING
+        await self._emit(EventType.CONVERSATION_CONTINUED, {
+            "user_message": user_message.strip(),
+            "turn": len(self.memory.conversation_turns) + 1,
+            "compressed": bool(self.memory.compressed_summary),
+        })
+        return await self.step()
+
+    async def _compress_conversation_memory(
+        self,
+        turn: int,
+        user_message: str,
+        keep_recent: int = 10,
+    ) -> None:
+        """压缩早期步骤为摘要，控制 prompt token 预算。
+
+        把 short_term 中除最近 keep_recent 步之外的早期步骤喂给 LLM
+        生成摘要，存入 memory.compressed_summary 和 conversation_turns，
+        然后删除被压缩的早期 steps。
+        """
+        from .llm import build_compression_prompt
+
+        if len(self.memory.short_term) <= keep_recent:
+            return
+
+        steps_to_compress = [s.to_dict() for s in self.memory.short_term[:-keep_recent]]
+        step_range = [
+            steps_to_compress[0]["step_number"],
+            steps_to_compress[-1]["step_number"],
+        ]
+
+        # 调 LLM 生成摘要
+        messages = build_compression_prompt(
+            user_goal=self.memory.user_goal,
+            steps_to_compress=steps_to_compress,
+            artifacts=self.memory.artifacts,
+        )
+        try:
+            response = await self.llm.generate(messages)
+            summary = (response.content or "").strip()
+            if not summary:
+                summary = f"（压缩失败：LLM 返回空内容，原始步骤 #{step_range[0]}-#{step_range[1]}）"
+        except Exception as e:  # noqa: BLE001
+            summary = f"（压缩异常：{e}，原始步骤 #{step_range[0]}-#{step_range[1]}）"
+
+        # 合并已有摘要（多轮压缩时累积）
+        if self.memory.compressed_summary:
+            self.memory.compressed_summary = (
+                f"{self.memory.compressed_summary}\n\n{summary}"
+            )
+        else:
+            self.memory.compressed_summary = summary
+
+        # 记录这一轮对话
+        self.memory.add_conversation_turn(
+            turn=turn,
+            user_message=user_message,
+            agent_summary=summary,
+            step_range=step_range,
+        )
+
+        # 删除被压缩的早期 steps
+        self.memory.short_term = self.memory.short_term[-keep_recent:]
+
+        await self._emit(EventType.MEMORY_COMPRESSED, {
+            "turn": turn,
+            "step_range": step_range,
+            "compressed_count": len(steps_to_compress),
+            "summary_length": len(summary),
+        })
+
     # ---------------- 辅助 ----------------
 
     def _build_messages(self) -> list[dict]:
@@ -596,6 +796,8 @@ class AgentRuntime:
             recent_steps=recent,
             tool_summaries=tool_summaries,
             project_assets=self._project_asset_context(),
+            compressed_summary=self.memory.compressed_summary,
+            conversation_turns=self.memory.conversation_turns,
         )
         assets = self._project_asset_context()
         parsed_goal = self._latest_parsed_goal()

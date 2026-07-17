@@ -87,6 +87,9 @@ async function openCanvas() {
   await act(async () => {
     projectCard.click();
   });
+  // InfiniteCanvas 现在是 lazy：等 CanvasToolbar 渲染（"Agent" 入口按钮出现），
+  // 证明 dynamic import 已完成
+  await screen.findByTestId('enter-agent-mode');
 }
 
 describe('<App /> — Agent Mode 入口（位于 Canvas 工具栏）', () => {
@@ -112,10 +115,14 @@ describe('<App /> — Agent Mode 入口（位于 Canvas 工具栏）', () => {
     render(<App />);
     await openCanvas();
     expect(screen.queryByTestId('agent-mode')).toBeNull();
+    // InfiniteCanvas 与 AgentMode 都已通过 React.lazy 改造，act 必须包住
+    // click + 等 dynamic import resolve，才能让 findByTestId 找到节点。
     await act(async () => {
       fireEvent.click(screen.getByTestId('enter-agent-mode'));
+      // 让 React.lazy 的 dynamic import microtask 跑完
+      await new Promise((r) => setTimeout(r, 50));
     });
-    expect(screen.getByTestId('agent-mode')).toBeInTheDocument();
+    expect(await screen.findByTestId('agent-mode')).toBeInTheDocument();
     expect(screen.queryByTestId('exit-agent-mode')).toBeNull();
     expect(document.querySelectorAll('.canvas-root')).toHaveLength(1);
     expect(screen.getByTestId('enter-agent-mode')).toHaveClass('active');
@@ -126,8 +133,9 @@ describe('<App /> — Agent Mode 入口（位于 Canvas 工具栏）', () => {
     await openCanvas();
     await act(async () => {
       fireEvent.click(screen.getByTestId('enter-agent-mode'));
+      await new Promise((r) => setTimeout(r, 50));
     });
-    expect(screen.getByTestId('agent-mode')).toBeInTheDocument();
+    expect(await screen.findByTestId('agent-mode')).toBeInTheDocument();
     await act(async () => {
       fireEvent.click(screen.getByTestId('enter-agent-mode'));
     });
@@ -140,11 +148,11 @@ describe('<App /> — Agent Mode 入口（位于 Canvas 工具栏）', () => {
   it('URL ?agent=1 时自动进入 Agent Mode（自动选/建一个任务）', async () => {
     window.history.pushState({}, '', '?agent=1');
     render(<App />);
-    // 等待 useEffect 跑完 + storageService 加载 + state 流转
+    // 等 useEffect 跑完 + storageService 加载 + state 流转 + lazy chunk 完成
     await act(async () => {
-      await new Promise((r) => setTimeout(r, 200));
+      await new Promise((r) => setTimeout(r, 300));
     });
-    expect(screen.getByTestId('agent-mode')).toBeInTheDocument();
+    expect(await screen.findByTestId('agent-mode')).toBeInTheDocument();
   });
 
   it('loads canvas API settings into the store used by AgentMode', async () => {

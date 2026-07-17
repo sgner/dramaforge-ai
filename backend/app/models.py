@@ -148,6 +148,10 @@ class AgentTask(Base):
     llm_model_id = Column(String(128), nullable=True, default=None)
     _task_profile_json = Column("task_profile", Text, nullable=True)
     rule_pack_version = Column(String(64), nullable=True)
+    # 多轮对话记忆：每轮用户消息 + agent 完成摘要（按轮次追加）
+    conversation_turns = Column(JSON, default=list)
+    # 被压缩的早期步骤摘要（控制 prompt token 预算，避免长对话丢失关键上下文）
+    memory_summary = Column(Text, nullable=True)
     created_at = Column(DateTime, default=_now)
     updated_at = Column(DateTime, default=_now, onupdate=_now)
 
@@ -186,6 +190,8 @@ class AgentTask(Base):
             "pending_question": pending_question,
             "task_profile": self.task_profile,
             "rule_pack_version": self.rule_pack_version,
+            "conversation_turns": self.conversation_turns or [],
+            "memory_summary": self.memory_summary,
             "total_cost_usd": self.total_cost_usd or 0.0,
             "total_tokens": self.total_tokens or 0,
             "max_steps": self.max_steps or 30,

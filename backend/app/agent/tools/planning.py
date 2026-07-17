@@ -239,7 +239,7 @@ CREATE_PLAN_SYSTEM_PROMPT = """你是 DramaForge 制作经理，把目标拆成 
 }
 
 约束：
-- 第一步通常是 generate_script
+- 根据用户目标选择流程：完整短剧走 generate_script → extract_* → generate_*；单一资产（如角色图）直接调 generate_*_image
 - 资产生成（image/video/audio）放最后
 - 不需要 finish_task（runtime 会在所有步骤完成后自动结束）
 - 仅输出 JSON"""

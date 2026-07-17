@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { RotateCw } from 'lucide-react';
 import { api, type AgentTaskOut } from '@/services/apiClient';
+import { forceReconnect } from './agent-stream-manager';
 import './agent.css';
 
 export interface TaskListProps {
@@ -49,11 +50,13 @@ export const TaskList: React.FC<TaskListProps> = ({
     load();
   }, [load, refreshTrigger]);
 
-  // 自动轮询：只要有 running 的任务就每 3s 拉一次，否则每 8s 轻量轮询兜底
+  // 自动轮询：running/pending 任务需要近实时更新（3s）；
+  // 其余状态（paused/done/failed/空列表）不会自动变化，降到 30s 轻量兜底，
+  // 避免无意义的频繁请求占用数据库连接、与写操作竞争锁。
   const hasRunning = !!tasks?.some(t => t.status === 'running' || t.status === 'pending');
   useEffect(() => {
     if (!autoRefresh) return;
-    const interval = hasRunning ? 3000 : 8000;
+    const interval = hasRunning ? 3000 : 30000;
     const t = setInterval(() => load(), interval);
     return () => clearInterval(t);
   }, [autoRefresh, hasRunning, load]);
@@ -80,6 +83,11 @@ export const TaskList: React.FC<TaskListProps> = ({
       // are rebuilt from the server's new lifecycle state. Without this, the
       // list may show a pending retry while ThoughtStream remains failed.
       if (action !== 'stop') onSelect(taskId, action === 'retry' ? 'running' : undefined);
+      // 强制重连 SSE：HTTP API 成功后后端会发射 TASK_RESUMED 等事件，
+      // 但如果 SSE 已断开（heartbeat timeout 或网络问题），前端收不到。
+      // 此时即使 onSelect 触发 setTask，taskId 未变时 subscribe 不会重连，
+      // 导致 UI 卡住。forceReconnect 无条件重建连接。
+      if (action !== 'stop') forceReconnect();
     } catch (e) {
       console.warn(`TaskList: failed to ${action} task`, e);
     } finally {

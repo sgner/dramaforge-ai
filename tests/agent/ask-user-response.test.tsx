@@ -9,7 +9,7 @@
  * 的 board mousedown 当成"开始拖动画布"吃掉，表现为"要点 2 次才能发送"。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { AgentMode } from '@/agent/agent-mode';
 import { AskUserResponse } from '@/agent/ask-user-response';
 import { api } from '@/services/apiClient';
@@ -199,5 +199,35 @@ describe('AskUserResponse', () => {
     // 不再用 right（避免与右下角 ThoughtStream 抽屉重叠被遮挡）
     expect(popup.className).toContain('ask-user-response-card');
     expect(popup.getAttribute('style')).toBeNull();
+  });
+
+  it('keeps the question card visible (greyed) after submit while agent starts thinking', async () => {
+    makePendingQuestion('正在决策…', ['A', 'B']);
+    const respondSpy = vi.spyOn(api, 'respondAgent').mockResolvedValue({ ok: true } as any);
+    vi.spyOn(api, 'resumeAgent').mockResolvedValue({ ok: true } as any);
+    render(<AgentMode projectId="p1" />);
+
+    fireEvent.click(screen.getByTestId('ask-user-option-0'));
+    fireEvent.click(screen.getByTestId('ask-user-submit'));
+
+    await waitFor(() => expect(respondSpy).toHaveBeenCalledTimes(1));
+
+    // 提交后 store 仍保留 pendingQuestion（pendingQuestionAnswered=true），
+    // UI 必须保持可见（灰色不可交互），让用户知道"agent 正在处理我的回答"。
+    // 这之前是 bug：收到第一个 thought 后 pendingQuestion 被清，UI 消失。
+    expect(screen.getByTestId('ask-user-response')).toBeInTheDocument();
+    expect(screen.getByTestId('ask-user-response').className).toContain('is-locked');
+    expect(screen.getByTestId('ask-user-submit')).toBeDisabled();
+
+    // 模拟 SSE 推送 thought（agent 开始思考）→ question 卡片必须仍可见
+    act(() => {
+      useAgentStore.getState().applyEvent({
+        type: 'thought',
+        payload: { text: '已收到回答，开始生成…' },
+        timestamp: Date.now(),
+      });
+    });
+    expect(screen.getByTestId('ask-user-response')).toBeInTheDocument();
+    expect(screen.getByTestId('ask-user-response').className).toContain('is-locked');
   });
 });

@@ -1,0 +1,122 @@
+/* ===== Global Agent Banners =====
+   这些横幅渲染在 App.tsx 中（任何视图下都可见），与 agent-mode 无关。
+   把它们从 agent.css 拆出，避免在项目列表页因 lazy-loaded agent-mode 而样式未注入。
+*/
+
+/* ===== Agent Background Banner (App 级) ===== */
+.agent-background-banner {
+  position: fixed;
+  /* 放在画布 topbar 下方避开重叠：topbar 包含两段 panel（nav + toolbar），
+     padding 10px + panel padding 6px + 14px 图标 + line-height ≈ 72px，
+     取 76px 留 4px 间距，避免压住画布顶部的 "智能画布" / 撤销 / API / Agent 等按钮。
+     项目列表页（无 topbar）也会以这个偏移显示，处于"返回 / 设置"按钮下方。 */
+  top: 76px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 50;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: 0 8px 24px var(--shadow);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+  transition: all 0.14s ease;
+  white-space: nowrap;
+  max-width: calc(100% - 24px);
+}
+
+.agent-background-banner:hover {
+  border-color: var(--text);
+  transform: translateX(-50%) translateY(-1px);
+  box-shadow: 0 12px 32px var(--shadow);
+}
+
+.agent-background-banner-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text);
+  animation: agent-pulse 1.5s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+.agent-background-banner-text {
+  color: var(--text);
+}
+
+.agent-background-banner-action {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  padding-left: 6px;
+  border-left: 1px solid var(--line);
+}
+
+/* ===== Global SSE Connection Banner (App 级) =====
+   位置在 background banner 下方，避免堆叠重叠。
+   重要：使用 fixed + 明确 z-index，确保任何视图（project list / canvas /
+   agent mode）下都能看到 SSE 连接状态。 */
+.global-sse-banner {
+  position: fixed;
+  /* background banner 占 76px~118px (8+24+8 ≈ 40px) → 122px 留 4px 间距。
+     同时也避开项目列表页 sticky topbar（64px），因此最低 64+8=72px 也可。
+     选 122px 让两个 banner 串行显示不重叠。 */
+  top: 122px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 49;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: 0 8px 24px var(--shadow);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  max-width: calc(100% - 24px);
+  animation: global-sse-banner-in .22s ease-out;
+}
+.global-sse-banner-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.global-sse-banner-text {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 480px;
+}
+.global-sse-banner-retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border: 1px solid var(--text);
+  border-radius: 999px;
+  background: var(--text);
+  color: var(--panel);
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: opacity .14s ease;
+}
+.global-sse-banner-retry:hover { opacity: .85; }
+.global-sse-banner-reconnecting { border-color: #f59e0b66; background: color-mix(in srgb, #f59e0b 12%, var(--panel)); }
+.global-sse-banner-reconnecting .global-sse-banner-dot { background: #f59e0b; animation: global-sse-banner-pulse 1.2s ease-in-out infinite; }
+.global-sse-banner-disconnected { border-color: color-mix(in srgb, var(--danger) 55%, transparent); background: color-mix(in srgb, var(--danger) 14%, var(--panel)); }
+.global-sse-banner-disconnected .global-sse-banner-dot { background: var(--danger); animation: none; }
+@keyframes global-sse-banner-in { from { opacity: 0; transform: translateX(-50%) translateY(-4px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
+@keyframes global-sse-banner-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .5; transform: scale(.85); } }

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { Suspense, lazy, useState, useEffect, useCallback, useRef } from 'react';
 import { Film, Globe, Settings, ArrowLeft, RotateCw, Loader2, AlertTriangle, PlayCircle, SkipForward, XOctagon, Sparkles, BookOpen, XCircle, CheckCircle, AlertCircle, Info, Shield, ChevronDown, PanelLeftClose, PanelLeftOpen, ChevronRight, Users, Clapperboard, Terminal, ChevronUp, UserPlus, User } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { NewTaskModal } from './components/NewTaskModal';
@@ -6,9 +6,12 @@ import { EditCharacterModal } from './components/EditCharacterModal';
 import { ImageLightbox } from './components/ImageLightbox';
 
 import { ConfirmModal } from './components/ConfirmModal';
-import { ApiSettingsModal } from './components/infinite-canvas/ApiSettingsModal';
 import { BigShotDetailModal } from './components/BigShotDetailModal';
-import { InfiniteCanvas } from './components/infinite-canvas';
+// 懒加载：InfiniteCanvas 是首屏最大体积（CanvasNode / CanvasLinks / Engine / ComposerPanel / MiniMap 全套），
+// 用 React.lazy 拆出，首屏只渲染占位，缩短首屏 transform 瀑布。
+const InfiniteCanvas = lazy(() => import('./components/infinite-canvas').then((m) => ({ default: m.InfiniteCanvas })));
+// ApiSettingsModal 同属 infinite-canvas/，但被 App 层 settings 按钮触发；也按需加载避免拉全套画布代码。
+const ApiSettingsModal = lazy(() => import('./components/infinite-canvas/ApiSettingsModal').then((m) => ({ default: m.ApiSettingsModal })));
 import { useCanvasStore } from './components/infinite-canvas/use-canvas-store';
 import { TaskAssetRef } from './components/infinite-canvas/types';
 import { AssetCheckReport } from './components/AssetCheckReport';
@@ -20,11 +23,18 @@ import { storageService } from './services/storageService';
 import { useTaskExecutor } from './hooks/useTaskExecutor';
 import { useTaskActions } from './hooks/useTaskActions';
 import { I18nProvider, useI18n } from './i18n';
-import { AgentMode } from './agent/agent-mode';
+// 懒加载：AgentMode 引入 ThoughtStream / TaskList / ToolPalette / AgentPetController / PromptLibraryPanel
+// 等十几个子模块，agent-stream-manager 也会立即在模块层订阅 store 并启动 SSE manager。
+// 这些都是"按需"功能（用户点击进入 agent 模式才需要），首屏不应当加载。
+// 注意：useAgentStore 仍需顶层引入（用于 App 层读取 status 决定是否显示 background banner）。
+const AgentMode = lazy(() => import('./agent/agent-mode').then((m) => ({ default: m.AgentMode })));
 import { useAgentStore } from './agent/use-agent-store';
+import { retryNow } from './agent/agent-stream-manager';
 import { api } from './services/apiClient';
-// 引入全局 SSE 管理器：模块加载即启动，自动监听 useAgentStore.taskId
-import './agent/agent-stream-manager';
+// 全局 Agent 横幅（background banner + SSE connection banner）样式。
+// 必须从 App 顶层引入，否则在 lazy-loaded agent-mode 未触发时样式未注入，
+// 会导致用户首次进入项目列表就看不到断线提示。
+import './global-agent-banners.css';
 
 const STORAGE_KEY_LANG = 'dramaforge_language';
 // ⚠️ dramaforge_tasks / dramaforge_tasks_backup 全部已迁移到后端（/api/drama-tasks），
@@ -177,6 +187,9 @@ function AppContent() {
   const agentTaskId = useAgentStore((s) => s.taskId);
   const agentProjectId = useAgentStore((s) => s.projectId);
   const agentStatus = useAgentStore((s) => s.status);
+  const connectionStatus = useAgentStore((s) => s.connectionStatus);
+  const connectionDetail = useAgentStore((s) => s.connectionDetail);
+  const reconnectAttempt = useAgentStore((s) => s.reconnectAttempt);
   const showBackgroundBanner =
     !agentMode &&
     activeTask &&
@@ -184,6 +197,14 @@ function AppContent() {
     // agent 任务必须属于当前画布项目（不是任意 activeTask，而是它所代表的 projectId）
     activeTask.id === agentProjectId &&
     (agentStatus === 'running' || agentStatus === 'paused' || agentStatus === 'pending');
+
+  // 全局 SSE 连接横幅：只要有 agent task 且连接非"connected"，就显示在页面顶部。
+  // 之前只放在 agent pet 里，退出 agent 模式后用户看不到断线状态。
+  // 设计：仅在 store.taskId 存在时显示（避免空状态误显），不依赖 activeTask 切换。
+  const showSseBanner = !!agentTaskId && connectionStatus !== 'connected';
+  const handleSseRetry = useCallback(() => {
+    retryNow();
+  }, []);
 
   const triggerCelebration = useCallback((x: number, y: number) => {
     const id = Date.now();
@@ -619,6 +640,35 @@ function AppContent() {
           <span className="agent-background-banner-action">点击查看</span>
         </div>
       )}
+
+      {/* 全局 SSE 连接状态横幅 — 任何页面下都能看到断线/重连状态。
+          触发条件：store.taskId 存在 && connectionStatus !== 'connected'。
+          之前该状态只在 agent pet 面板里，退出 agent 模式或 pet 被收起后用户完全感知不到。 */}
+      {showSseBanner && (
+        <div
+          data-testid={`global-sse-banner-${connectionStatus}`}
+          className={`global-sse-banner global-sse-banner-${connectionStatus}`}
+          role="status"
+          aria-live="polite"
+        >
+          <span className="global-sse-banner-dot" />
+          <span className="global-sse-banner-text">
+            {connectionStatus === 'reconnecting'
+              ? `Agent 实时连接中断，正在重连（${reconnectAttempt}/8）`
+              : 'Agent 实时连接已断开'}
+            {connectionDetail ? ` · ${connectionDetail}` : ''}
+          </span>
+          <button
+            type="button"
+            data-testid="global-sse-banner-retry"
+            className="global-sse-banner-retry"
+            onClick={handleSseRetry}
+            title="手动重试连接"
+          >
+            <RefreshCw className="w-3.5 h-3.5" /> 重连
+          </button>
+        </div>
+      )}
       <div className="fixed inset-0 z-0 pointer-events-none">
         <div className="absolute inset-0" style={{ background: 'radial-gradient(ellipse 80% 50% at 50% -20%, rgba(17,24,39,0.03), transparent)' }} />
       </div>
@@ -680,6 +730,7 @@ function AppContent() {
           </div>
         ) : (
           <div ref={canvasContainerRef} className="app-canvas-shell" style={{ position: 'relative', width: '100%', height: '100%' }}>
+          <Suspense fallback={null}>
           <InfiniteCanvas
             projectId={activeTask.id}
             onBack={() => setActiveTaskId(null)}
@@ -763,11 +814,14 @@ function AppContent() {
             }}
           />
           {agentMode && activeTask && (
-            <AgentMode
-              projectId={activeTask.id}
-              canvasContainerRef={canvasContainerRef}
-            />
+            <Suspense fallback={null}>
+              <AgentMode
+                projectId={activeTask.id}
+                canvasContainerRef={canvasContainerRef}
+              />
+            </Suspense>
           )}
+          </Suspense>
           </div>
         )}
       </main>
@@ -929,12 +983,14 @@ function AppContent() {
         message={confirmModal.message}
       />
 
+      <Suspense fallback={null}>
       <ApiSettingsModal
         open={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         config={apiConfig}
         onSave={handleSaveConfig}
       />
+      </Suspense>
 
       {lightboxImage && <ImageLightbox src={lightboxImage} onClose={() => setLightboxImage(null)} />}
 

@@ -100,19 +100,18 @@ export interface AgentTaskOut { /* moved up — kept for compat in case imported
   updated_at: string;
 }
 
-export interface AgentStepOut { /* moved up — kept for compat */
+export interface AgentStepOut {
   id: string;
   task_id: string;
   step_number: number;
-  tool_name: string;
-  tool_params?: any;
-  observation?: any;
-  thought?: string;
+  thought?: string | null;
+  action: { tool?: string; params?: any; [k: string]: any };
+  observation: { success?: boolean; result?: any; error?: string; [k: string]: any };
   status: string;
-  error?: string;
   cost_usd: number;
-  duration_sec: number;
-  created_at: string;
+  tokens: number;
+  started_at?: string | null;
+  finished_at?: string | null;
 }
 
 export interface ProjectSnapshot {
@@ -210,6 +209,12 @@ export const api = {
 
   resumeAgent: (taskId: string) =>
     request<{ ok: boolean }>(`/agent/tasks/${taskId}/resume`, { method: 'POST' }),
+
+  continueConversation: (taskId: string, message: string) =>
+    request<{ ok: boolean; task_id: string; status: string }>(`/agent/tasks/${taskId}/continue`, {
+      method: 'POST',
+      body: JSON.stringify({ message }),
+    }),
 
   stopAgent: (taskId: string) =>
     request<{ ok: boolean; status: string }>(`/agent/tasks/${taskId}/stop`, { method: 'POST' }),

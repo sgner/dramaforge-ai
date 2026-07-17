@@ -99,6 +99,36 @@ describe('useAgentStore', () => {
     expect(useAgentStore.getState().pendingQuestion).toBeNull();
   });
 
+  it('hydrate clears pendingQuestion when status is not paused (forceReconnect race)', () => {
+    // 用户提交回复 → respondAgent+resumeAgent 成功 → forceReconnect 触发 rehydrate。
+    // 后端 resume 是异步的，rehydrate 拉到的 snapshot.status 可能是 running。
+    // 此时不应恢复 pendingQuestion，否则 UI 再次渲染回复卡让用户卡死。
+    useAgentStore.getState().setTask('t-recon', 'paused');
+    useAgentStore.getState().applyEvent({
+      type: 'request_user_input',
+      payload: {
+        question: '请确认是否继续',
+        options: ['是', '否'],
+        selection_mode: 'single',
+        context: {},
+        step_id: 'confirm',
+      },
+      timestamp: 1,
+    });
+    expect(useAgentStore.getState().pendingQuestion).not.toBeNull();
+
+    // 模拟 rehydrate：snapshot.status='running'（后端已 resume）
+    useAgentStore.getState().hydrate({
+      status: 'running',
+      pending_question: {
+        question: '请确认是否继续',
+        options: ['是', '否'],
+      },
+    });
+    expect(useAgentStore.getState().status).toBe('running');
+    expect(useAgentStore.getState().pendingQuestion).toBeNull();
+  });
+
   it('applyEvent adds thought to thoughts list', () => {
     const s = useAgentStore.getState();
     s.setTask('t-1', 'running');
@@ -282,12 +312,97 @@ describe('useAgentStore', () => {
     expect(useAgentStore.getState().status).toBe('done');
   });
 
+  it('applyEvent task_done stores assets_summary and missing_deliverables from payload', () => {
+    const s = useAgentStore.getState();
+    s.setTask('t-1', 'running');
+    s.applyEvent({
+      type: 'task_done',
+      payload: {
+        assets_summary: { script: 1, character: 4 },
+        missing_deliverables: ['storyboard', 'video'],
+        incomplete: true,
+        total_assets: 5,
+      },
+      timestamp: 2,
+    });
+    const st = useAgentStore.getState();
+    expect(st.status).toBe('done');
+    expect(st.assetsSummary).toEqual({ script: 1, character: 4 });
+    expect(st.missingDeliverables).toEqual(['storyboard', 'video']);
+  });
+
+  it('hydrate computes assetsSummary from artifacts when task is done', () => {
+    const s = useAgentStore.getState();
+    s.reset();
+    s.setTask('t-done', 'done');
+    s.hydrate({
+      status: 'done',
+      artifacts: {
+        script: [{ id: 's1', failed: false }],
+        storyboard: [{ id: 'sb1', failed: false }],
+      },
+      task_profile: {
+        task_type: 'drama_short',
+        rule_pack_id: 'drama_short.v1',
+        deliverables: ['script', 'storyboard', 'video'],
+      },
+    });
+    const st = useAgentStore.getState();
+    expect(st.assetsSummary).toEqual({ script: 1, storyboard: 1 });
+    expect(st.missingDeliverables).toEqual(['video']);
+  });
+
   it('applyEvent task_failed sets status to failed and records error', () => {
     const s = useAgentStore.getState();
     s.setTask('t-1', 'running');
     s.applyEvent({ type: 'task_failed', payload: { error: '出错了' }, timestamp: 1 });
     expect(useAgentStore.getState().status).toBe('failed');
     expect(useAgentStore.getState().error).toBe('出错了');
+  });
+
+  it('applyEvent conversation_continued switches status to running and records turn', () => {
+    const s = useAgentStore.getState();
+    s.setTask('t-1', 'done');
+    s.applyEvent({
+      type: 'conversation_continued',
+      payload: { user_message: '再生成一个反派', turn: 2, compressed: true },
+      timestamp: 1,
+    });
+    const st = useAgentStore.getState();
+    expect(st.status).toBe('running');
+    expect(st.error).toBeNull();
+    expect(st.conversationTurns).toHaveLength(1);
+    expect(st.conversationTurns[0].turn).toBe(2);
+    expect(st.conversationTurns[0].user_message).toBe('再生成一个反派');
+  });
+
+  it('applyEvent memory_compressed sets memoryCompressed flag', () => {
+    const s = useAgentStore.getState();
+    s.setTask('t-1', 'running');
+    s.applyEvent({
+      type: 'memory_compressed',
+      payload: { turn: 1, compressed_count: 10, summary_length: 500 },
+      timestamp: 1,
+    });
+    expect(useAgentStore.getState().memoryCompressed).toBe(true);
+  });
+
+  it('hydrate restores conversationTurns and memoryCompressed from snapshot', () => {
+    const s = useAgentStore.getState();
+    s.reset();
+    s.setTask('t-done', 'done');
+    s.hydrate({
+      status: 'done',
+      conversation_turns: [
+        { turn: 1, user_message: '第一轮', agent_summary: '已生成脚本', step_range: [1, 10] },
+      ],
+      memory_summary: '已生成脚本和 3 个角色',
+      artifacts: {},
+    });
+    const st = useAgentStore.getState();
+    expect(st.conversationTurns).toHaveLength(1);
+    expect(st.conversationTurns[0].user_message).toBe('第一轮');
+    expect(st.memoryCompressed).toBe(true);
   });
 
   it('applyEvent cost_update accumulates totalCostUsd', () => {
@@ -305,6 +420,133 @@ describe('useAgentStore', () => {
     s.clearPendingQuestion();
     expect(useAgentStore.getState().pendingQuestion).toBeNull();
     expect(useAgentStore.getState().status).toBe('paused');
+  });
+
+  it('markPendingQuestionAnswered flips the answered flag', () => {
+    const s = useAgentStore.getState();
+    s.setTask('t-1', 'paused');
+    s.applyEvent({ type: 'request_user_input', payload: { question: 'q' }, timestamp: 1 });
+    expect(useAgentStore.getState().pendingQuestionAnswered).toBe(false);
+    s.markPendingQuestionAnswered();
+    expect(useAgentStore.getState().pendingQuestionAnswered).toBe(true);
+  });
+
+  it('request_user_input resets pendingQuestionAnswered so a new question unlocks the UI', () => {
+    const s = useAgentStore.getState();
+    s.setTask('t-1', 'paused');
+    s.applyEvent({ type: 'request_user_input', payload: { question: 'q1' }, timestamp: 1 });
+    s.markPendingQuestionAnswered();
+    expect(useAgentStore.getState().pendingQuestionAnswered).toBe(true);
+    // 新问题到达：answered 必须清零
+    s.applyEvent({ type: 'request_user_input', payload: { question: 'q2' }, timestamp: 2 });
+    expect(useAgentStore.getState().pendingQuestionAnswered).toBe(false);
+  });
+
+  it('user_input_received does not clear pendingQuestion; subsequent thought keeps it visible (greyed) when answered', () => {
+    const s = useAgentStore.getState();
+    s.setTask('t-1', 'paused');
+    s.applyEvent({ type: 'request_user_input', payload: { question: 'q' }, timestamp: 1 });
+    s.markPendingQuestionAnswered();
+    s.applyEvent({ type: 'user_input_received', payload: { response: 'r' }, timestamp: 2 });
+    // user_input_received 不会清掉 question，UI 仍可见
+    expect(useAgentStore.getState().pendingQuestion).not.toBeNull();
+    // 收到 thought（agent 已经开始思考）→ 因为已 answered，question 必须保持可见
+    s.applyEvent({ type: 'thought', payload: { text: 'hmm' }, timestamp: 3 });
+    const after = useAgentStore.getState();
+    expect(after.pendingQuestion).not.toBeNull();
+    expect(after.pendingQuestionAnswered).toBe(true);
+  });
+
+  it('task_done clears the greyed-out question so it does not linger with the continue-conversation input', () => {
+    const s = useAgentStore.getState();
+    s.setTask('t-1', 'running');
+    // 模拟"已回答且 agent 在思考"的状态
+    s.applyEvent({ type: 'request_user_input', payload: { question: 'q' }, timestamp: 1 });
+    s.markPendingQuestionAnswered();
+    s.applyEvent({ type: 'user_input_received', payload: { response: 'r' }, timestamp: 2 });
+    s.applyEvent({ type: 'thought', payload: { text: '正在生成' }, timestamp: 3 });
+    expect(useAgentStore.getState().pendingQuestion).not.toBeNull();
+    // 任务完成 → question + answered 必须清空
+    s.applyEvent({ type: 'task_done', payload: {}, timestamp: 4 });
+    const after = useAgentStore.getState();
+    expect(after.status).toBe('done');
+    expect(after.pendingQuestion).toBeNull();
+    expect(after.pendingQuestionAnswered).toBe(false);
+  });
+
+  it('task_failed clears the greyed-out question so the user can react to the error', () => {
+    const s = useAgentStore.getState();
+    s.setTask('t-1', 'running');
+    s.applyEvent({ type: 'request_user_input', payload: { question: 'q' }, timestamp: 1 });
+    s.markPendingQuestionAnswered();
+    s.applyEvent({ type: 'user_input_received', payload: { response: 'r' }, timestamp: 2 });
+    s.applyEvent({ type: 'thought', payload: { text: '处理中' }, timestamp: 3 });
+    expect(useAgentStore.getState().pendingQuestion).not.toBeNull();
+    s.applyEvent({ type: 'task_failed', payload: { error: '网络错误' }, timestamp: 4 });
+    const after = useAgentStore.getState();
+    expect(after.status).toBe('failed');
+    expect(after.pendingQuestion).toBeNull();
+    expect(after.pendingQuestionAnswered).toBe(false);
+  });
+
+  it('a new request_user_input replaces the greyed-out question and unlocks the UI', () => {
+    const s = useAgentStore.getState();
+    s.setTask('t-1', 'running');
+    s.applyEvent({ type: 'request_user_input', payload: { question: 'q1' }, timestamp: 1 });
+    s.markPendingQuestionAnswered();
+    // 第二个新问题到达 → 旧问题被替换，answered 清零
+    s.applyEvent({ type: 'request_user_input', payload: { question: 'q2' }, timestamp: 2 });
+    const after = useAgentStore.getState();
+    expect(after.pendingQuestion?.question).toBe('q2');
+    expect(after.pendingQuestionAnswered).toBe(false);
+  });
+
+  it('setConnectionStatus updates the SSE connection banner fields', () => {
+    const s = useAgentStore.getState();
+    s.setTask('t-1', 'running');
+    s.setConnectionStatus('reconnecting', '第 1/8 次重连');
+    expect(useAgentStore.getState().connectionStatus).toBe('reconnecting');
+    expect(useAgentStore.getState().connectionDetail).toBe('第 1/8 次重连');
+    s.setConnectionStatus('disconnected', '已耗尽');
+    expect(useAgentStore.getState().connectionStatus).toBe('disconnected');
+    s.setConnectionStatus('connected', null);
+    expect(useAgentStore.getState().connectionStatus).toBe('connected');
+    expect(useAgentStore.getState().connectionDetail).toBeNull();
+  });
+
+  it('setReconnectAttempt clamps to non-negative', () => {
+    const s = useAgentStore.getState();
+    s.setReconnectAttempt(5);
+    expect(useAgentStore.getState().reconnectAttempt).toBe(5);
+    s.setReconnectAttempt(-1);
+    expect(useAgentStore.getState().reconnectAttempt).toBe(0);
+  });
+
+  it('hydrate preserves answered when restoring a paused task with pending_question', () => {
+    const s = useAgentStore.getState();
+    s.setTask('t-1', 'paused');
+    s.applyEvent({ type: 'request_user_input', payload: { question: 'q' }, timestamp: 1 });
+    s.markPendingQuestionAnswered();
+    // 模拟 forceReconnect 触发的 rehydrate：snapshot 仍然 paused + pending_question
+    s.hydrate({
+      status: 'paused',
+      pending_question: { question: 'q' },
+    });
+    expect(useAgentStore.getState().pendingQuestion).not.toBeNull();
+    // answered 必须保留（避免"刚答完又被解锁"）
+    expect(useAgentStore.getState().pendingQuestionAnswered).toBe(true);
+  });
+
+  it('hydrate clears answered when snapshot has no pending_question (task 已经 running/done)', () => {
+    const s = useAgentStore.getState();
+    s.setTask('t-1', 'paused');
+    s.applyEvent({ type: 'request_user_input', payload: { question: 'q' }, timestamp: 1 });
+    s.markPendingQuestionAnswered();
+    s.hydrate({
+      status: 'running',
+      pending_question: null,
+    });
+    expect(useAgentStore.getState().pendingQuestionAnswered).toBe(false);
   });
 
   it('reset returns to initial state', () => {
