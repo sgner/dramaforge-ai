@@ -4,14 +4,15 @@
 
 **一站式 AI 短剧制作平台**
 
-集成 Gemini、Nanobanana 和 Sora 2，实现从脚本到视频的自动化生成
+[无限画布与Agent模式](https://github.com/sgner/dramaforge-ai/tree/recovery)
 
+集成 Gemini、Nanobanana 和 Sora 2，实现从脚本到视频的自动化生成
 [![React](https://img.shields.io/badge/React-19.2.3-blue.svg)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.8-blue.svg)](https://www.typescriptlang.org/)
 [![Vite](https://img.shields.io/badge/Vite-6.2-purple.svg)](https://vitejs.dev/)
 
 ![https://github.com/sgner/images/blob/main/video_shot_1769513992628_0_9qj4680o7we.mp4](https://github.com/sgner/images/blob/main/video_shot_1769513992628_0_9qj4680o7we%20(2).gif)
-[无限画布与Agent模式](https://github.com/sgner/dramaforge-ai/tree/recovery)
+
 </div>
 
 ## 功能特性
