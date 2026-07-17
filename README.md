@@ -4,7 +4,7 @@
 
 **一站式 AI 短剧制作平台**
 
-[无限画布与Agent模式](https://github.com/sgner/dramaforge-ai/tree/recovery)
+**👍---->>**[**无限画布与Agent模式**](https://github.com/sgner/dramaforge-ai/tree/recovery)
 
 集成 Gemini、Nanobanana 和 Sora 2，实现从脚本到视频的自动化生成
 
