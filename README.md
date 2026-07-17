@@ -1,5 +1,5 @@
 # DramaForge AI
-![无限画布](https://github.com/sgner/dramaforge-ai/tree/recovery)
+
 <div align="center">
 
 **一站式 AI 短剧制作平台**
@@ -11,7 +11,7 @@
 [![Vite](https://img.shields.io/badge/Vite-6.2-purple.svg)](https://vitejs.dev/)
 
 ![https://github.com/sgner/images/blob/main/video_shot_1769513992628_0_9qj4680o7we.mp4](https://github.com/sgner/images/blob/main/video_shot_1769513992628_0_9qj4680o7we%20(2).gif)
-
+[无限画布与Agent模式](https://github.com/sgner/dramaforge-ai/tree/recovery)
 </div>
 
 ## 功能特性
