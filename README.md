@@ -1,5 +1,5 @@
 # DramaForge AI
-
+![无限画布](https://github.com/sgner/dramaforge-ai/tree/recovery)
 <div align="center">
 
 **一站式 AI 短剧制作平台**
