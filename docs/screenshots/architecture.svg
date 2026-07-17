@@ -1,0 +1,132 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 720" font-family="'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+  <defs>
+    <style>
+      .layer-label { font-size: 11px; font-weight: 700; fill: #8f9aab; letter-spacing: 1.5px; text-transform: uppercase; }
+      .box-title { font-size: 13px; font-weight: 700; fill: #1e293b; }
+      .box-sub { font-size: 11px; fill: #64748b; }
+      .box-detail { font-size: 10px; fill: #94a3b8; }
+      .arrow-label { font-size: 10px; fill: #64748b; font-weight: 600; }
+      .conn { stroke: #cbd5e1; stroke-width: 1.5; fill: none; }
+      .conn-bold { stroke: #475569; stroke-width: 2; fill: none; }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/>
+    </marker>
+    <marker id="arrow-dark" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="920" height="720" fill="#f8fafc" rx="12"/>
+
+  <!-- ===== 前端层 ===== -->
+  <rect x="30" y="30" width="860" height="230" rx="10" fill="#f1f5f9" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="46" y="52" class="layer-label">前端 · BROWSER</text>
+
+  <!-- 项目列表 -->
+  <rect x="60" y="70" width="180" height="80" rx="8" fill="#fff" stroke="#cbd5e1" stroke-width="1.5"/>
+  <text x="150" y="95" text-anchor="middle" class="box-title">项目列表页</text>
+  <text x="150" y="113" text-anchor="middle" class="box-sub">React 19</text>
+  <text x="150" y="130" text-anchor="middle" class="box-detail">项目管理 · 首屏 bootstrap</text>
+
+  <!-- 无限画布 -->
+  <rect x="370" y="70" width="180" height="80" rx="8" fill="#fff" stroke="#cbd5e1" stroke-width="1.5"/>
+  <text x="460" y="95" text-anchor="middle" class="box-title">无限画布</text>
+  <text x="460" y="113" text-anchor="middle" class="box-sub">@xyflow/react</text>
+  <text x="460" y="130" text-anchor="middle" class="box-detail">节点编排 · 资产库 · API 设置</text>
+
+  <!-- Agent 模式 -->
+  <rect x="680" y="70" width="180" height="80" rx="8" fill="#fff" stroke="#cbd5e1" stroke-width="1.5"/>
+  <text x="770" y="95" text-anchor="middle" class="box-title">Agent 模式</text>
+  <text x="770" y="113" text-anchor="middle" class="box-sub">桌宠 · ThoughtStream</text>
+  <text x="770" y="130" text-anchor="middle" class="box-detail">提问 · 连接状态 · 继续对话</text>
+
+  <!-- Zustand Store -->
+  <rect x="180" y="185" width="560" height="55" rx="8" fill="#e0f2fe" stroke="#0ea5e9" stroke-width="1.5"/>
+  <text x="460" y="208" text-anchor="middle" class="box-title">Zustand Store · SSE Stream Manager</text>
+  <text x="460" y="225" text-anchor="middle" class="box-detail">全局状态管理 · SSE 连接 · 心跳重连 · 事件 replay · hydrate 恢复</text>
+
+  <!-- 前端内部连线 -->
+  <path d="M 150 150 L 150 185" class="conn" marker-end="url(#arrow)"/>
+  <path d="M 460 150 L 460 185" class="conn" marker-end="url(#arrow)"/>
+  <path d="M 770 150 L 770 185" class="conn" marker-end="url(#arrow)"/>
+
+  <!-- 前后端连线 -->
+  <path d="M 460 240 L 460 280" class="conn-bold" marker-end="url(#arrow-dark)"/>
+  <text x="470" y="265" class="arrow-label">HTTP REST / SSE</text>
+
+  <!-- ===== 后端层 ===== -->
+  <rect x="30" y="280" width="860" height="330" rx="10" fill="#fafafa" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="46" y="302" class="layer-label">后端 · FASTAPI</text>
+
+  <!-- REST 路由 -->
+  <rect x="60" y="320" width="170" height="65" rx="8" fill="#fff" stroke="#cbd5e1" stroke-width="1.5"/>
+  <text x="145" y="343" text-anchor="middle" class="box-title">REST 路由</text>
+  <text x="145" y="361" text-anchor="middle" class="box-detail">/api/agent · /api/assets</text>
+  <text x="145" y="375" text-anchor="middle" class="box-detail">/api/projects · /api/bootstrap</text>
+
+  <!-- SSE 事件流 -->
+  <rect x="255" y="320" width="170" height="65" rx="8" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="340" y="343" text-anchor="middle" class="box-title">SSE 事件流</text>
+  <text x="340" y="361" text-anchor="middle" class="box-detail">heartbeat 15s · replay buffer</text>
+  <text x="340" y="375" text-anchor="middle" class="box-detail">45s 超时阈值</text>
+
+  <!-- Bootstrap -->
+  <rect x="450" y="320" width="170" height="65" rx="8" fill="#fff" stroke="#cbd5e1" stroke-width="1.5"/>
+  <text x="535" y="343" text-anchor="middle" class="box-title">Bootstrap</text>
+  <text x="535" y="361" text-anchor="middle" class="box-detail">首屏合并请求</text>
+  <text x="535" y="375" text-anchor="middle" class="box-detail">3+ RTT → 1 RTT</text>
+
+  <!-- AgentRuntime -->
+  <rect x="60" y="415" width="560" height="170" rx="10" fill="#ddd6fe" stroke="#7c3aed" stroke-width="2"/>
+  <text x="340" y="440" text-anchor="middle" class="box-title" style="font-size:15px;">AgentRuntime · ReAct 循环</text>
+
+  <!-- LLM 调用 -->
+  <rect x="80" y="455" width="160" height="110" rx="8" fill="#fff" stroke="#a78bfa" stroke-width="1.5"/>
+  <text x="160" y="478" text-anchor="middle" class="box-title">LLM 调用</text>
+  <text x="160" y="498" text-anchor="middle" class="box-detail">build_react_prompt</text>
+  <text x="160" y="514" text-anchor="middle" class="box-detail">早期执行摘要</text>
+  <text x="160" y="530" text-anchor="middle" class="box-detail">最近对话轮次</text>
+  <text x="160" y="552" text-anchor="middle" class="box-detail">JSON 解析 · 错误反馈</text>
+
+  <!-- 工具执行 -->
+  <rect x="255" y="455" width="160" height="110" rx="8" fill="#fff" stroke="#a78bfa" stroke-width="1.5"/>
+  <text x="335" y="478" text-anchor="middle" class="box-title">工具执行</text>
+  <text x="335" y="498" text-anchor="middle" class="box-detail">21 个 Agent 工具</text>
+  <text x="335" y="514" text-anchor="middle" class="box-detail">并行批量生成</text>
+  <text x="335" y="530" text-anchor="middle" class="box-detail">失败自动恢复</text>
+  <text x="335" y="552" text-anchor="middle" class="box-detail">资产完成验证</text>
+
+  <!-- 记忆管理 -->
+  <rect x="430" y="455" width="175" height="110" rx="8" fill="#fff" stroke="#a78bfa" stroke-width="1.5"/>
+  <text x="517" y="478" text-anchor="middle" class="box-title">记忆管理</text>
+  <text x="517" y="498" text-anchor="middle" class="box-detail">conversation_turns</text>
+  <text x="517" y="514" text-anchor="middle" class="box-detail">memory_summary</text>
+  <text x="517" y="530" text-anchor="middle" class="box-detail">15 步压缩 · 保留 10 步</text>
+  <text x="517" y="552" text-anchor="middle" class="box-detail">DB 持久化</text>
+
+  <!-- 路由 → Runtime 连线 -->
+  <path d="M 145 385 L 145 415" class="conn" marker-end="url(#arrow)"/>
+  <path d="M 340 385 L 340 415" class="conn" marker-end="url(#arrow)"/>
+  <path d="M 535 385 L 535 415" class="conn" marker-end="url(#arrow)"/>
+
+  <!-- SQLite -->
+  <rect x="650" y="415" width="210" height="80" rx="8" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+  <text x="755" y="440" text-anchor="middle" class="box-title">SQLite (WAL 模式)</text>
+  <text x="755" y="460" text-anchor="middle" class="box-detail">projects · drama_tasks · nodes</text>
+  <text x="755" y="476" text-anchor="middle" class="box-detail">assets · agent_steps</text>
+  <text x="755" y="492" text-anchor="middle" class="box-detail">providers · prompt_templates</text>
+
+  <!-- Runtime → DB 连线 -->
+  <path d="M 620 465 L 650 465" class="conn-bold" marker-end="url(#arrow-dark)"/>
+
+  <!-- ===== 外部 Provider ===== -->
+  <rect x="150" y="640" width="620" height="60" rx="10" fill="#fef2f2" stroke="#ef4444" stroke-width="1.5"/>
+  <text x="460" y="665" text-anchor="middle" class="box-title">外部 Provider</text>
+  <text x="460" y="685" text-anchor="middle" class="box-detail">LLM（思考 · 剧本 · 检查）  ·  图像生成  ·  视频生成  ·  音频生成</text>
+
+  <!-- 后端 → Provider 连线 -->
+  <path d="M 335 565 L 335 640" class="conn-bold" marker-end="url(#arrow-dark)"/>
+  <path d="M 535 565 L 535 640" class="conn-bold" marker-end="url(#arrow-dark)"/>
+</svg>

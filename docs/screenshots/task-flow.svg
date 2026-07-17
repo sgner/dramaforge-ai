@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 620" font-family="'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+  <defs>
+    <style>
+      .title { font-size: 14px; font-weight: 700; fill: #1e293b; }
+      .label { font-size: 12px; font-weight: 600; fill: #334155; }
+      .sub { font-size: 11px; fill: #64748b; }
+      .detail { font-size: 10px; fill: #94a3b8; }
+      .branch-label { font-size: 11px; font-weight: 700; }
+      .conn { stroke: #94a3b8; stroke-width: 1.5; fill: none; }
+      .conn-yes { stroke: #16a34a; stroke-width: 2; fill: none; }
+      .conn-no { stroke: #6366f1; stroke-width: 2; fill: none; }
+    </style>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/>
+    </marker>
+    <marker id="arr-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#16a34a"/>
+    </marker>
+    <marker id="arr-indigo" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6366f1"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="880" height="620" fill="#f8fafc" rx="12"/>
+
+  <!-- 用户目标 -->
+  <rect x="340" y="25" width="200" height="50" rx="25" fill="#1e293b" stroke="none"/>
+  <text x="440" y="56" text-anchor="middle" class="title" style="fill:#fff;">用户目标</text>
+
+  <!-- 连线到 classify_task -->
+  <path d="M 440 75 L 440 105" class="conn" marker-end="url(#arr)"/>
+
+  <!-- classify_task -->
+  <rect x="320" y="105" width="240" height="55" rx="8" fill="#e0e7ff" stroke="#6366f1" stroke-width="2"/>
+  <text x="440" y="128" text-anchor="middle" class="title">classify_task</text>
+  <text x="440" y="146" text-anchor="middle" class="sub">任务分类 · 识别意图</text>
+
+  <!-- 判断菱形: single_asset? -->
+  <path d="M 440 185 L 540 230 L 440 275 L 340 230 Z" fill="#fef3c7" stroke="#f59e0b" stroke-width="2"/>
+  <text x="440" y="227" text-anchor="middle" class="label">单一资产</text>
+  <text x="440" y="243" text-anchor="middle" class="label">意图?</text>
+
+  <path d="M 440 160 L 440 185" class="conn" marker-end="url(#arr)"/>
+
+  <!-- ===== 左分支: single_asset (是) ===== -->
+  <text x="290" y="225" class="branch-label" style="fill:#16a34a;">是</text>
+  <path d="M 340 230 L 170 230 L 170 300" class="conn-yes" marker-end="url(#arr-green)"/>
+
+  <!-- single_asset 流程 -->
+  <rect x="50" y="300" width="240" height="85" rx="8" fill="#dcfce7" stroke="#16a34a" stroke-width="2"/>
+  <text x="170" y="325" text-anchor="middle" class="title">直接生成媒体资产</text>
+  <text x="170" y="345" text-anchor="middle" class="detail">generate_character_portrait</text>
+  <text x="170" y="361" text-anchor="middle" class="detail">generate_scene_image</text>
+  <text x="170" y="377" text-anchor="middle" class="detail">generate_prop_image</text>
+
+  <path d="M 170 385 L 170 420" class="conn-yes" marker-end="url(#arr-green)"/>
+
+  <!-- 完成 -->
+  <rect x="70" y="420" width="200" height="45" rx="22" fill="#16a34a" stroke="none"/>
+  <text x="170" y="448" text-anchor="middle" class="title" style="fill:#fff;">finish_task</text>
+
+  <!-- ===== 右分支: 完整流程 (否) ===== -->
+  <text x="560" y="225" class="branch-label" style="fill:#6366f1;">否</text>
+  <path d="M 540 230 L 700 230 L 700 300" class="conn-no" marker-end="url(#arr-indigo)"/>
+
+  <!-- 完整流程容器 -->
+  <rect x="340" y="300" width="500" height="280" rx="10" fill="#eef2ff" stroke="#6366f1" stroke-width="1.5" stroke-dasharray="5,3"/>
+  <text x="590" y="322" text-anchor="middle" class="label" style="fill:#6366f1;">完整流程 · drama_short / documentary / promotion / commercial</text>
+
+  <!-- Step 1: generate_script -->
+  <rect x="460" y="335" width="260" height="38" rx="19" fill="#fff" stroke="#6366f1" stroke-width="1.5"/>
+  <text x="590" y="359" text-anchor="middle" class="label">generate_script · 生成剧本</text>
+
+  <path d="M 590 373 L 590 385" class="conn-no" marker-end="url(#arr-indigo)"/>
+
+  <!-- Step 2: extract_* -->
+  <rect x="400" y="385" width="380" height="38" rx="19" fill="#fff" stroke="#6366f1" stroke-width="1.5"/>
+  <text x="590" y="409" text-anchor="middle" class="label">extract_characters / props / scenes / shots</text>
+
+  <path d="M 590 423 L 590 435" class="conn-no" marker-end="url(#arr-indigo)"/>
+
+  <!-- Step 3: generate_*_image (并行) -->
+  <rect x="400" y="435" width="380" height="38" rx="19" fill="#fff" stroke="#6366f1" stroke-width="1.5"/>
+  <text x="590" y="459" text-anchor="middle" class="label">generate_*_image · 并行生成（角色/场景/道具/分镜）</text>
+
+  <path d="M 590 473 L 590 485" class="conn-no" marker-end="url(#arr-indigo)"/>
+
+  <!-- Step 4: generate_video -->
+  <rect x="460" y="485" width="260" height="38" rx="19" fill="#fff" stroke="#6366f1" stroke-width="1.5"/>
+  <text x="590" y="509" text-anchor="middle" class="label">generate_video · 生成视频</text>
+
+  <path d="M 590 523 L 590 535" class="conn-no" marker-end="url(#arr-indigo)"/>
+
+  <!-- Step 5: finish_task -->
+  <rect x="460" y="535" width="260" height="38" rx="19" fill="#6366f1" stroke="none"/>
+  <text x="590" y="559" text-anchor="middle" class="title" style="fill:#fff;">finish_task · 资产完成验证</text>
+</svg>
