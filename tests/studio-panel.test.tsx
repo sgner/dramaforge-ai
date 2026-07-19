@@ -16,6 +16,9 @@ const mockListProviders = vi.fn();
 const mockListCards = vi.fn();
 const mockCreate = vi.fn();
 const mockGet = vi.fn();
+const mockListShots = vi.fn();
+const mockReview = vi.fn();
+const mockRegenerate = vi.fn();
 
 vi.mock('@/services/apiClient', () => ({
   api: {
@@ -23,6 +26,9 @@ vi.mock('@/services/apiClient', () => ({
     listStudioCharacterCards: (...args: any[]) => mockListCards(...args),
     createStudioEpisode: (...args: any[]) => mockCreate(...args),
     getStudioEpisode: (...args: any[]) => mockGet(...args),
+    listStudioShots: (...args: any[]) => mockListShots(...args),
+    reviewStudioShot: (...args: any[]) => mockReview(...args),
+    regenerateStudioShot: (...args: any[]) => mockRegenerate(...args),
   },
 }));
 
@@ -114,6 +120,7 @@ describe('<StudioPanel />', () => {
     ]);
     mockCreate.mockResolvedValue({ task_id: 'task-1' });
     mockGet.mockResolvedValue(runningTask);
+    mockListShots.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -268,5 +275,209 @@ describe('<StudioPanel />', () => {
     });
     expect(screen.getByTestId('studio-task-error').textContent).toContain('LLM upstream 401');
     expect(screen.queryByTestId('studio-video')).toBeNull();
+  });
+
+  it('审片台：渲染镜头列表（版本分组 + critic/审核状态标记）', async () => {
+    mockListShots.mockResolvedValue([
+      {
+        asset_id: 'a-1',
+        brief: '雨夜街道',
+        title: '镜头 1',
+        url: '/files/s1v1.png',
+        prompt: 'rainy street',
+        critic_status: 'approved',
+        review_status: 'pending_review',
+        review_note: null,
+        version: 1,
+        versions: 2,
+        created_at: '2026-07-19T10:00:00Z',
+      },
+      {
+        asset_id: 'a-2',
+        brief: '雨夜街道',
+        title: '镜头 1',
+        url: '/files/s1v2.png',
+        prompt: 'rainy street v2',
+        critic_status: 'max_rounds_exceeded',
+        review_status: 'locked',
+        review_note: null,
+        version: 2,
+        versions: 2,
+        created_at: '2026-07-19T10:05:00Z',
+      },
+      {
+        asset_id: 'a-3',
+        brief: '室内特写',
+        title: '镜头 2',
+        url: '/files/s2v1.png',
+        prompt: 'close up',
+        critic_status: null,
+        review_status: 'rejected',
+        review_note: '光影不对',
+        version: 1,
+        versions: 1,
+        created_at: '2026-07-19T10:10:00Z',
+      },
+    ]);
+
+    render(<StudioPanel projectId="proj-1" onClose={() => {}} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('studio-shot-card-a-1')).toBeInTheDocument();
+    });
+    expect(mockListShots).toHaveBeenCalledWith('proj-1');
+
+    // brief 分组 + version x/y
+    expect(screen.getByText('雨夜街道')).toBeInTheDocument();
+    expect(screen.getByText('室内特写')).toBeInTheDocument();
+    expect(screen.getByText('v1/2')).toBeInTheDocument();
+    expect(screen.getByText('v2/2')).toBeInTheDocument();
+
+    // 缩略图
+    expect(screen.getByTestId('studio-shot-card-a-1').querySelector('img')).toHaveAttribute(
+      'src',
+      '/files/s1v1.png'
+    );
+
+    // review_status 标记（zh 兜底文案）
+    expect(screen.getByTestId('studio-review-status-a-1')).toHaveTextContent('待审');
+    expect(screen.getByTestId('studio-review-status-a-2')).toHaveTextContent('已锁定');
+    expect(screen.getByTestId('studio-review-status-a-3')).toHaveTextContent('已退回');
+
+    // critic 初筛标记
+    expect(screen.getByTestId('studio-shot-card-a-1')).toHaveTextContent('初筛通过');
+    expect(screen.getByTestId('studio-shot-card-a-2')).toHaveTextContent('初筛未过');
+
+    // 退回备注
+    expect(screen.getByTestId('studio-shot-card-a-3')).toHaveTextContent('光影不对');
+
+    // 已锁定的显示"解锁"，未锁定的显示"通过/退回/锁定"
+    expect(screen.getByTestId('studio-review-unlock-a-2')).toBeInTheDocument();
+    expect(screen.queryByTestId('studio-review-approve-a-2')).toBeNull();
+    expect(screen.getByTestId('studio-review-approve-a-1')).toBeInTheDocument();
+    expect(screen.getByTestId('studio-review-reject-a-1')).toBeInTheDocument();
+    expect(screen.getByTestId('studio-review-lock-a-1')).toBeInTheDocument();
+  });
+
+  it('审片台：点"通过"调 review API 并就地把状态更新为已通过', async () => {
+    mockListShots.mockResolvedValue([
+      {
+        asset_id: 'a-1',
+        brief: '雨夜街道',
+        title: '镜头 1',
+        url: '/files/s1.png',
+        prompt: 'rainy street',
+        critic_status: 'approved',
+        review_status: 'pending_review',
+        review_note: null,
+        version: 1,
+        versions: 1,
+        created_at: '2026-07-19T10:00:00Z',
+      },
+    ]);
+    mockReview.mockResolvedValue({
+      asset_id: 'a-1',
+      review_status: 'approved',
+      review_note: null,
+    });
+
+    render(<StudioPanel projectId="proj-1" onClose={() => {}} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('studio-review-approve-a-1')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('studio-review-status-a-1')).toHaveTextContent('待审');
+
+    fireEvent.click(screen.getByTestId('studio-review-approve-a-1'));
+
+    await waitFor(() => {
+      expect(mockReview).toHaveBeenCalledWith('a-1', 'approve', undefined);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('studio-review-status-a-1')).toHaveTextContent('已通过');
+    });
+  });
+
+  it('审片台：点"重新生成"调 regenerate API（表单区供应商/模型）并刷新列表', async () => {
+    mockListShots.mockResolvedValue([
+      {
+        asset_id: 'a-1',
+        brief: '雨夜街道',
+        title: '镜头 1',
+        url: '/files/s1.png',
+        prompt: 'rainy street',
+        critic_status: 'approved',
+        review_status: 'pending_review',
+        review_note: null,
+        version: 1,
+        versions: 1,
+        created_at: '2026-07-19T10:00:00Z',
+      },
+    ]);
+    mockRegenerate.mockResolvedValue({
+      status: 'approved',
+      asset_id: 'a-2',
+      url: '/files/s1v2.png',
+      prompt: 'rainy street v2',
+      rounds: 2,
+    });
+
+    render(<StudioPanel projectId="proj-1" onClose={() => {}} />);
+    await waitFor(() => {
+      expect(
+        (screen.getByTestId('studio-image-provider') as HTMLSelectElement).querySelector(
+          'option[value="img-prov"]'
+        )
+      ).not.toBeNull();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('studio-regen-a-1')).toBeInTheDocument();
+    });
+    await fillForm();
+
+    const callsBefore = mockListShots.mock.calls.length;
+    fireEvent.click(screen.getByTestId('studio-regen-a-1'));
+
+    await waitFor(() => {
+      expect(mockRegenerate).toHaveBeenCalledWith({
+        project_id: 'proj-1',
+        asset_id: 'a-1',
+        image_provider_id: 'img-prov',
+        image_model: 'img-v1',
+        llm_provider_id: undefined,
+        llm_model_id: undefined,
+      });
+    });
+    // 完成后刷新镜头列表
+    await waitFor(() => {
+      expect(mockListShots.mock.calls.length).toBeGreaterThan(callsBefore);
+    });
+  });
+
+  it('审片台：未选图像供应商/模型时点"重新生成"报表单错误，不调 API', async () => {
+    mockListShots.mockResolvedValue([
+      {
+        asset_id: 'a-1',
+        brief: '雨夜街道',
+        title: '镜头 1',
+        url: '/files/s1.png',
+        prompt: 'rainy street',
+        critic_status: 'approved',
+        review_status: 'pending_review',
+        review_note: null,
+        version: 1,
+        versions: 1,
+        created_at: '2026-07-19T10:00:00Z',
+      },
+    ]);
+
+    render(<StudioPanel projectId="proj-1" onClose={() => {}} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('studio-regen-a-1')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('studio-regen-a-1'));
+
+    expect(mockRegenerate).not.toHaveBeenCalled();
+    expect(screen.getByTestId('studio-form-error')).toBeInTheDocument();
   });
 });

@@ -17,6 +17,9 @@ import {
   Clock,
   Download,
   Loader2,
+  Lock,
+  LockOpen,
+  RefreshCw,
   XCircle,
 } from 'lucide-react';
 import {
@@ -24,6 +27,9 @@ import {
   ProviderOut,
   StudioCharacterCardOut,
   StudioEpisodeTaskOut,
+  StudioReviewAction,
+  StudioReviewStatus,
+  StudioShotOut,
   StudioShotProgress,
 } from '../services/apiClient';
 import { useI18n } from '../i18n';
@@ -65,6 +71,12 @@ export const StudioPanel: React.FC<StudioPanelProps> = ({ projectId, projects = 
   const [task, setTask] = useState<StudioEpisodeTaskOut | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+
+  // 审片台：项目全部镜头（按 brief 分组的版本列表）
+  const [shots, setShots] = useState<StudioShotOut[]>([]);
+  const [shotsLoading, setShotsLoading] = useState(false);
+  const [reviewingId, setReviewingId] = useState<string | null>(null);
+  const [regeneratingId, setRegeneratingId] = useState<string | null>(null);
 
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -114,6 +126,29 @@ export const StudioPanel: React.FC<StudioPanelProps> = ({ projectId, projects = 
     };
   }, [selectedProjectId]);
 
+  // 审片台：拉取项目全部镜头
+  const refreshShots = useCallback(async () => {
+    const pid = selectedProjectId.trim();
+    if (!pid) {
+      setShots([]);
+      return;
+    }
+    setShotsLoading(true);
+    try {
+      const rows = await api.listStudioShots(pid);
+      setShots(rows || []);
+    } catch (e) {
+      console.warn('[Studio] listStudioShots failed', e);
+    } finally {
+      setShotsLoading(false);
+    }
+  }, [selectedProjectId]);
+
+  // 面板加载 / 项目切换时拉镜头列表
+  useEffect(() => {
+    void refreshShots();
+  }, [refreshShots]);
+
   const imageProviders = providers.filter((p) => (p.image_models || []).length > 0);
   const llmProviders = providers.filter((p) => (p.chat_models || []).length > 0);
   const selectedImageProvider = imageProviders.find((p) => p.provider_id === imageProviderId);
@@ -126,7 +161,11 @@ export const StudioPanel: React.FC<StudioPanelProps> = ({ projectId, projects = 
         try {
           const data = await api.getStudioEpisode(taskId);
           setTask(data);
-          if (data.status !== 'running') stopPolling();
+          if (data.status !== 'running') {
+            stopPolling();
+            // 整集生成结束后刷新审片台镜头列表
+            void refreshShots();
+          }
         } catch (e: any) {
           stopPolling();
           setTask((prev) => ({
@@ -146,7 +185,7 @@ export const StudioPanel: React.FC<StudioPanelProps> = ({ projectId, projects = 
       void tick();
       pollTimerRef.current = setInterval(tick, POLL_INTERVAL_MS);
     },
-    [stopPolling]
+    [stopPolling, refreshShots]
   );
 
   const handleGenerate = async () => {
@@ -190,6 +229,91 @@ export const StudioPanel: React.FC<StudioPanelProps> = ({ projectId, projects = 
       return next;
     });
   };
+
+  // ---------- 审片台 ----------
+
+  /** 审核操作：approve/reject/lock/unlock；reject 时弹备注输入。成功后就地更新。 */
+  const handleReview = async (shot: StudioShotOut, action: StudioReviewAction) => {
+    let note: string | undefined;
+    if (action === 'reject') {
+      const input = window.prompt(t('studioReviewNotePrompt'));
+      if (input === null) return; // 用户取消
+      note = input.trim() || undefined;
+    }
+    setReviewingId(shot.asset_id);
+    try {
+      const res = await api.reviewStudioShot(shot.asset_id, action, note);
+      setShots((prev) =>
+        prev.map((s) =>
+          s.asset_id === shot.asset_id
+            ? { ...s, review_status: res.review_status, review_note: res.review_note }
+            : s
+        )
+      );
+    } catch (e: any) {
+      console.warn('[Studio] reviewStudioShot failed', e);
+      setFormError(e?.message || String(e));
+    } finally {
+      setReviewingId(null);
+    }
+  };
+
+  /** 单镜头重生成：同步接口（1~2 分钟），用表单区已选的图像供应商/模型。 */
+  const handleRegenerate = async (shot: StudioShotOut) => {
+    if (!imageProviderId || !imageModel) {
+      setFormError(t('studioErrorProviderRequired'));
+      return;
+    }
+    setFormError(null);
+    setRegeneratingId(shot.asset_id);
+    try {
+      await api.regenerateStudioShot({
+        project_id: selectedProjectId.trim(),
+        asset_id: shot.asset_id,
+        image_provider_id: imageProviderId,
+        image_model: imageModel,
+        llm_provider_id: llmProviderId || undefined,
+        llm_model_id: llmModelId || undefined,
+      });
+      await refreshShots(); // 新版本出现，version 数 +1
+    } catch (e: any) {
+      console.warn('[Studio] regenerateStudioShot failed', e);
+      setFormError(e?.message || String(e));
+    } finally {
+      setRegeneratingId(null);
+    }
+  };
+
+  const reviewStatusMeta = (status: StudioReviewStatus) => {
+    switch (status) {
+      case 'approved':
+        return { text: t('studioReviewApproved'), cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
+      case 'rejected':
+        return { text: t('studioReviewRejected'), cls: 'bg-red-50 text-red-600 border-red-200' };
+      case 'locked':
+        return { text: t('studioReviewLocked'), cls: 'bg-indigo-50 text-indigo-700 border-indigo-200' };
+      default:
+        return { text: t('studioReviewPending'), cls: 'bg-[#f1f5f9] text-[#64748b] border-[#e2e8f0]' };
+    }
+  };
+
+  const criticMeta = (status: StudioShotOut['critic_status']) => {
+    if (status === 'approved')
+      return { text: t('studioCriticPass'), cls: 'text-emerald-600' };
+    if (status === 'max_rounds_exceeded')
+      return { text: t('studioCriticFail'), cls: 'text-amber-600' };
+    return null;
+  };
+
+  /** 按 brief 分组（保持出现顺序），组内按 version 升序。 */
+  const shotGroups: { brief: string; shots: StudioShotOut[] }[] = [];
+  for (const s of shots) {
+    const key = s.brief || s.title || s.asset_id;
+    const group = shotGroups.find((g) => g.brief === key);
+    if (group) group.shots.push(s);
+    else shotGroups.push({ brief: key, shots: [s] });
+  }
+  for (const g of shotGroups) g.shots.sort((a, b) => a.version - b.version);
 
   const phaseLabel = (phase?: string) => {
     switch (phase) {
@@ -574,6 +698,139 @@ export const StudioPanel: React.FC<StudioPanelProps> = ({ projectId, projects = 
             )}
           </section>
         )}
+
+        {/* 审片台：项目全部镜头，人工审核 + 单镜头重生成 */}
+        <section
+          data-testid="studio-review-board"
+          className="bg-white border border-[#e8edf3] rounded-2xl p-6 shadow-sm flex flex-col gap-4"
+        >
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-bold text-[#111827] uppercase tracking-wider">
+              {t('studioReviewBoard')}
+            </h2>
+            {shotsLoading && <Loader2 className="w-4 h-4 text-brand-600 animate-spin" />}
+          </div>
+
+          {!shotsLoading && shotGroups.length === 0 && (
+            <p className="text-xs text-[#94a3b8]">{t('studioNoShots')}</p>
+          )}
+
+          {shotGroups.map((g, gi) => (
+            <div key={g.brief} data-testid={`studio-shot-group-${gi}`} className="flex flex-col gap-2">
+              <div className="text-xs font-bold text-[#64748b] truncate">{g.brief}</div>
+              {g.shots.map((s) => {
+                const rsMeta = reviewStatusMeta(s.review_status);
+                const cMeta = criticMeta(s.critic_status);
+                const locked = s.review_status === 'locked';
+                const busy = reviewingId === s.asset_id || regeneratingId === s.asset_id;
+                return (
+                  <div
+                    key={s.asset_id}
+                    data-testid={`studio-shot-card-${s.asset_id}`}
+                    className="flex flex-col gap-2 bg-[#f8fafc] border border-[#e8edf3] rounded-xl px-4 py-3"
+                  >
+                    <div className="flex items-center gap-3">
+                      {s.url && (
+                        <img
+                          src={s.url}
+                          alt={s.title || g.brief}
+                          className="w-16 h-16 rounded-lg object-cover flex-shrink-0 bg-black/5"
+                        />
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-bold text-[#111827] truncate">
+                          {s.title || s.brief}
+                        </div>
+                        <div className="flex items-center flex-wrap gap-2 mt-1">
+                          <span className="text-xs text-[#94a3b8] font-mono">
+                            {t('studioShotVersion')
+                              .replace('{x}', String(s.version))
+                              .replace('{y}', String(s.versions))}
+                          </span>
+                          {cMeta && (
+                            <span className={`text-xs font-bold ${cMeta.cls}`}>{cMeta.text}</span>
+                          )}
+                          <span
+                            data-testid={`studio-review-status-${s.asset_id}`}
+                            className={`text-xs font-bold px-2 py-0.5 rounded-full border ${rsMeta.cls}`}
+                          >
+                            {locked && <Lock className="inline w-3 h-3 mr-1 -mt-0.5" />}
+                            {rsMeta.text}
+                          </span>
+                        </div>
+                        {s.review_note && (
+                          <div className="text-xs text-[#64748b] mt-1 truncate">
+                            {s.review_note}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center flex-wrap gap-2">
+                      {locked ? (
+                        <button
+                          data-testid={`studio-review-unlock-${s.asset_id}`}
+                          disabled={busy}
+                          onClick={() => handleReview(s, 'unlock')}
+                          className="px-3 py-1.5 rounded-lg text-xs font-bold bg-white border border-indigo-200 text-indigo-700 hover:bg-indigo-50 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                        >
+                          <LockOpen className="w-3.5 h-3.5" />
+                          {t('studioReviewUnlock')}
+                        </button>
+                      ) : (
+                        <>
+                          <button
+                            data-testid={`studio-review-approve-${s.asset_id}`}
+                            disabled={busy}
+                            onClick={() => handleReview(s, 'approve')}
+                            className="px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 text-white hover:bg-emerald-500 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            {t('studioReviewApprove')}
+                          </button>
+                          <button
+                            data-testid={`studio-review-reject-${s.asset_id}`}
+                            disabled={busy}
+                            onClick={() => handleReview(s, 'reject')}
+                            className="px-3 py-1.5 rounded-lg text-xs font-bold bg-white border border-red-200 text-red-600 hover:bg-red-50 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            {t('studioReviewReject')}
+                          </button>
+                          <button
+                            data-testid={`studio-review-lock-${s.asset_id}`}
+                            disabled={busy}
+                            onClick={() => handleReview(s, 'lock')}
+                            className="px-3 py-1.5 rounded-lg text-xs font-bold bg-white border border-indigo-200 text-indigo-700 hover:bg-indigo-50 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                          >
+                            <Lock className="w-3.5 h-3.5" />
+                            {t('studioReviewLock')}
+                          </button>
+                        </>
+                      )}
+                      <button
+                        data-testid={`studio-regen-${s.asset_id}`}
+                        disabled={busy || regeneratingId !== null}
+                        onClick={() => handleRegenerate(s)}
+                        className="px-3 py-1.5 rounded-lg text-xs font-bold bg-white border border-[#e8edf3] text-[#111827] hover:border-brand-600/40 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                      >
+                        {regeneratingId === s.asset_id ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            {t('studioRegenerating')}
+                          </>
+                        ) : (
+                          <>
+                            <RefreshCw className="w-3.5 h-3.5" />
+                            {t('studioRegenerate')}
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </section>
       </div>
     </div>
   );

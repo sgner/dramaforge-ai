@@ -416,6 +416,23 @@ export const api = {
       `/studio/character-cards?project_id=${encodeURIComponent(projectId)}`
     ),
 
+  // ---------- Studio 审片台（镜头人工审核 + 单镜头重生成） ----------
+  listStudioShots: (projectId: string) =>
+    request<StudioShotOut[]>(`/studio/shots?project_id=${encodeURIComponent(projectId)}`),
+
+  reviewStudioShot: (assetId: string, action: StudioReviewAction, note?: string) =>
+    request<StudioShotReviewOut>(`/studio/shots/${encodeURIComponent(assetId)}/review`, {
+      method: 'POST',
+      body: JSON.stringify(note ? { action, note } : { action }),
+    }),
+
+  // 同步接口，可能跑 1~2 分钟（编剧/美术/质检闭环），调用方要给 loading 态。
+  regenerateStudioShot: (payload: StudioShotRegeneratePayload) =>
+    request<StudioShotRegenerateOut>('/studio/shots/regenerate', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
   // ---------- Bootstrap (首屏合并端点) ----------
   // 合并 listDramaTasks + listProviders + getUserPreference('model_bindings')
   // 三个首屏请求为单个 /api/bootstrap，减少 RTT（3 → 1）。
@@ -598,4 +615,55 @@ export interface StudioCharacterCardOut {
   identity: { face_anchor?: string; [k: string]: any };
   reference_asset_ids: string[];
   url?: string | null;
+}
+
+// ============ Studio 审片台 ============
+/** 人工审核动作：approve→approved，reject→rejected，lock→locked，unlock→pending_review。 */
+export type StudioReviewAction = 'approve' | 'reject' | 'lock' | 'unlock';
+
+export type StudioReviewStatus = 'pending_review' | 'approved' | 'rejected' | 'locked';
+
+/** GET /api/studio/shots 响应项。同一 brief 的多个资产是同一镜头的多个版本。 */
+export interface StudioShotOut {
+  asset_id: string;
+  brief: string;
+  title: string;
+  url: string;
+  prompt: string;
+  critic_status: 'approved' | 'max_rounds_exceeded' | null;
+  review_status: StudioReviewStatus;
+  review_note: string | null;
+  /** 组内序号（1 起）。 */
+  version: number;
+  /** 组内版本总数。 */
+  versions: number;
+  created_at: string;
+}
+
+/** POST /api/studio/shots/{asset_id}/review 响应体。 */
+export interface StudioShotReviewOut {
+  asset_id: string;
+  review_status: StudioReviewStatus;
+  review_note: string | null;
+}
+
+/** POST /api/studio/shots/regenerate 请求体。 */
+export interface StudioShotRegeneratePayload {
+  project_id: string;
+  asset_id: string;
+  image_provider_id: string;
+  image_model: string;
+  llm_provider_id?: string;
+  llm_model_id?: string;
+  max_rounds?: number;
+}
+
+/** POST /api/studio/shots/regenerate 响应体（新资产 = 同 brief 新版本）。 */
+export interface StudioShotRegenerateOut {
+  status: string;
+  asset_id: string;
+  url: string;
+  prompt: string;
+  rounds: number;
+  [k: string]: any;
 }
