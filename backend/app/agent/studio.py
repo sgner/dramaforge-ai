@@ -26,6 +26,12 @@ from typing import Any, Optional
 from sqlalchemy.orm import Session
 
 from .asset_intelligence import inspect_asset
+from .character_cards import (
+    check_consistency,
+    identity_block,
+    load_character_cards,
+    reference_urls,
+)
 from .llm_factory import load_llm_configs, select_llm_for_task
 from ..routers.media import ImageGenerateIn, _load_provider, _openai_image
 
@@ -94,8 +100,10 @@ def _parse_shot_json(text: str, brief: str) -> tuple[str, str]:
     return raw or brief, ""
 
 
-async def _screenwriter_write(llm, brief: str, feedback: str) -> tuple[str, str]:
+async def _screenwriter_write(llm, brief: str, feedback: str, identity_context: str = "") -> tuple[str, str]:
     user = f"[STORY BRIEF]\n{brief}"
+    if identity_context:
+        user += f"\n\n{identity_context}"
     if feedback:
         user += f"\n\n[CRITIC FEEDBACK — 必须逐条修正]\n{feedback}"
     resp = await llm.generate_structured(
@@ -176,8 +184,13 @@ async def run_studio_shot(
     llm_provider_id: Optional[str] = None,
     llm_model_id: Optional[str] = None,
     max_rounds: int = 3,
+    character_card_ids: Optional[list[str]] = None,
 ) -> StudioShotResult:
-    """编剧 → 美术 → 质检 三角闭环；质检不过则带反馈回到编剧，最多 max_rounds 轮。"""
+    """编剧 → 美术 → 质检 三角闭环；质检不过则带反馈回到编剧，最多 max_rounds 轮。
+
+    character_card_ids 非空时启用 Track C 一致性锁定：
+    编剧注入身份描述块、美术带参考图、质检逐卡做一致性比对。
+    """
     if not brief.strip():
         raise ValueError("brief is empty")
     max_rounds = max(1, min(int(max_rounds), 5))
@@ -185,6 +198,13 @@ async def run_studio_shot(
     configs = load_llm_configs(db)
     llm = select_llm_for_task(llm_provider_id, configs, llm_model_id)
     image_provider = _load_provider(db, image_provider_id)
+    cards = load_character_cards(db, project_id, character_card_ids or [])
+    identity_context = "\n\n".join(identity_block(c) for c in cards)
+    ref_urls: list[str] = []
+    for c in cards:
+        for u in reference_urls(db, c):
+            if u not in ref_urls:
+                ref_urls.append(u)
 
     trace: list[StudioStep] = []
     feedback = ""
@@ -194,7 +214,7 @@ async def run_studio_shot(
 
     for round_no in range(1, max_rounds + 1):
         # ---- 编剧 agent ----
-        shot_prompt, shot_notes = await _screenwriter_write(llm, brief, feedback)
+        shot_prompt, shot_notes = await _screenwriter_write(llm, brief, feedback, identity_context)
         trace.append(StudioStep(
             round=round_no, role="screenwriter", action="write_shot_prompt",
             summary=f"镜头 prompt 就绪（{len(shot_prompt)} 字符）",
@@ -206,7 +226,7 @@ async def run_studio_shot(
             image_provider,
             ImageGenerateIn(
                 provider_id=image_provider_id, model=image_model,
-                prompt=shot_prompt, ref_urls=[], aspect_ratio="16:9",
+                prompt=shot_prompt, ref_urls=ref_urls, aspect_ratio="16:9",
             ),
         )
         asset = _persist_shot_asset(
@@ -217,12 +237,16 @@ async def run_studio_shot(
         trace.append(StudioStep(
             round=round_no, role="artist", action="generate_shot_image",
             summary=f"镜头图已生成（asset {asset.id}）",
-            detail={"asset_id": asset.id, "url": out.url, "provider_id": image_provider_id, "model": image_model},
+            detail={"asset_id": asset.id, "url": out.url, "provider_id": image_provider_id,
+                    "model": image_model, "ref_count": len(ref_urls)},
         ))
 
-        # ---- 质检 agent ----
-        last_inspection = await inspect_asset(db, project_id, asset.id, llm)
-        approved = bool(last_inspection.get("meets_standard"))
+        # ---- 质检 agent（基础检查 + 逐卡一致性） ----
+        base_inspection = await inspect_asset(db, project_id, asset.id, llm)
+        consistency = [await check_consistency(db, c, asset, llm) for c in cards]
+        approved = bool(base_inspection.get("meets_standard")) and all(c["consistent"] for c in consistency)
+        last_inspection = {**base_inspection, "consistency": consistency}
+        issues = [i for c in consistency for i in c["issues"] if not c["consistent"]]
         trace.append(StudioStep(
             round=round_no, role="critic", action="inspect_shot",
             summary="过审" if approved else "打回：" + _critic_feedback(last_inspection)[:120],
@@ -235,6 +259,8 @@ async def run_studio_shot(
                 inspection=last_inspection, trace=trace,
             )
         feedback = _critic_feedback(last_inspection)
+        if issues:
+            feedback += "\ncharacter consistency: " + "; ".join(issues)
 
     return StudioShotResult(
         status="max_rounds_exceeded", asset_id=asset.id if asset else "",
