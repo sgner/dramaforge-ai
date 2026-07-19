@@ -208,3 +208,26 @@ POST /api/studio/export            任意镜头序列 → ffmpeg 合成 mp4
 - 测试 5 例（backend/tests/test_story_bible.py），后端全量 732 passed。
 
 下一步：审片台（review_status + 多版本 + 人审 UI）。
+
+### 6.4 已落地的审片台后端（本迭代）
+
+人审层已从规划变为现实（commit 0c089d8）：
+
+- **critic 降为初筛**：闭环结束后镜头自动写入 `extra.critic_status` + `review_status=pending_review`，
+  不再"自动过审即交付"；
+- **人审终审**：`POST /api/studio/shots/{id}/review`（approve / reject / lock / unlock + 备注）；
+- **版本分组**：`GET /api/studio/shots` 按 brief 自动归并多版本（version x/y），
+  配合作废重生成（`/shots/regenerate`）形成"退回 → 新版本 → 再审"的循环；
+- 测试 5 例（backend/tests/test_review_desk.py），后端全量 737 passed；
+- 前端审片台（StudioPanel 结果区升级）开发中。
+
+### 6.5 首个 demo 的前提与路径（2026-07-20 实测评估）
+
+代码链路已完整（故事 → 拆镜头 → 三角过审 → 人审 → 合成 mp4），
+首个真实 demo 的剩余工作不是功能开发，而是**真机验证**：
+
+1. 硬前提：供应商配置一个支持视觉（vision）的 chat 模型
+   （角色卡建卡与质检需要看图；不建卡跑整集则普通 chat 模型即可，但无一致性锁定）；
+2. 路径：启动后端 + 前端 → 项目列表页场记板图标进工作室 → 粘小说 → 生成整集；
+3. 首跑建议 3 镜头小集，目标是暴露真实问题（vision 能力、质检打回率、生成时长），
+   预计 30 分钟内可见第一支真实成片。
