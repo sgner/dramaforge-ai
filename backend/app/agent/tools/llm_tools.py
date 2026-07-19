@@ -823,12 +823,12 @@ class OptimizePromptTool(BaseTool):
             # 3. 退回原始 prompt 让生成继续，agent 可以在后续步骤里换更明确的 prompt 重试。
             optimized = str(params["prompt"])
             return {
-                "optimized": optimized,
+                "optimized": _cap_prompt_length(optimized),
                 "target": target,
                 "fallback": True,
                 "fallback_reason": "sanitize_returned_empty",
             }
-        return {"optimized": optimized, "target": target}
+        return {"optimized": _cap_prompt_length(optimized), "target": target}
 
 
 # ========================
@@ -877,7 +877,12 @@ _OPTIMIZE_META_PATTERNS: tuple[str, ...] = (
     "根据", "根据规则", "根据上下文", "根据上面的",
     "综上", "综上所述", "从整体", "总体而言", "总体来说",
     "让我分析", "让我看看", "让我审视", "让我对比", "让我权衡",
-    "规则包", "包是", "规则中", "规则要求", "规范要求",
+    "规则包", "包是", "规则中", "规则要求", "规范要求", "规则说",
+    # 系统提示词复述类（线上事故：模型把 OPTIMIZE_PROMPT_SYSTEM_PROMPT 里的
+    # canonical_layout 硬约束条款连引号一起背出来当输出，asset.prompt 变成
+    # '"If the context contains canonical_layout, treat it as a hard constraint..."
+    # + 中文推理。这些词是元语言，绝不可能出现在合法 prompt 里）
+    "canonical_layout", "hard constraint", "硬约束",
     # 中文：规划/措辞调整类（用户反馈：模型输出"中提到了...但我们需要调整为...
     # 我们可以用...最后，必须原样嵌入 B.4 的布局段"这种全文思考）
     "我们需要", "我们可以", "我们必须", "必须", "提到", "嵌入",
@@ -961,6 +966,25 @@ def _looks_like_real_prompt(text: str) -> bool:
     has_marker = any(marker in lower for marker in prompt_markers)
     has_many_commas = stripped.count(",") >= 3
     return has_marker or has_many_commas
+
+
+# 上游供应商的 prompt 长度上限（实测 seedance 网关：5~2000 字符，超限 HTTP 400
+# "prompt length must be between 5 and 2000 characters"）。角色概念表布局段本身
+# 就有 1300+ 字符，叠加结构化字段后很容易超限，这里统一兜底截断。
+_PROMPT_MAX_LEN = 1900
+
+
+def _cap_prompt_length(text: str, max_len: int = _PROMPT_MAX_LEN) -> str:
+    """把最终 prompt 截断到供应商可接受的长度（尽量在句子/逗号边界）。"""
+    text = (text or "").strip()
+    if len(text) <= max_len:
+        return text
+    cut = text[:max_len]
+    for sep in (". ", ", ", "，", "。"):
+        idx = cut.rfind(sep)
+        if idx > max_len * 0.8:
+            return cut[:idx].rstrip(" ,，")
+    return cut.rstrip(" ,，")
 
 
 def _sanitize_optimized_prompt(raw: str) -> str:

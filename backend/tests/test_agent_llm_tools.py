@@ -11,6 +11,7 @@ from app.agent.tools.llm_tools import (
     ExtractShotsTool,
     OptimizePromptTool,
     _sanitize_optimized_prompt,
+    _cap_prompt_length,
     _scenes_to_markdown,
     _compute_text_stats,
     _format_script_for_llm,
@@ -1284,3 +1285,81 @@ async def test_generate_script_end_to_end_artifact_carries_extra():
     assert script_json["visualSignature"]["medium"] == "实拍"
     created = [p for t, p in events if t == "artifact_created"]
     assert created and created[-1]["extra"]["script"]["characters"]
+
+
+# ========================
+# 线上事故回归：模型复述系统提示词 + prompt 超长
+# ========================
+
+def test_sanitize_strips_canonical_layout_rule_recitation():
+    """模型把 optimize 系统提示词里的 canonical_layout 硬约束条款背出来当输出
+    （agent_steps 真实样本：asset.prompt 以 '"If the context contains canonical_layout,
+    treat it as a hard constraint..." 开头，后接中文推理）。整段是规则复述+思考，
+    应返回空串让上层 fallback 到 source_prompt。"""
+    raw = (
+        '"If the context contains `canonical_layout`, treat it as a hard constraint. '
+        'Preserve its layout, views, identity consistency, background, and negative '
+        'constraints verbatim; never replace or remove those requirements.", '
+        '它是硬约束。但规则说"Preserve its layout"，我需要遵守这个约束，'
+        '不能替换或删除这些要求，只能在周围添加主体、动作、镜头、材质或光线细节。'
+        '让我思考一下怎么处理这个角色概念表的布局段，必须原样嵌入 B.4 的布局段。'
+    )
+    out = _sanitize_optimized_prompt(raw)
+    assert "canonical_layout" not in out
+    assert "hard constraint" not in out
+
+
+def test_sanitize_extracts_real_prompt_after_rule_recitation():
+    """规则复述之后附带了真正的 prompt 段时，应提取真 prompt 而不是整段丢弃。"""
+    raw = (
+        '"If the context contains `canonical_layout`, treat it as a hard constraint." '
+        '它是硬约束，我需要保留布局。\n\n'
+        "A male explorer in his late 20s, long face, straight eyebrows, round eyes, "
+        "short black hair, wearing a white t-shirt and dark jacket, standing relaxed, "
+        "front view, soft diffused lighting, photorealistic, 8K"
+    )
+    out = _sanitize_optimized_prompt(raw)
+    assert "canonical_layout" not in out
+    assert "male explorer" in out
+
+
+def test_cap_prompt_length_boundary():
+    """超长 prompt 截断到上限内，且尽量落在句子/逗号边界。"""
+    short = "a cat, cinematic lighting"
+    assert _cap_prompt_length(short) == short
+    long_prompt = ", ".join(f"detail{i}" for i in range(500))
+    capped = _cap_prompt_length(long_prompt, max_len=100)
+    assert len(capped) <= 100
+    assert capped.endswith(("4", "5", "6", "7", "8", "9", "0", "1", "2", "3"))
+
+
+@pytest.mark.asyncio
+async def test_optimize_prompt_falls_back_on_rule_recitation():
+    """LLM 复述系统提示词 → sanitize 判空 → fallback 到 source_prompt（不含规则文本）。"""
+    class _StubLLM:
+        async def generate(self, messages, tools=None, **kwargs):
+            from app.agent.llm import LLMResponse
+            return LLMResponse(content=(
+                '"If the context contains `canonical_layout`, treat it as a hard constraint '
+                'and preserve its layout verbatim." 它是硬约束，我需要遵守，不能替换或删除。'
+                '让我想想怎么处理这个角色概念表，必须原样嵌入布局段，保留所有负面约束。'
+            ))
+
+    ctx = ToolContext(task_id="t1", llm_client=_StubLLM())
+    result = await OptimizePromptTool().call(ctx, {"prompt": "男生在咖啡店，特写", "target": "image"})
+    assert result["optimized"] == "男生在咖啡店，特写"
+    assert result["fallback"] is True
+    assert "canonical_layout" not in result["optimized"]
+
+
+@pytest.mark.asyncio
+async def test_optimize_prompt_caps_overlength_output():
+    """LLM 输出超长（>1900）→ 截断到供应商可接受长度。"""
+    class _StubLLM:
+        async def generate(self, messages, tools=None, **kwargs):
+            from app.agent.llm import LLMResponse
+            return LLMResponse(content=", ".join(f"visual detail segment {i}" for i in range(300)))
+
+    ctx = ToolContext(task_id="t1", llm_client=_StubLLM())
+    result = await OptimizePromptTool().call(ctx, {"prompt": "source", "target": "image"})
+    assert len(result["optimized"]) <= 1900
