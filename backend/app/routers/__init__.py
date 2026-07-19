@@ -9,11 +9,13 @@ from . import (
     llm_providers,
     media_providers,
     media,
+    llm,
     providers,
     drama_tasks,
     user_preferences,
     prompt_templates,
     bootstrap,
+    studio,
 )
 
 __all__ = [
@@ -24,9 +26,11 @@ __all__ = [
     "llm_providers",
     "media_providers",
     "media",
+    "llm",
     "providers",
     "drama_tasks",
     "user_preferences",
     "prompt_templates",
     "bootstrap",
+    "studio",
 ]
