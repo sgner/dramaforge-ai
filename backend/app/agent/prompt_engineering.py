@@ -181,6 +181,20 @@ async def optimize_generation_prompt(
     if rule_pack_id and "rule_pack_context" not in merged_context:
         merged_context["rule_pack_context"] = _build_prompt_rule_context(get_rule_pack(rule_pack_id), target)
     ctx.emit_event("prompt_optimization_started", {"target": target, "source_prompt": source})
+    if merged_context.get("canonical_layout"):
+        # 工具构造的结构化 prompt（角色概念表 4 区域 / 场景七层 / 道具四视图 /
+        # 分镜六宫格）本身就是生产级 prompt，LLM 改写只会破坏 canonical_layout
+        # —— 线上实锤：角色图丢失 4 区域布局变成普通肖像，场景七层被压成
+        # 一段散文，道具四视图消失。canonical_layout 存在时跳过 LLM 改写，
+        # 只追加硬约束（视觉签名连续性）。
+        optimized = _append_generation_hard_constraints(source, merged_context)
+        ctx.emit_event("prompt_optimization_finished", {
+            "target": target,
+            "source_prompt": source,
+            "optimized_prompt": optimized,
+            "bypass": "canonical_layout",
+        })
+        return optimized, source
     result = await OptimizePromptTool().execute(ctx, {
         "prompt": source,
         "target": target,

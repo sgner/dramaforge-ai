@@ -80,6 +80,15 @@ STORYBOARD_SIX_GRID_PROMPT = (
     "no extra panels, no single full-frame composition, no UI, no watermark, no readable text, no numbers, no labels, no annotations."
 )
 
+# 道具四视图构图（V3.0 C.3 默认）：_build_prop_prompt / 批量生成 / canonical_layout 共用同一文本
+PROP_FOUR_VIEW_LAYOUT = (
+    "prop reference sheet, four-view composition: "
+    "top-left full front view, top-right full back view, "
+    "bottom-left side view (showing thickness and layering), "
+    "bottom-right detail close-up (showing engravings, inscriptions, mechanisms, wear marks), "
+    "pure white or light gray background, soft top lighting, high detail, sharp focus"
+)
+
 
 def _resolve_service(ctx: ToolContext) -> MediaService:
     return ctx.media_service or get_default_media_service()
@@ -966,13 +975,7 @@ def _build_prop_prompt(prop: dict) -> str:
         )
     else:
         # 默认四视图（C.3 关键道具强制）
-        parts.append(
-            "prop reference sheet, four-view composition: "
-            "top-left full front view, top-right full back view, "
-            "bottom-left side view (showing thickness and layering), "
-            "bottom-right detail close-up (showing engravings, inscriptions, mechanisms, wear marks), "
-            "pure white or light gray background, soft top lighting, high detail, sharp focus"
-        )
+        parts.append(PROP_FOUR_VIEW_LAYOUT)
     spec = get_spec_for_tool("image_prop")
     if spec:
         parts.append(spec)
@@ -1324,7 +1327,12 @@ class GeneratePropImageTool(BaseTool):
         svc = _resolve_service(ctx)
         prop = params["prop"]
         source_prompt = _build_prop_prompt(prop)
-        prompt, source_prompt = await optimize_generation_prompt(ctx, source_prompt, "image", {"asset_kind": "prop", "prop": prop})
+        prompt, source_prompt = await optimize_generation_prompt(ctx, source_prompt, "image", {
+            "asset_kind": "prop",
+            "prop": prop,
+            # 道具四视图/单图构图已在 _build_prop_prompt 内嵌，触发 bypass 防止 LLM 改写破坏
+            "canonical_layout": PROP_FOUR_VIEW_LAYOUT,
+        })
         req = MediaRequest(
             kind="image",
             prompt=prompt,

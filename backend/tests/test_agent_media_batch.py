@@ -59,3 +59,53 @@ async def test_media_batch_runs_image_and_video_concurrently_and_isolates_failur
     assert service.max_active == 2
     assert result["results"][0]["success"] is True
     assert result["results"][1]["success"] is False
+
+
+@pytest.mark.asyncio
+async def test_media_batch_character_job_keeps_sheet_layout():
+    """线上回归：批量角色资产的 prompt 必须含 4 区域概念表布局段，
+    且不再被 optimize LLM 二次改写。"""
+    from app.agent.tools.image_tools import CHARACTER_DESIGN_SHEET_PROMPT
+
+    captured = []
+
+    class _Svc:
+        async def generate(self, request):
+            captured.append(request.prompt)
+            return MediaResult(url="https://cdn.test/x.png", kind=request.kind)
+
+    class _FailLLM:
+        async def generate(self, messages, **kwargs):
+            raise AssertionError("canonical 资产不应再调 optimize LLM")
+
+    ctx = ToolContext(task_id="t1", llm_client=_FailLLM(), media_service=_Svc())
+    out = await GenerateMediaBatchTool().call(ctx, {
+        "jobs": [{"kind": "image", "asset_kind": "character", "name": "主角", "prompt": "male explorer, short black hair"}],
+    })
+    assert out["succeeded"] == 1
+    assert CHARACTER_DESIGN_SHEET_PROMPT in captured[0]
+    assert "male explorer" in captured[0]
+
+
+@pytest.mark.asyncio
+async def test_media_batch_prop_and_scene_jobs_get_canonical_layout():
+    """道具四视图 / 场景 environment-only 尾缀在批量路径确定性拼接。"""
+    captured = []
+
+    class _Svc:
+        async def generate(self, request):
+            captured.append(request.prompt)
+            return MediaResult(url="https://cdn.test/x.png", kind=request.kind)
+
+    ctx = ToolContext(task_id="t1", llm_client=_PromptLLM(), media_service=_Svc())
+    await GenerateMediaBatchTool().call(ctx, {
+        "jobs": [
+            {"kind": "image", "asset_kind": "prop", "name": "断手电", "prompt": "broken flashlight"},
+            {"kind": "image", "asset_kind": "scene", "name": "走廊", "prompt": "yellow corridor"},
+            {"kind": "image", "asset_kind": "other", "name": "x", "prompt": "a cat"},
+        ],
+    })
+    assert "four-view composition" in captured[0]
+    assert "environment-only scene reference image" in captured[1]
+    # 非 canonical 资产仍走 optimize 通道（_PromptLLM 会加 "optimized: " 前缀）
+    assert captured[2].startswith("optimized:")

@@ -300,8 +300,11 @@ async def test_all_media_generation_uses_optimized_prompt_and_storyboard_merges_
     assert collect_storyboard_reference_asset_ids(storyboard_params) == ["scene-asset", "character-asset", "prop-asset"]
     result = await GenerateStoryboardImageTool().execute(ctx, storyboard_params)
 
-    assert result["prompt"].startswith("OPTIMIZED PROMPT")
+    # canonical 结构化 prompt（分镜六宫格）不再被 optimize LLM 改写：
+    # 直接发结构化 source prompt（含镜头卡 + 六宫格布局段）
     assert "Six-panel storyboard sheet" in result["prompt"]
+    assert "hero raises sword" in result["prompt"]
+    assert "OPTIMIZED PROMPT" not in result["prompt"]
     assert result["source_prompt"]
     assert service.requests[0].reference_urls == ["/scene.png", "/character.png", "/prop.png"]
 
