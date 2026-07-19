@@ -55,7 +55,13 @@ class DatabaseMediaService:
         rows = self.db.query(ProviderConfig).filter(ProviderConfig.enabled.is_(True)).all()
         if binding:
             rows = [row for row in rows if row.provider_id == binding["provider_id"]]
-            requested_model = binding["model_id"]
+            # 带参考图的生成优先用显式绑定的 ref_model_id（i2i/i2v 模型，
+            # 跨家族命名时后缀推导不够，需要用户在设置里指定）。
+            requested_model = (
+                binding.get("ref_model_id")
+                if (request.reference_urls and binding.get("ref_model_id"))
+                else binding["model_id"]
+            )
         elif request.provider_id:
             rows = [row for row in rows if row.provider_id == request.provider_id]
             requested_model = request.model_id

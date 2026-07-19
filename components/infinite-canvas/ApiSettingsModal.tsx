@@ -1101,6 +1101,16 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
     }));
   }, []);
 
+  /* 参考图模型（i2i/i2v）：带参考图生成时使用的可选第二个模型 */
+  const updateModelRefBinding = useCallback((kind: ModelBindingKind, refModelId: string) => {
+    setCfg(prev => ({
+      ...prev,
+      modelBindings: prev.modelBindings.map(b =>
+        b.kind === kind ? { ...b, refModelId: refModelId || undefined } : b
+      ),
+    }));
+  }, []);
+
   /* ---- Recommend API ---- */
   const saveRecommendedApi = useCallback((index: number) => {
     const api = RECOMMENDED_APIS[index];
@@ -2189,6 +2199,8 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
                         newProviderId,
                         newProvider ? getDefaultModelForCapability(binding.kind, newProvider) : ''
                       );
+                      // 换供应商后旧的 refModelId 属于旧供应商，清空避免绑定脏数据
+                      updateModelRefBinding(binding.kind, '');
                     }}
                     searchPlaceholder={t('canvasApiSettingsSearchProviders')}
                     emptyText={t('canvasApiSettingsSearchEmpty')}
@@ -2202,6 +2214,18 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
                     placeholder={models.length === 0 ? t('canvasApiSettingsNoModelsForType') : undefined}
                   />
                 </div>
+                {(binding.kind === 'image' || binding.kind === 'video') && (
+                  <div className="api-step-card-row" data-testid={`api-ref-binding-${binding.kind}`}>
+                    <span className="api-ref-binding-label">{t('canvasApiSettingsRefModel')}</span>
+                    <SearchableSelect
+                      value={binding.refModelId || ''}
+                      options={[{ value: '', label: t('canvasApiSettingsRefModelAuto') }, ...modelOptions]}
+                      onChange={(v) => updateModelRefBinding(binding.kind, v)}
+                      searchPlaceholder={t('canvasApiSettingsSearchModels')}
+                      emptyText={models.length === 0 ? t('canvasApiSettingsNoModelsForType') : t('canvasApiSettingsSearchEmpty')}
+                    />
+                  </div>
+                )}
               </div>
             );
           })}

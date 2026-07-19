@@ -145,6 +145,8 @@ export interface ModelBinding {
   kind: ModelBindingKind;
   providerId: string;
   modelId: string;
+  /** 可选：带参考图时使用的模型（i2i/i2v）。跨模型家族命名时后缀推导不够，用显式绑定兜底。 */
+  refModelId?: string;
 }
 
 /** @deprecated Read-only compatibility shape for configurations saved before capability bindings. */
@@ -234,6 +236,7 @@ export function normalizeModelBindings(input: Partial<ApiConfig> & { stepBinding
       kind: binding.kind,
       providerId: providerIds.get(String(binding.providerId || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-')) || binding.providerId || '',
       modelId: binding.modelId || '',
+      ...(binding.refModelId ? { refModelId: binding.refModelId } : {}),
     });
   });
   return {

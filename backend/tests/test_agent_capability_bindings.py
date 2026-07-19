@@ -75,3 +75,43 @@ def test_resolve_capability_bindings_rejects_model_not_declared_by_provider(db_s
 
     with pytest.raises(CapabilityConfigurationError, match="old-default"):
         resolve_capability_bindings(db_session)
+
+
+def test_resolve_capability_bindings_accepts_and_validates_ref_model(db_session):
+    """refModelId 可选：存在时必须在 provider 模型列表里，否则报配置错误。"""
+    _provider(db_session)
+    db_session.add(UserPreference(key="model_bindings", value_json=json.dumps([
+        {"kind": "llm", "providerId": "p1", "modelId": "chat-1"},
+        {"kind": "image", "providerId": "p1", "modelId": "image-1", "refModelId": "image-i2i"},
+    ])))
+    db_session.commit()
+    # image-i2i 不在列表 → 报错
+    with pytest.raises(CapabilityConfigurationError, match="ref model"):
+        resolve_capability_bindings(db_session)
+
+    # 加进列表 → 通过且保留 ref_model_id
+    row = db_session.query(ProviderConfig).filter_by(provider_id="p1").first()
+    row.image_models_json = json.dumps(["image-1", "image-i2i"])
+    db_session.commit()
+    bindings = resolve_capability_bindings(db_session)
+    assert bindings["image"]["ref_model_id"] == "image-i2i"
+    assert bindings["llm"].get("ref_model_id") is None
+
+
+@pytest.mark.asyncio
+async def test_media_service_uses_ref_model_when_refs_present(db_session):
+    """DatabaseMediaService：有参考图时用 ref_model_id，没有时用 model_id。"""
+    from app.agent.media_service import DatabaseMediaService, MediaRequest
+
+    _provider(db_session)
+    svc = DatabaseMediaService(db_session, capability_bindings={
+        "image": {"provider_id": "p1", "model_id": "image-1", "ref_model_id": "image-i2i"},
+    })
+    row = db_session.query(ProviderConfig).filter_by(provider_id="p1").first()
+    row.image_models_json = json.dumps(["image-1", "image-i2i"])
+    db_session.commit()
+
+    no_refs = svc._provider(MediaRequest(kind="image", prompt="p"))
+    assert no_refs["selected_model"] == "image-1"
+    with_refs = svc._provider(MediaRequest(kind="image", prompt="p", reference_urls=["https://x/ref.png"]))
+    assert with_refs["selected_model"] == "image-i2i"

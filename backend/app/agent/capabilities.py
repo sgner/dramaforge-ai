@@ -30,8 +30,14 @@ def _read_bindings(db: Any) -> dict[str, dict[str, str]]:
             continue
         provider_id = str(item.get("providerId") or item.get("provider_id") or "").strip()
         model_id = str(item.get("modelId") or item.get("model_id") or "").strip()
+        # 可选：带参考图时的图生/视频模型（i2i/i2v）。跨模型家族时后缀推导
+        # （_resolve_ref_model）够不着，用显式绑定兜底。
+        ref_model_id = str(item.get("refModelId") or item.get("ref_model_id") or "").strip()
         if provider_id and model_id:
-            result[item["kind"]] = {"provider_id": provider_id, "model_id": model_id}
+            binding = {"provider_id": provider_id, "model_id": model_id}
+            if ref_model_id:
+                binding["ref_model_id"] = ref_model_id
+            result[item["kind"]] = binding
     return result
 
 
@@ -58,6 +64,11 @@ def resolve_capability_bindings(db: Any, *, require_llm: bool = True) -> dict[st
         if binding["model_id"] not in provider.get(model_fields[kind], []):
             raise CapabilityConfigurationError(
                 f"{kind} capability model '{binding['model_id']}' is not declared by provider '{binding['provider_id']}'"
+            )
+        ref_model_id = binding.get("ref_model_id")
+        if ref_model_id and ref_model_id not in provider.get(model_fields[kind], []):
+            raise CapabilityConfigurationError(
+                f"{kind} capability ref model '{ref_model_id}' is not declared by provider '{binding['provider_id']}'"
             )
         validated[kind] = binding
     return validated
