@@ -268,6 +268,14 @@ def collect_storyboard_reference_asset_ids(params: dict, artifacts: dict | None 
                 }
                 if labels & role_names[role]:
                     candidates.append(asset["id"])
+    # 文本出现兜底：shot 卡通常不带 charactersInvolved，scene 也带场次前缀，
+    # 精确名匹配经常全空（线上实锤：分镜图没有任何参考图）。
+    # 用 shot 的 scene/action/content/dialogue 拼文本，资产名出现即引用。
+    if artifacts:
+        shot_text = " ".join(
+            str(shot.get(k) or "") for k in ("title", "scene", "action", "content", "dialogue")
+        )
+        candidates.extend(resolve_reference_ids_by_text(artifacts, shot_text))
     seen: set[str] = set()
     result: list[str] = []
     for value in candidates:
@@ -276,3 +284,41 @@ def collect_storyboard_reference_asset_ids(params: dict, artifacts: dict | None 
             seen.add(value)
             result.append(value)
     return result
+
+
+def resolve_reference_ids_by_text(
+    artifacts: dict | None,
+    text: str,
+    roles: tuple[str, ...] = ("scene", "character", "prop"),
+) -> list[str]:
+    """按"资产名出现在镜头文本中"解析参考资产 id（稳定顺序：scene → character → prop）。
+
+    背景：extract_shots 的 shot 卡通常不带 charactersInvolved，scene 字段也常带
+    "第3场 · " 前缀，collect_storyboard_reference_asset_ids 的精确名匹配几乎
+    解析不到任何参考资产 → 分镜图实际没有参考图（角色/场景/道具资产白生成）。
+    规则：资产名（name/title/extra 别名，≥2 字符）出现在文本中即视为被引用。
+    """
+    if not artifacts or not text:
+        return []
+    haystack = " ".join(str(text).split())
+    out: list[str] = []
+    seen: set[str] = set()
+    for role in roles:
+        for asset in artifacts.get(role, []) if isinstance(artifacts.get(role), list) else []:
+            if not isinstance(asset, dict) or not asset.get("id") or not asset.get("url"):
+                continue
+            if asset.get("failed") or asset.get("generating"):
+                continue
+            extra = asset.get("extra") if isinstance(asset.get("extra"), dict) else {}
+            labels = {
+                str(v).strip() for v in (
+                    asset.get("name"), asset.get("title"), extra.get(role), extra.get("name"),
+                ) if v
+            }
+            for label in labels:
+                if len(label) >= 2 and " ".join(label.split()) in haystack:
+                    if asset["id"] not in seen:
+                        seen.add(asset["id"])
+                        out.append(asset["id"])
+                    break
+    return out

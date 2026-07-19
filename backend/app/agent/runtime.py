@@ -390,7 +390,10 @@ class AgentRuntime:
                 prompt=result_prompt,
                 prompt_source=result.get("source_prompt") if isinstance(result, dict) else None,
                 prompt_optimized=result_prompt,
-                extra={"continuity": result.get("continuity")} if isinstance(result, dict) and result.get("continuity") is not None else None,
+                extra={k: v for k, v in {
+                    "continuity": result.get("continuity") if isinstance(result, dict) else None,
+                    "reference_asset_ids": result.get("reference_asset_ids") if isinstance(result, dict) else None,
+                }.items() if v},
                 dev_fallback=dev_fallback,
             ) if self.db else {
                 **media_asset, "url": url,
@@ -421,7 +424,10 @@ class AgentRuntime:
                     prompt=str(item.get("prompt") or ""),
                     prompt_source=str(item.get("source_prompt") or item.get("prompt") or ""),
                     prompt_optimized=str(item.get("prompt") or ""),
-                    extra={"continuity": item.get("continuity")} if item.get("continuity") is not None else None,
+                    extra={k: v for k, v in {
+                        "continuity": item.get("continuity"),
+                        "reference_asset_ids": item.get("reference_asset_ids"),
+                    }.items() if v},
                     dev_fallback=bool(item.get("dev_fallback")),
                 )
                 asset_kind = pending["asset_kind"]

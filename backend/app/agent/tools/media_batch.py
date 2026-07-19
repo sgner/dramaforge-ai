@@ -8,7 +8,8 @@ from ..media_service import MediaRequest, MediaService, get_default_media_servic
 from .base import BaseTool, ToolContext, ToolParameter
 from .image_tools import CHARACTER_DESIGN_SHEET_PROMPT, PROP_FOUR_VIEW_LAYOUT, STORYBOARD_SIX_GRID_PROMPT
 from .llm_tools import _cap_prompt_length
-from ..prompt_engineering import optimize_generation_prompt
+from ..asset_references import resolve_asset_references
+from ..prompt_engineering import optimize_generation_prompt, resolve_reference_ids_by_text
 
 
 # canonical 资产的布局硬约束：agent 走 generate_media_batch 时 job prompt 是 LLM
@@ -65,6 +66,21 @@ class GenerateMediaBatchTool(BaseTool):
             prompt = source_prompt
             asset_kind = job.get("asset_kind") or job["kind"]
             canonical = _CANONICAL_LAYOUT_BY_KIND.get(asset_kind)
+            # 分镜：按文本出现解析角色/场景/道具参考资产（角色卡名出现在
+            # job name/prompt 中即引用），否则批量分镜没有任何参考图。
+            ref_ids: list[str] = []
+            ref_urls = list(job.get("reference_urls") or [])
+            if asset_kind == "storyboard":
+                ref_ids = resolve_reference_ids_by_text(
+                    getattr(ctx, "artifacts", None),
+                    f"{job.get('name') or ''}\n{source_prompt}",
+                )
+                if ref_ids and ctx.db and ctx.project_id:
+                    url_by_id = {
+                        item["asset_id"]: item["url"]
+                        for item in resolve_asset_references(ctx.db, ctx.project_id, ref_ids, media_kind="image")
+                    }
+                    ref_urls = [url_by_id[i] for i in ref_ids if i in url_by_id] + ref_urls
             try:
                 if canonical:
                     # canonical 资产：agent 的 job prompt 已是 LLM 写好的描述，
@@ -88,7 +104,7 @@ class GenerateMediaBatchTool(BaseTool):
                     prompt=prompt,
                     model_id=job.get("model_id"),
                     duration_sec=float(job.get("duration_sec", 5)),
-                    reference_urls=list(job.get("reference_urls") or []),
+                    reference_urls=ref_urls,
                     extra={"asset_kind": job.get("asset_kind"), "name": job.get("name")},
                 )
                 result = await service.generate(request)
@@ -104,6 +120,8 @@ class GenerateMediaBatchTool(BaseTool):
                     "url": result.url,
                     "prompt": prompt,
                     "source_prompt": source_prompt,
+                    "reference_asset_ids": ref_ids,
+                    "reference_urls": ref_urls,
                     "cost_usd": result.cost_usd,
                     "elapsed_sec": result.elapsed_sec,
                 }
@@ -116,6 +134,7 @@ class GenerateMediaBatchTool(BaseTool):
                     "asset_kind": job.get("asset_kind") or ("video" if job["kind"] == "video" else "image"),
                     "prompt": prompt,
                     "source_prompt": source_prompt,
+                    "reference_asset_ids": ref_ids,
                     "error": str(exc),
                 }
 
