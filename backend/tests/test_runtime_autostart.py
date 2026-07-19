@@ -101,10 +101,11 @@ def test_multiple_tasks_run_concurrently(client, seeded_provider):
 
 
 def test_create_task_with_no_provider_fails_gracefully(client):
-    """无 LLM provider 配置时，task 必须被标记为 failed 且推送 TASK_FAILED 事件。
+    """无 LLM provider 配置时，task 必须暂停并推送 error notice 把问题暴露给前端。
 
-    Plan 5 删除 DevScriptedLLM 后，没有真实 LLM 配置就不能再静默回退到
-    假数据；必须通过 TASK_FAILED 事件把错误暴露给前端。
+    现行设计：配置缺失不再是"静默回退假数据"，也不是"直接 failed"，而是
+    paused + 自动恢复调度（用户随后在 API 设置里配好 provider，恢复路径会
+    用当前 model_bindings 覆盖任务固化值继续执行，见 _rebuild_runtime_from_db）。
     """
     r = client.post("/api/agent/tasks", json={
         "user_goal": "no provider test",
@@ -112,23 +113,31 @@ def test_create_task_with_no_provider_fails_gracefully(client):
     assert r.status_code == 200
     task_id = r.json()["id"]
 
-    # 等 task 状态变 failed（runtime 走 NoLLMConfigured 路径）
-    t = _wait_for_done(task_id, timeout=5.0)
+    # 等 task 状态变 paused（runtime 走 binding 缺失 / NoLLMConfigured 路径）
+    deadline = time.time() + 5.0
+    t = None
+    while time.time() < deadline:
+        with SessionLocal() as db:
+            t = db.query(AgentTask).filter_by(id=task_id).first()
+        if t and t.status == "paused":
+            break
+        time.sleep(0.2)
     assert t is not None, "task should be reachable"
-    assert t.status == "failed", f"task should be failed, got {t.status}"
+    assert t.status == "paused", f"task should be paused, got {t.status}"
 
-    # 验证：TASK_FAILED 事件被推送，error 字段说明问题
+    # 验证：error 级 agent_notice 被推送，message 说明要配置 provider
     deadline = time.time() + 2.0
-    failed_event = None
-    while time.time() < deadline and failed_event is None:
+    error_notice = None
+    while time.time() < deadline and error_notice is None:
         events = event_bus.get_replay(task_id)
-        failed_event = next(
-            (e for e in events if e.type == EventType.TASK_FAILED), None,
+        error_notice = next(
+            (e for e in events
+             if e.type == EventType.AGENT_NOTICE and e.payload.get("level") == "error"),
+            None,
         )
-        if failed_event is None:
+        if error_notice is None:
             time.sleep(0.05)
-    assert failed_event is not None, "no TASK_FAILED event published within 2s"
-    err = (failed_event.payload.get("error") or "").lower()
-    assert "no llm provider" in err or "api settings" in err, \
-        f"event error should mention provider setup, got: {err!r}"
-    assert failed_event.payload.get("reason_code") in ("no_provider", "provider_not_found")
+    assert error_notice is not None, "no error agent_notice published within 2s"
+    msg = (error_notice.payload.get("message") or "").lower()
+    assert "no llm provider" in msg or "api settings" in msg, \
+        f"notice message should mention provider setup, got: {msg!r}"

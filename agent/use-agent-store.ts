@@ -917,14 +917,33 @@ export const useAgentStore = create<AgentState>((set, get) => {
             }],
             status: 'running',
           };
-        case 'agent_notice':
+        case 'agent_notice': {
           // 自动恢复、服务重连等系统异常也必须进入 ThoughtStream，
           // 让用户知道 agent 没有静默停住。
-          return {
-            thoughts: hasEvent(state.thoughts, event)
-              ? state.thoughts
-              : [...state.thoughts, { ...event, payload: { ...p, text: p.message || 'agent 正在处理异常' } }],
-          };
+          const noticeThoughts = hasEvent(state.thoughts, event)
+            ? state.thoughts
+            : [...state.thoughts, { ...event, payload: { ...p, text: p.message || 'agent 正在处理异常' } }];
+          // 用户提交回复后，编排层故障（NoLLMConfigured / 重建 runtime 失败等）
+          // 只发 error 级 notice，不发 task_paused——必须在这里解锁"已提交"卡，
+          // 否则卡片永远卡在禁用状态（自动恢复重试的 warning notice 会不停重置
+          // 看门狗计时）。warning 级不解锁：agent 仍在自动重试/自我纠正。
+          if (p.level === 'error' && state.pendingQuestionAnswered) {
+            clearSubmitWatchdog();
+            const detail = typeof p.message === 'string' && p.message.trim()
+              ? p.message
+              : '未知错误';
+            return {
+              thoughts: noticeThoughts,
+              status: ['done', 'failed', 'cancelled'].includes(state.status)
+                ? state.status
+                : 'paused',
+              currentActivity: null,
+              pendingQuestionAnswered: false,
+              error: `agent 处理你的回复时出错：${detail}。可以重新发送你的回复重试。`,
+            };
+          }
+          return { thoughts: noticeThoughts };
+        }
         case 'asset_inspection_started':
           return {
             thoughts: [...state.thoughts, {
@@ -967,9 +986,26 @@ export const useAgentStore = create<AgentState>((set, get) => {
               },
             }],
           };
-        case 'task_paused':
+        case 'task_paused': {
           // 暂停等待用户输入：清空 activity（避免"正在生成XX"误导）
+          // 用户刚提交回复（pendingQuestionAnswered=true）后 agent 处理失败暂停
+          // （如 LLM 连续调用失败、auto_recovery 暂停）：必须解锁"已提交"卡，
+          // 让用户能修改答案后重新发送；否则卡片会卡在禁用状态直到 90s 看门狗
+          // 兜底，期间自动恢复重试的 notice 还会不断重置看门狗计时，卡得更久。
+          if (state.pendingQuestionAnswered) {
+            clearSubmitWatchdog();
+            const detail = typeof p.error === 'string' && p.error.trim()
+              ? p.error
+              : String(p.reason || '未知错误');
+            return {
+              status: 'paused',
+              currentActivity: null,
+              pendingQuestionAnswered: false,
+              error: `agent 处理你的回复时出错：${detail}。可以重新发送你的回复重试。`,
+            };
+          }
           return { status: 'paused', currentActivity: null };
+        }
         case 'task_resumed':
           // 任务重新开始（用户 /resume 或新轮次）：清掉 LLM 错误 banner。
           // 旧 LLM 错误已不适用，banner 还挂着会误导用户以为任务仍在出错。

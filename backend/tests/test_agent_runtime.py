@@ -245,7 +245,13 @@ async def test_runtime_pauses_before_media_when_script_is_missing():
     assert done is False
     assert runtime.state == AgentState.PAUSED
     assert runtime.pending_request["type"] == "ask_user"
-    assert runtime.pending_request["options"] == ["由 agent 编写脚本"]
+    # 文案来自 user_messages 的 i18n 表（按 profile.task_type + profile.language 取），
+    # 不再硬编码某一种语言的字符串。
+    from app.agent.user_messages import missing_source_question
+    profile = runtime.hydrate_profile()
+    expected_copy = missing_source_question(profile.task_type, profile.language)
+    assert runtime.pending_request["options"] == expected_copy["options"]
+    assert runtime.pending_request["question"] == expected_copy["question"]
     assert runtime.pending_request["allow_custom"] is True
     assert memory.short_term[-1].action["tool"] == "ask_user"
     assert memory.short_term[-1].observation["reason"] == "script_required_before_media"
@@ -628,7 +634,7 @@ async def test_empty_response_is_retried_without_user_visible_failure():
 
 @pytest.mark.asyncio
 async def test_runtime_max_steps_protection():
-    """达到 max_steps 强制结束。"""
+    """达到 max_steps 不判失败：自动扩展一个检查点窗口并保留进度继续执行。"""
     llm = _StubLLM([
         {"tool_name": "echo", "tool_args": {"text": "1"}, "content": None},
     ] * 100)
@@ -642,11 +648,17 @@ async def test_runtime_max_steps_protection():
     assert is_done is False
     is_done = await runtime.step()
     assert is_done is False
-    # 第 4 次：_step_count=4 > max_steps=3，强制结束（状态为 FAILED 而非 DONE，
-    # 因为超限是一种失败，_run_runtime_loop 据此不发 TASK_DONE 覆盖 TASK_FAILED）
+    # 第 4 次：_step_count=4 > max_steps=3 → 自动开启下一轮（窗口 += DEFAULT_MAX_STEPS），
+    # 发 warning notice，任务不失败、不结束（超限只是单轮保护，不是任务失败）。
     is_done = await runtime.step()
-    assert is_done is True
-    assert runtime.state == AgentState.FAILED
+    assert is_done is False
+    assert runtime.state == AgentState.RUNNING
+    assert runtime.max_steps == 3 + AgentRuntime.DEFAULT_MAX_STEPS
+    # 扩展窗口后仍可正常执行（不会卡死）：该步才真正调 LLM
+    is_done = await runtime.step()
+    assert is_done is False
+    assert runtime.state == AgentState.RUNNING
+    assert llm.call_count == 4
 
 
 # ========================
@@ -803,24 +815,30 @@ class TestRuntimeToolErrorRecovery:
 
     @pytest.mark.asyncio
     async def test_execute_tool_retryable_error_sets_pending_and_paused(self):
-        """RetryableError → pending_request 填充 + state=PAUSED。"""
+        """同一工具连续失败达到 TOOL_FAILURE_PAUSE_THRESHOLD → pending_request 填充 + PAUSED。"""
         class _RetryableFailTool(BaseTool):
             name = "retryable_fail"
             description = "always fails with RetryableError"
             category = "test"
             parameters = []
-            max_retries = 0  # 不重试，直接进入 PAUSED
+            max_retries = 0  # 工具内部不重试，失败直接抛给 runtime
             async def execute(self, ctx, params):
                 raise RetryableError("network timeout")
 
         from app.agent.tools.base import RetryableTool
         llm = _StubLLM([
             {"tool_name": "retryable_fail", "tool_args": {}, "content": None},
-        ])
+        ] * 3)
         memory = AgentMemory(user_goal="x", plan=[])
         runtime = AgentRuntime(task_id="t1", llm=llm, memory=memory)
         runtime.registry.register(_RetryableFailTool())
 
+        # 前 2 次失败：agent 自我纠正（失败作为 observation 返回，不暂停）
+        await runtime.step()
+        assert runtime.state == AgentState.RUNNING
+        await runtime.step()
+        assert runtime.state == AgentState.RUNNING
+        # 第 3 次连续失败：达到阈值，挂起等用户决策
         await runtime.step()
 
         assert runtime.state == AgentState.PAUSED
@@ -831,7 +849,7 @@ class TestRuntimeToolErrorRecovery:
 
     @pytest.mark.asyncio
     async def test_execute_tool_retryable_error_emits_tool_error_event(self):
-        """RetryableError → emit TOOL_ERROR 事件。"""
+        """同一工具连续失败达到阈值 → emit TOOL_ERROR 事件（仅 1 次）。"""
         from app.agent.events import event_bus
         from app.agent.tools.base import RetryableError
 
@@ -846,7 +864,7 @@ class TestRuntimeToolErrorRecovery:
 
         llm = _StubLLM([
             {"tool_name": "fail_tool", "tool_args": {}, "content": None},
-        ])
+        ] * 3)
         memory = AgentMemory(user_goal="x", plan=[])
         runtime = AgentRuntime(task_id="t1", llm=llm, memory=memory)
         runtime.registry.register(_FailTool())
@@ -856,7 +874,9 @@ class TestRuntimeToolErrorRecovery:
 
         async def collect():
             try:
-                for _ in range(10):
+                # 3 步 self-correct 期间会产生多条 thought/observation/notice 事件，
+                # tool_error 只在第 3 次连续失败时出现，多收一些避免漏掉。
+                for _ in range(50):
                     ev = await asyncio.wait_for(queue.get(), timeout=1.0)
                     events_received.append(ev)
                     if ev.type == "tool_error":
@@ -864,7 +884,11 @@ class TestRuntimeToolErrorRecovery:
             except asyncio.TimeoutError:
                 pass
 
-        await asyncio.gather(runtime.step(), collect())
+        async def run_steps():
+            for _ in range(3):
+                await runtime.step()
+
+        await asyncio.gather(run_steps(), collect())
 
         tool_error_events = [e for e in events_received if e.type == "tool_error"]
         assert len(tool_error_events) == 1
@@ -884,15 +908,16 @@ class TestRuntimeToolErrorRecovery:
             async def execute(self, ctx, params):
                 raise RetryableError("boom")
 
-        # 第 1 步：失败 → PAUSED
+        # 同一工具连续失败 3 次（达到阈值）→ PAUSED
         llm = _StubLLM([
             {"tool_name": "fail_tool", "tool_args": {}, "content": None},
-        ])
+        ] * 3)
         memory = AgentMemory(user_goal="x", plan=[])
         runtime = AgentRuntime(task_id="t1", llm=llm, memory=memory)
         runtime.registry.register(_FailTool())
 
-        await runtime.step()
+        for _ in range(3):
+            await runtime.step()
         assert runtime.state == AgentState.PAUSED
 
         # resume with skip
@@ -917,15 +942,16 @@ class TestRuntimeToolErrorRecovery:
                     return {"ok": True}
                 raise RetryableError("primary model down")
 
-        # 第 1 步：失败 → PAUSED
+        # 同一工具连续失败 3 次（达到阈值）→ PAUSED
         llm = _StubLLM([
             {"tool_name": "model_aware", "tool_args": {"model_id": "primary"}, "content": None},
-        ])
+        ] * 3)
         memory = AgentMemory(user_goal="x", plan=[])
         runtime = AgentRuntime(task_id="t1", llm=llm, memory=memory)
         runtime.registry.register(_ModelAwareTool())
 
-        await runtime.step()
+        for _ in range(3):
+            await runtime.step()
         assert runtime.state == AgentState.PAUSED
 
         # resume with change_model
@@ -941,9 +967,9 @@ class TestRuntimeToolErrorRecovery:
     @pytest.mark.asyncio
     async def test_resume_from_tool_error_retry_retries_same_params(self):
         """retry → 用原 params 重新执行。"""
-        class _FailOnceTool(BaseTool):
-            name = "fail_once"
-            description = "fails once then succeeds"
+        class _FailThenSucceedTool(BaseTool):
+            name = "fail_then_succeed"
+            description = "fails until the pause threshold, then succeeds on retry"
             category = "test"
             parameters = []
             max_retries = 0
@@ -952,20 +978,22 @@ class TestRuntimeToolErrorRecovery:
                 self.call_count = 0
             async def execute(self, ctx, params):
                 self.call_count += 1
-                if self.call_count == 1:
+                # 前 3 次连续失败触发 PAUSED（阈值），第 4 次（用户 retry）成功
+                if self.call_count <= 3:
                     raise RetryableError("first attempt fails")
                 return {"ok": True}
 
-        # 第 1 步：失败 → PAUSED
+        # 同一工具连续失败 3 次（达到阈值）→ PAUSED
         llm = _StubLLM([
-            {"tool_name": "fail_once", "tool_args": {}, "content": None},
-        ])
+            {"tool_name": "fail_then_succeed", "tool_args": {}, "content": None},
+        ] * 3)
         memory = AgentMemory(user_goal="x", plan=[])
         runtime = AgentRuntime(task_id="t1", llm=llm, memory=memory)
-        tool = _FailOnceTool()
+        tool = _FailThenSucceedTool()
         runtime.registry.register(tool)
 
-        await runtime.step()
+        for _ in range(3):
+            await runtime.step()
         assert runtime.state == AgentState.PAUSED
 
         # resume with retry

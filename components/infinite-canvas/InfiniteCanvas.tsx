@@ -40,6 +40,7 @@ import {
 } from './engine';
 import { KnifePoint, CanvasNode, Connection, uid } from './types';
 import { createNode } from './use-canvas-store';
+import { uploadImageWithPreview } from '../../services/apiClient';
 import { getPaddedWorldRect } from './visibility';
 import { useI18n } from '../../i18n';
 import './canvas.css';
@@ -729,7 +730,6 @@ export const InfiniteCanvas: React.FC<{
           e.preventDefault();
           const file = item.getAsFile();
           if (!file) continue;
-          const url = URL.createObjectURL(file);
           const rect = getBoardRect();
           const point = rect
             ? {
@@ -737,13 +737,17 @@ export const InfiniteCanvas: React.FC<{
                 y: (-viewport.y + rect.height / 2) / viewport.scale,
               }
             : { x: 0, y: 0 };
-          addNode(
-            createNode('image', point, {
-              url,
-              name: file.name,
-              mediaKind: 'image',
-            })
-          );
+          const node = createNode('image', point, {
+            url: '',
+            name: file.name,
+            mediaKind: 'image',
+          });
+          // blob: URL 仅即时预览；上传到后端后替换为 /files/ 真实 URL（图生图后端要取图片内容）
+          const url = uploadImageWithPreview(file, (backendUrl) => {
+            useCanvasStore.getState().updateNode(node.id, { url: backendUrl });
+          });
+          node.url = url;
+          addNode(node);
           break;
         }
       }
@@ -846,14 +850,17 @@ export const InfiniteCanvas: React.FC<{
           ? screenToWorld(e.clientX, e.clientY, rect, viewport)
           : { x: 0, y: 0 };
         files.forEach((file, i) => {
-          const url = URL.createObjectURL(file);
-          addNode(
-            createNode('image', { x: point.x + i * 36, y: point.y + i * 36 }, {
-              url,
-              name: file.name,
-              mediaKind: 'image',
-            })
-          );
+          const node = createNode('image', { x: point.x + i * 36, y: point.y + i * 36 }, {
+            url: '',
+            name: file.name,
+            mediaKind: 'image',
+          });
+          // blob: URL 仅即时预览；上传到后端后替换为 /files/ 真实 URL（图生图后端要取图片内容）
+          const url = uploadImageWithPreview(file, (backendUrl) => {
+            useCanvasStore.getState().updateNode(node.id, { url: backendUrl });
+          });
+          node.url = url;
+          addNode(node);
         });
       }}
     >

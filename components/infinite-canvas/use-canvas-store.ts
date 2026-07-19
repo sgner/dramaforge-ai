@@ -24,7 +24,8 @@ import {
   normalizeModelBindings,
 } from '../../types';
 import { generateSoraVideo, generateCharacterDesign, generateStoryboardImage, generatePropImage } from '../../services/mediaService';
-import { expandIdeaToStory, generateScriptFromNovel, optimizeSoraPrompt } from '../../services/llmClient';
+import { estimatedNodeRect } from './engine';
+import { expandIdeaToStory, generateScriptFromNovel, optimizeSoraPromptViaBackend } from '../../services/llmClient';
 import { getT } from '../../i18n';
 import { api, type NodeOut, type ConnectionOut, type AssetOut } from '../../services/apiClient';
 
@@ -65,31 +66,27 @@ export function connectedImageUrls(nodes: CanvasNode[], connections: Connection[
     .map((node) => node.url!.trim());
 }
 
-async function optimizeCanvasMediaPrompt(
-  cfg: ApiConfig,
-  prompt: string,
-  style = 'cinematic',
-  language = 'zh',
-  signal?: AbortSignal,
-): Promise<string> {
-  const provider = getProviderForStep(cfg, 'promptOptimization');
-  const model = getModelForStep(cfg, 'promptOptimization');
-  if (!provider || !model) throw new Error('Prompt optimization model is unavailable');
-  let optimized = '';
-  for await (const chunk of optimizeSoraPrompt(provider, model, prompt, style, language, undefined, signal)) {
-    optimized = chunk;
-  }
-  // 关键修复：LLM 优化失败（流式 chunk 全空）时 fallback 到 source_prompt，
-  // 而不是抛错让图片生成卡死。
-  // 场景：用户输入"内层：白色贴身连体衣 / 中层..."这种简略 prompt 时，
-  // LLM 优化可能返回空（与上游兼容性问题或模型输出 thinking 全部被过滤），
-  // 不应该让前端弹"Prompt optimization returned no content"错误把任务卡住。
-  if (!optimized.trim()) {
-    return prompt.trim();
-  }
-  return optimized.trim();
+/**
+ * 为「弹层手选模型」构造一次性模型配置。
+ * 当用户在 Composer 弹层里选择了 provider+model、但全局 modelBindings 未配置
+ * 对应步骤的模型绑定时，getModelForStep 会返回 null —— 此时用该兜底配置，
+ * 而不是直接抛 canvasPanelRetryNoProvider。
+ */
+function buildEphemeralImageModel(providerId: string, modelName: string): ModelConfig {
+  return {
+    id: modelName,
+    providerId,
+    modelName,
+    displayName: modelName,
+    apiPath: '/images/generations',
+    apiFormat: 'openai-image',
+    customHeaders: '',
+    customBodyTemplate: '',
+    customResponsePath: '',
+    pollApiPath: '',
+    enabled: true,
+  };
 }
-
 
 /**
  * Load the canvas state (nodes, connections, viewport, theme) from the backend
@@ -347,6 +344,7 @@ function loadApiConfig(): ApiConfig {
         videoModels: p.videoModels || p.video_models || [],
         hasKey: p.hasKey || p.has_key || false,
         keyPreview: p.keyPreview || p.key_preview || '',
+        extraConfig: p.extraConfig || p.extra_config || {},
         walletApiKey: p.walletApiKey || '',
         hasWalletKey: p.hasWalletKey || false,
         walletKeyPreview: p.walletKeyPreview || '',
@@ -518,6 +516,18 @@ interface CanvasStore {
 
   retryFailedAsset: (taskAssetId: string, customPrompt?: string) => Promise<void>;
 
+  /**
+   * 图生图：以上传/已生成图片节点自身的 url 为参考图，生成结果写到右侧新建的
+   * 图片节点（并自动连线），不覆盖源节点。新节点创建时即带 _pending loading
+   * 状态；失败时写入 _assetFailed/_assetError 以显示错误占位。
+   */
+  runImageToImage: (sourceNodeId: string, params: {
+    prompt: string;
+    providerId: string;
+    modelId: string;
+    aspectRatio?: string;
+  }) => Promise<void>;
+
   setNodes: (nodes: CanvasNode[]) => void;
   setConnections: (connections: Connection[]) => void;
   reset: () => void;
@@ -596,7 +606,16 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
 
   resizeNode: (id, w, h) =>
     set((s) => ({
-      nodes: s.nodes.map((n) => (n.id === id ? { ...n, w, h } : n)),
+      nodes: s.nodes.map((n) => {
+        if (n.id !== id) return n;
+        // 图片/视频节点已记录媒体宽高比（_imgAspect）：拖宽时自动保持比例
+        const aspect = typeof n._imgAspect === 'number' && n._imgAspect > 0 ? n._imgAspect : null;
+        if (aspect != null) {
+          const chrome = typeof n._imgChrome === 'number' ? n._imgChrome : 0;
+          h = Math.min(1200, Math.max(96, w * aspect + chrome));
+        }
+        return { ...n, w, h };
+      }),
     })),
 
   addConnection: (from, to) =>
@@ -913,10 +932,11 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
     };
 
     try {
-      const optimizedPrompt = await optimizeCanvasMediaPrompt(cfg, prompt);
-      get().updateNode(nodeId, { _assetSourcePrompt: prompt, _assetPrompt: optimizedPrompt });
+      // 单节点直接运行：尊重用户输入的 prompt，不做隐式 LLM 优化
+      // （优化是 pipeline 模式的显式步骤，见 runPipeline Step 7）。
+      get().updateNode(nodeId, { _assetSourcePrompt: prompt, _assetPrompt: prompt });
       const videoUrl = await generateSoraVideo(
-        optimizedPrompt,
+        prompt,
         'cinematic',
         'zh',
         provider,
@@ -1522,10 +1542,10 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
             await Promise.all(batch.map(async (shot) => {
               try {
                 const originalPrompt = shot.soraPromptOriginal || shot.soraPrompt || 'Scene';
-                let optimized = '';
-                for await (const chunk of optimizeSoraPrompt(optProvider, optModel, originalPrompt, style, language, visualSignature, signal)) {
-                  optimized += chunk;
-                }
+                // 走后端代理（api_key 只存后端 DB），避免前端空/过期 key 导致 401"无效的令牌"
+                const optimized = await optimizeSoraPromptViaBackend(
+                  optProvider.id, optModel.modelName, originalPrompt, style, language, visualSignature,
+                );
                 shot.soraPrompt = optimized;
                 shot.soraPromptOptimized = optimized;
               } catch (e: any) {
@@ -1626,8 +1646,12 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
       let provider = cfg.providers.find(p => p.id === asset.providerId && p.enabled);
       if (!provider) provider = getProviderForStep(cfg, step) || undefined;
       let model = getModelForStep(cfg, step);
-      if (provider && asset.modelId && model && model.modelName !== asset.modelId) {
-        model = { ...model, modelName: asset.modelId } as any;
+      if (provider && asset.modelId && asset.modelId !== 'default') {
+        // 用户在弹层里手选了模型：直接使用它。即使全局未配置该步骤的模型绑定，
+        // 也用一次性配置兜底，而不是抛 canvasPanelRetryNoProvider。
+        model = model
+          ? ({ ...model, modelName: asset.modelId } as any)
+          : buildEphemeralImageModel(provider.id, asset.modelId);
       }
 
       if (!provider || !model) {
@@ -1636,7 +1660,8 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
 
       let url = '';
       const sourcePrompt = customPrompt || asset.prompt || asset.name || '';
-      const prompt = await optimizeCanvasMediaPrompt(cfg, sourcePrompt);
+      // 单节点重试/生成：直接使用用户输入的 prompt，不做隐式 LLM 优化
+      const prompt = sourcePrompt;
       const referenceImages = canvasNode
         ? connectedImageUrls(get().nodes, get().connections, canvasNode.id)
         : [];
@@ -1682,9 +1707,140 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
       if (failAsset) void syncAssetUpdate(failAsset);
       if (canvasNode) {
         get().updateNode(canvasNode.id, {
+          _assetFailed: true,
           _assetError: errorMsg,
         } as Partial<CanvasNode>);
       }
+    }
+  },
+
+  runImageToImage: async (sourceNodeId, params) => {
+    const t = getT();
+    const cfg = get().apiConfig;
+    const sourceNode = get().nodes.find(n => n.id === sourceNodeId);
+    if (!sourceNode) return;
+    const sourceUrl = (sourceNode.url || '').trim();
+    if (!sourceUrl) {
+      // 源节点还没有图片 → 退化为原节点原地生成逻辑
+      return get().retryFailedAsset(sourceNodeId, params.prompt);
+    }
+
+    // 1) 在源节点右侧创建带 loading(_pending) 状态的新图片节点，避让已有节点
+    const srcRect = estimatedNodeRect(sourceNode);
+    const size = DEFAULT_NODE_SIZES['image'] || { w: 260 };
+    const newW = size.w || 260;
+    const newH = size.h || 160;
+    const gapX = 80;
+    const gapY = 40;
+    const nx = srcRect.x + srcRect.w + gapX;
+    let ny = srcRect.y;
+    const overlaps = (x: number, y: number) =>
+      get().nodes.some(n => {
+        if (n.id === sourceNodeId) return false;
+        const r = estimatedNodeRect(n);
+        return x < r.x + r.w && x + newW > r.x && y < r.y + r.h && y + newH > r.y;
+      });
+    let guard = 0;
+    while (overlaps(nx, ny) && guard < 50) {
+      ny += newH + gapY;
+      guard += 1;
+    }
+
+    const newNode = createNode('image', { x: nx, y: ny }, {
+      mediaKind: 'image',
+      _assetKind: 'storyboard',
+      _pending: [{ id: uid('pending'), startedAt: Date.now() }],
+      _assetPrompt: params.prompt,
+      _assetProviderId: params.providerId || undefined,
+      _assetProviderName: cfg.providers.find(p => p.id === params.providerId)?.name,
+      _assetModelId: params.modelId || undefined,
+    } as Partial<CanvasNode>);
+    get().addNode(newNode);
+    get().addConnection(sourceNodeId, newNode.id);
+
+    // 2) 登记 taskAsset（generating 状态，供资产面板同步显示）
+    const newAsset: TaskAssetRef = {
+      id: newNode.id,
+      kind: 'storyboard',
+      title: '',
+      name: '',
+      url: '',
+      prompt: params.prompt,
+      providerId: params.providerId || undefined,
+      providerName: cfg.providers.find(p => p.id === params.providerId)?.name,
+      modelId: params.modelId || undefined,
+      failed: false,
+      error: undefined,
+      generating: true,
+    } as TaskAssetRef;
+    get().setTaskAssets([...get().taskAssets, newAsset]);
+    void syncAssetCreate(newAsset, get().projectId || undefined);
+
+    try {
+      // 3) 供应商/模型：优先使用弹层选择，缺失时回退到全局模型绑定
+      let provider = cfg.providers.find(p => p.id === params.providerId && p.enabled);
+      if (!provider) provider = getProviderForStep(cfg, 'storyboarding') || undefined;
+      let model: ModelConfig | undefined;
+      if (params.modelId) {
+        const bound = getModelForStep(cfg, 'storyboarding');
+        model = bound
+          ? ({ ...bound, modelName: params.modelId } as any)
+          : provider
+            ? buildEphemeralImageModel(provider.id, params.modelId)
+            : undefined;
+      } else {
+        model = getModelForStep(cfg, 'storyboarding');
+      }
+      if (!provider || !model) {
+        throw new Error(t('canvasPanelRetryNoProvider'));
+      }
+
+      const sourcePrompt = params.prompt;
+      // 图生图单节点运行：直接使用用户输入的 prompt，不做隐式 LLM 优化
+      const prompt = sourcePrompt;
+      // 参考图：连入源节点的所有上游图都作为输入（与 agent 参考边语义一致），
+      // 再加上源节点自身的图（源→新节点的连线使源图成为新节点的参考输入）
+      const referenceImages = [
+        ...connectedImageUrls(get().nodes, get().connections, sourceNodeId),
+        sourceUrl,
+      ].filter((u, i, arr) => !!u && arr.indexOf(u) === i);
+      const url = await generateStoryboardImage(prompt, '', 'zh', '', referenceImages, provider, model, undefined, undefined, params.aspectRatio);
+
+      // 4) 成功：结果写到新节点，不覆盖源节点
+      const successAssets = get().taskAssets.map(a =>
+        a.id === newNode.id
+          ? { ...a, failed: false, error: undefined, generating: false, url, prompt, providerId: provider!.id, providerName: provider!.name, modelId: model!.modelName }
+          : a
+      );
+      get().setTaskAssets(successAssets);
+      const successAsset = successAssets.find(a => a.id === newNode.id);
+      if (successAsset) void syncAssetUpdate(successAsset);
+      get().updateNode(newNode.id, {
+        url,
+        _pending: [],
+        _assetFailed: false,
+        _assetError: undefined,
+        _assetPrompt: prompt,
+        _assetSourcePrompt: sourcePrompt,
+        _assetProviderId: provider!.id,
+        _assetProviderName: provider!.name,
+        _assetModelId: model!.modelName,
+      } as Partial<CanvasNode>);
+    } catch (e: any) {
+      const errorMsg = e.message || t('canvasPipelineUnknownError');
+      const failAssets = get().taskAssets.map(a =>
+        a.id === newNode.id
+          ? { ...a, failed: true, error: errorMsg, generating: false }
+          : a
+      );
+      get().setTaskAssets(failAssets);
+      const failAsset = failAssets.find(a => a.id === newNode.id);
+      if (failAsset) void syncAssetUpdate(failAsset);
+      get().updateNode(newNode.id, {
+        _pending: [],
+        _assetFailed: true,
+        _assetError: errorMsg,
+      } as Partial<CanvasNode>);
     }
   },
 

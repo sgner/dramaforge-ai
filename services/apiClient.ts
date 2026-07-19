@@ -384,11 +384,49 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
+  // ---------- LLM Generation (后端代理供应商调用) ----------
+  // 与媒体生成同理：api_key 只存后端 DB，前端不直连供应商。
+  // 提示词优化走这里，避免前端 store 里的空/脱敏 apiKey 导致上游 401"无效的令牌"。
+  generateText: (payload: {
+    provider_id: string;
+    model: string;
+    prompt: string;
+    system_instruction?: string;
+    temperature?: number;
+    max_tokens?: number;
+  }) =>
+    request<{ text: string; provider_id: string; model: string }>('/llm/generate', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
   // ---------- Bootstrap (首屏合并端点) ----------
   // 合并 listDramaTasks + listProviders + getUserPreference('model_bindings')
   // 三个首屏请求为单个 /api/bootstrap，减少 RTT（3 → 1）。
   bootstrap: () =>
     request<BootstrapOut>('/bootstrap'),
+};
+
+/**
+ * 画布图片节点的标准上传流程：返回 blob: URL 供即时预览，
+ * 后台把文件上传到后端，成功后通过 onUploaded 回调替换成 /files/ 真实 URL。
+ *
+ * 背景：blob: URL 只存在于浏览器内存，后端生成时取不到图片内容——
+ * 图生图/图生视频会把无法解析的引用丢弃，上游返 400"至少需要一张图片"。
+ * 所以进入节点的图片必须落到后端 /files/。
+ */
+export const uploadImageWithPreview = (
+  file: File,
+  onUploaded: (backendUrl: string) => void,
+): string => {
+  const blobUrl = URL.createObjectURL(file);
+  api.uploadImage(file)
+    .then(({ url }) => {
+      onUploaded(url);
+      URL.revokeObjectURL(blobUrl);
+    })
+    .catch((e) => console.warn('[upload] image upload to backend failed, keeping blob URL', e));
+  return blobUrl;
 };
 
 /**

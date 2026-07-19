@@ -208,7 +208,7 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId, canvasContainer
                 chat_models: local.chatModels || [],
                 image_models: local.imageModels || [],
                 video_models: local.videoModels || [],
-                extra_config: {},
+                // 不传 extra_config：后端保留 DB 原值（自定义覆盖配置不被防御性同步清空）
               });
           } catch (e: any) {
             console.warn('[agent-mode] failed to sync provider to DB', e);

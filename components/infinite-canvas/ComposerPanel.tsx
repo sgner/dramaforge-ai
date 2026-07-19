@@ -60,10 +60,15 @@ export const ComposerPanel: React.FC = React.memo(() => {
     };
   }, [selectedNode]);
 
-  // 同步提示词 + 资产元数据：选中节点变化时加载
+  // 同步提示词 + 资产元数据：仅在选中节点变化时加载。
+  // 注意：依赖不能包含 nodes/taskAssets/connections——生成过程中 updateNode
+  // 会频繁改写 nodes，若随之重新水合，会把用户正在输入的新提示词
+  // 覆盖回上次运行的 _assetPrompt（"第二次输入被第一次覆盖"问题）。
   useEffect(() => {
     if (selectedNode) {
-      // 提示词优先级：_assetPrompt > text > promptDraftText > 连接的输入 prompt / script / novel 节点
+      // 提示词优先级：用户草稿（promptDraftText/text）> 上次生成记录 _assetPrompt > 连接的输入 prompt / script / novel 节点。
+      // 草稿优先于 _assetPrompt：_assetPrompt 是"上一次生成用了什么"的元数据，
+      // 用户之后编辑的内容不能被它盖掉。
       const inputPrompt = connections
         .filter(c => c.to === selectedNode.id)
         .map(c => nodes.find(n => n.id === c.from))
@@ -77,9 +82,9 @@ export const ComposerPanel: React.FC = React.memo(() => {
         .filter((s) => !!s)
         .join('\n')
         .trim();
-      const prompt = (selectedNode._assetPrompt as string)
+      const prompt = (selectedNode.promptDraftText as string)
         || selectedNode.text
-        || selectedNode.promptDraftText
+        || (selectedNode._assetPrompt as string)
         || inputPrompt
         || '';
       setPromptText(prompt);
@@ -96,7 +101,8 @@ export const ComposerPanel: React.FC = React.memo(() => {
       }
       if (assetModelId) setModelId(assetModelId);
     }
-  }, [selectedNode?.id, connections, nodes, apiConfig.providers, taskAssets]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedNode?.id]);
 
   // 保存提示词草稿到节点
   const savePromptDraft = useCallback(() => {
@@ -190,6 +196,7 @@ export const ComposerPanel: React.FC = React.memo(() => {
 
   // 运行生成（图片或视频）
   const retryFailedAsset = useCanvasStore((s) => s.retryFailedAsset);
+  const runImageToImage = useCanvasStore((s) => s.runImageToImage);
   const [runError, setRunError] = useState<string | null>(null);
   const [runBtnShake, setRunBtnShake] = useState(false);
   const handleRun = useCallback(() => {
@@ -217,23 +224,40 @@ export const ComposerPanel: React.FC = React.memo(() => {
         inputImageUrls: inputImages.map(img => img.url!),
       });
     } else {
-      // 图片生成：调用 retryFailedAsset（支持自定义 prompt），并把 prompt/provider/model 写回节点元数据
+      // 图片生成：把 prompt/provider/model 写回节点元数据
       if (!finalPrompt.trim()) {
         setRunError(t('canvasComposerErrPromptRequired'));
         setRunBtnShake(true);
         setTimeout(() => setRunBtnShake(false), 500);
         return;
       }
+      const resolvedProviderId = providerId === 'default' ? (enabledProviders[0]?.id ?? '') : providerId;
+      const resolvedModelId = modelId === 'default' ? '' : modelId;
       // 先把当前选择持久化到节点
       updateNode(selectedNode.id, {
         _assetPrompt: finalPrompt,
-        _assetProviderId: providerId === 'default' ? (enabledProviders[0]?.id ?? '') : providerId,
-        _assetProviderName: enabledProviders.find(p => p.id === providerId)?.name,
-        _assetModelId: modelId,
+        _assetProviderId: resolvedProviderId,
+        _assetProviderName: enabledProviders.find(p => p.id === resolvedProviderId)?.name,
+        _assetModelId: resolvedModelId || undefined,
       } as Partial<CanvasNode>);
-      void retryFailedAsset(selectedNode.id, finalPrompt);
+      if (selectedNode.url) {
+        // 图生图：节点已有图片（上传节点/已生成节点）→ 结果输出到右侧新建节点
+        const ratioMap: Record<string, string> = {
+          square: '1:1', portrait: '2:3', landscape: '3:2',
+          portrait43: '3:4', landscape43: '4:3', story: '9:16', wide: '16:9',
+        };
+        void runImageToImage(selectedNode.id, {
+          prompt: finalPrompt,
+          providerId: resolvedProviderId,
+          modelId: resolvedModelId,
+          aspectRatio: ratioMap[ratio],
+        });
+      } else {
+        // 空占位节点 → 原地生成
+        void retryFailedAsset(selectedNode.id, finalPrompt);
+      }
     }
-  }, [selectedNode, apiKind, promptText, inputPromptText, providerId, modelId, enabledProviders, inputImages, runVideoGeneration, updateNode, retryFailedAsset, t]);
+  }, [selectedNode, apiKind, promptText, inputPromptText, providerId, modelId, ratio, enabledProviders, inputImages, runVideoGeneration, updateNode, retryFailedAsset, runImageToImage, t]);
 
   // 非选中 image/video 节点 → 不渲染
   if (!selectedNode || !composerPosition) return null;

@@ -2,8 +2,11 @@
 
 修复前：每次解析失败只 _add_failed_step 后 return False，主循环立即用全量
 prompt 再调 LLM，格式持续错误时白烧 max_steps 次才 TASK_FAILED。
-修复后：连续 N 次（MAX_CONSECUTIVE_PARSE_FAILURES）解析失败 → PAUSED +
-TASK_PAUSED 事件 + 用户可理解的 pending_request；中间有成功则计数重置。
+修复后（两级熔断）：
+- 连续 N 次（MAX_CONSECUTIVE_PARSE_FAILURES）解析失败 → 第一次熔断：注入
+  格式提示 + 重置计数 + 继续执行，给模型一次自我纠正的机会；
+- 自我纠正无效再次连续 N 次 → 第二次熔断：PAUSED + TASK_PAUSED 事件 +
+  用户可理解的 pending_request；中间有成功则计数重置。
 """
 import pytest
 
@@ -78,11 +81,19 @@ def _make_runtime(responses, max_steps=30):
 
 @pytest.mark.asyncio
 async def test_consecutive_parse_failures_pause_instead_of_burning_max_steps():
-    """连续非法输出 N 次后 PAUSED，而不是一路烧到 max_steps 才 FAILED。"""
+    """连续非法输出：第一次熔断自我纠正，第二次熔断 PAUSED（不烧到 max_steps）。"""
     rt, llm = _make_runtime([_BAD] * 30, max_steps=30)
     event_bus.clear_log(rt.task_id)
 
-    for _ in range(AgentRuntime.MAX_CONSECUTIVE_PARSE_FAILURES + 2):
+    # 第一轮 N 次失败：第一次熔断 —— 注入格式提示 + 重置计数 + 继续，不暂停
+    for _ in range(AgentRuntime.MAX_CONSECUTIVE_PARSE_FAILURES):
+        done = await rt.step()
+        assert done is False
+    assert rt.state == AgentState.RUNNING
+    assert rt._consecutive_parse_failures == 0  # 已重置
+
+    # 第二轮 N 次失败：自我纠正无效，第二次熔断暂停
+    for _ in range(AgentRuntime.MAX_CONSECUTIVE_PARSE_FAILURES):
         done = await rt.step()
         assert done is False
         if rt.state == AgentState.PAUSED:
@@ -90,8 +101,8 @@ async def test_consecutive_parse_failures_pause_instead_of_burning_max_steps():
 
     # 熔断暂停：PAUSED，而非 FAILED / 烧到 max_steps
     assert rt.state == AgentState.PAUSED
-    # LLM 调用次数 == 熔断阈值，远小于 max_steps
-    assert llm.call_count == AgentRuntime.MAX_CONSECUTIVE_PARSE_FAILURES
+    # LLM 调用次数 == 2 × 熔断阈值，远小于 max_steps
+    assert llm.call_count == 2 * AgentRuntime.MAX_CONSECUTIVE_PARSE_FAILURES
     assert rt._step_count < rt.max_steps
 
     # 发了 TASK_PAUSED，原因可读
@@ -117,26 +128,38 @@ async def test_parse_failure_counter_resets_after_success():
     assert rt.state == AgentState.RUNNING  # 未熔断
     assert rt._consecutive_parse_failures == 2
 
-    # 再失败 1 次，凑满连续 N 次 → 暂停
+    # 再失败 1 次凑满连续 N 次 → 第一次熔断：注入格式提示 + 重置计数 + 继续（不暂停）
     await rt.step()
+    assert rt.state == AgentState.RUNNING
+    assert rt._consecutive_parse_failures == 0
+
+    # 自我纠正无效，再连续失败 N 次 → 第二次熔断：PAUSED
+    for _ in range(AgentRuntime.MAX_CONSECUTIVE_PARSE_FAILURES):
+        await rt.step()
     assert rt.state == AgentState.PAUSED
 
 
 @pytest.mark.asyncio
 async def test_empty_response_counts_toward_circuit_breaker():
-    """空响应同样计入连续失败并触发熔断。"""
+    """空响应同样计入连续失败并触发两级熔断。"""
     rt, llm = _make_runtime([{"content": ""}] * 10)
+    # 第一轮 N 次：第一次熔断，自我纠正继续
+    for _ in range(AgentRuntime.MAX_CONSECUTIVE_PARSE_FAILURES):
+        await rt.step()
+    assert rt.state == AgentState.RUNNING
+    # 第二轮 N 次：第二次熔断，暂停
     for _ in range(AgentRuntime.MAX_CONSECUTIVE_PARSE_FAILURES):
         await rt.step()
     assert rt.state == AgentState.PAUSED
-    assert llm.call_count == AgentRuntime.MAX_CONSECUTIVE_PARSE_FAILURES
+    assert llm.call_count == 2 * AgentRuntime.MAX_CONSECUTIVE_PARSE_FAILURES
 
 
 @pytest.mark.asyncio
 async def test_resume_after_pause_gets_fresh_retry_budget():
     """暂停后 resume：计数已清零，用户获得完整的一轮重试预算。"""
     rt, llm = _make_runtime([_BAD] * 30)
-    for _ in range(AgentRuntime.MAX_CONSECUTIVE_PARSE_FAILURES):
+    # 两轮 N 次失败触发第二次熔断 → PAUSED
+    for _ in range(2 * AgentRuntime.MAX_CONSECUTIVE_PARSE_FAILURES):
         await rt.step()
     assert rt.state == AgentState.PAUSED
 
@@ -151,4 +174,4 @@ async def test_resume_after_pause_gets_fresh_retry_budget():
         await rt.step()
     assert rt.state == AgentState.PAUSED
     # resume 后总共又调了 N 次 LLM（完整重试预算），而不是 1 次就停
-    assert llm.call_count == 2 * AgentRuntime.MAX_CONSECUTIVE_PARSE_FAILURES
+    assert llm.call_count == 3 * AgentRuntime.MAX_CONSECUTIVE_PARSE_FAILURES

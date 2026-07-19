@@ -3,7 +3,7 @@ import { AlertCircle, BookOpen, Clapperboard, FileText, Loader2, Library, Mounta
 import { useCanvasStore } from './use-canvas-store';
 import { TaskAssetKind } from './types';
 import { useI18n } from '../../i18n';
-import { api as apiClient } from '../../services/apiClient';
+import { api as apiClient, uploadImageWithPreview } from '../../services/apiClient';
 
 interface AssetItem {
   id: string;
@@ -118,12 +118,17 @@ export const CanvasAssetPanel: React.FC<CanvasAssetPanelProps> = ({ open, onClos
     e.stopPropagation();
     const files = [...e.dataTransfer.files].filter((f) => f.type.startsWith('image/'));
     files.forEach((file) => {
+      const id = `asset_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      // blob: URL 仅即时预览；上传到后端后替换为 /files/ 真实 URL（图生图后端要取图片内容）
+      const url = uploadImageWithPreview(file, (backendUrl) => {
+        setLocalAssets((prev) => prev.map((a) => (a.id === id ? { ...a, url: backendUrl } : a)));
+      });
       setLocalAssets((prev) => [
         ...prev,
         {
-          id: `asset_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          id,
           name: file.name,
-          url: URL.createObjectURL(file),
+          url,
           kind: 'image',
         },
       ]);

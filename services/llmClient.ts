@@ -1,6 +1,7 @@
 import { SCRIPT_SYSTEM_PROMPT, SORA_OPTIMIZATION_PROMPT, NOVEL_EXPANSION_PROMPT, NOVEL_PREPROCESS_PROMPT, CONTINUE_STORY_PROMPT, EPISODE_SUMMARY_PROMPT } from "../constants";
 import { Provider, ModelConfig, VisualSignature } from '../types';
 import { buildLlmStreamRequest, consumeStream, parseIncrementalJson, extractLlmText, IncrementalScriptResult } from './apiAdapter';
+import { api } from './apiClient';
 
 const LANG_MAP: Record<string, string> = {
   'zh': 'Chinese (Simplified)',
@@ -289,4 +290,38 @@ export const optimizeSoraPrompt = async function* (
   }, signal);
 
   yield* consumeStream(response, model);
+};
+
+/**
+ * 后端代理版提示词优化：与 optimizeSoraPrompt 相同的 system instruction，
+ * 但调用走后端 /api/llm/generate（api_key 只存后端 DB）。
+ * 解决前端直连时 store 里 apiKey 为空（列表脱敏后清空）或 localStorage
+ * 过期值导致上游 401"无效的令牌"的问题。
+ */
+export const optimizeSoraPromptViaBackend = async (
+  providerId: string,
+  modelName: string,
+  originalPrompt: string,
+  style: string,
+  language: string = 'en',
+  visualSignature?: VisualSignature,
+  characters?: { name: string; gender?: string }[],
+): Promise<string> => {
+  const targetLang = LANG_MAP[language] || 'English';
+  let vsContext = '';
+  if (visualSignature) {
+    vsContext = `\n\n[VISUAL SIGNATURE — INHERIT THIS]\n${JSON.stringify(visualSignature, null, 2)}`;
+  }
+  let charContext = '';
+  if (characters && characters.length > 0) {
+    const charLines = characters.map(c => `- ${c.name}${c.gender ? ` (${c.gender})` : ''}`).join('\n');
+    charContext = `\n\n[CHARACTER GENDER REFERENCE — USE IN DIALOGUE]\nWhen generating Dialogue lines, you MUST prefix each line with the speaker's name and gender tag like: "Dialogue: {CharacterName}({Gender}): {line}". This ensures the video generation model uses the correct voice gender.\n${charLines}`;
+  }
+  const { text } = await api.generateText({
+    provider_id: providerId,
+    model: modelName,
+    prompt: `Original Prompt: ${originalPrompt}${vsContext}${charContext}`,
+    system_instruction: SORA_OPTIMIZATION_PROMPT + `\n\nIMPORTANT CONFIGURATION:\n1. TARGET LANGUAGE: The structured output (Action, Subject, Scene, etc.) MUST be written in ${targetLang}.\n2. VISUAL STYLE: The prompt descriptions MUST reflect the style "${style}".${visualSignature ? '\n3. VISUAL SIGNATURE: You MUST inherit the Visual Signature provided in the prompt.' : ''}${characters && characters.length > 0 ? '\n4. CHARACTER GENDER: When writing Dialogue, prefix with "CharacterName(Gender):" to ensure correct voice gender in video generation.' : ''}`,
+  });
+  return text;
 };

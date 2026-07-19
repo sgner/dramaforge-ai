@@ -110,6 +110,8 @@ export interface Provider {
   /** Whether API key is saved on backend (read-only, from server) */
   hasKey?: boolean;
   keyPreview?: string;
+  /** Per-provider custom overrides (endpoint/payload/async polling etc.), raw JSON */
+  extraConfig?: Record<string, any>;
   /** RunningHub wallet API key */
   walletApiKey?: string;
   hasWalletKey?: boolean;

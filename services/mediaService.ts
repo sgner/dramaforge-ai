@@ -220,7 +220,8 @@ export const generateStoryboardImage = async (
   provider: Provider,
   model: ModelConfig,
   signal?: AbortSignal,
-  sceneAsset?: SceneAsset
+  sceneAsset?: SceneAsset,
+  aspectRatio?: string
 ): Promise<string> => {
   const prompt = buildStoryboardPrompt(description, style, language, sceneAsset);
 
@@ -231,7 +232,7 @@ export const generateStoryboardImage = async (
       model: model.modelName,
       prompt,
       ref_urls: characterImages || [],
-      aspect_ratio: '16:9',
+      aspect_ratio: aspectRatio || '16:9',
     });
     return result.url;
   }
@@ -251,7 +252,7 @@ export const generateStoryboardImage = async (
       formData.append('prompt', prompt);
       formData.append('image_size', '4K');
       formData.append('response_format', 'url');
-      formData.append('aspect_ratio', '');
+      formData.append('aspect_ratio', aspectRatio || '');
 
       let appendedCount = 0;
       for (const imgUrl of characterImages) {
@@ -287,7 +288,7 @@ export const generateStoryboardImage = async (
       size: '1024x1024',
       n: 1,
       responseFormat: 'url',
-      aspectRatio: '16:9'
+      aspectRatio: aspectRatio || '16:9'
     }, provider);
 
     const { data } = await axios.post(url, requestBody, { headers, signal });

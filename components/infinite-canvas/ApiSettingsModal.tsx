@@ -44,6 +44,346 @@ import { toast } from '../../utils/toast';
 /* ====== Constants ====== */
 const FIXED_IDS = new Set<string>([]);
 
+/**
+ * 高级：provider 自定义配置（extra_config）编辑器。
+ * 模板化表单，用户不需要手写 JSON：
+ * - default：OpenAI 兼容（无自定义配置）
+ * - task_api：任务式生成 API（提交任务 + 轮询取结果，如 seedance），
+ *   表单填写端点/分辨率/输出格式/轮询节奏，组件生成结构化 extra_config
+ * - custom：自定义 JSON（高级逃生舱）
+ * 后端 backend/app/routers/media.py 的 _media_overrides 消费该配置。
+ * keyed by providerId 使用（父组件 key={p.id}），切换供应商时重建内部状态。
+ */
+
+type ExtraConfigMode = 'default' | 'task_api' | 'custom';
+
+type TaskApiForm = {
+  applyImage: boolean;
+  applyVideo: boolean;
+  imageEndpoint: string;
+  videoEndpoint: string;
+  resolution: string;
+  outputFormat: string;
+  pollInterval: number;
+  timeoutSec: number;
+  taskIdField: string;
+  statusField: string;
+  resultUrlField: string;
+};
+
+const TASK_API_DEFAULTS = {
+  imageEndpoint: '/v1/image/generations',
+  videoEndpoint: '/v1/videos/generations',
+  resolution: '2k',
+  outputFormat: 'jpeg',
+  pollInterval: 3,
+  timeoutSec: 300,
+};
+
+function detectExtraConfigMode(value: Record<string, any> | undefined): ExtraConfigMode {
+  if (!value || Object.keys(value).length === 0) return 'default';
+  const sections = [value.image, value.video].filter((s) => s && typeof s === 'object');
+  if (sections.length > 0 && sections.every((s: any) => s.async_task)) return 'task_api';
+  return 'custom';
+}
+
+function taskApiFormFromConfig(value: Record<string, any> | undefined): TaskApiForm {
+  const img = value?.image && typeof value.image === 'object' ? value.image : {};
+  const vid = value?.video && typeof value.video === 'object' ? value.video : {};
+  const anySection: Record<string, any> = Object.keys(img).length ? img : vid;
+  const metadata = anySection?.payload_extra && typeof anySection.payload_extra === 'object'
+    ? (anySection.payload_extra.metadata || {})
+    : {};
+  return {
+    applyImage: Object.keys(img).length > 0,
+    applyVideo: Object.keys(vid).length > 0,
+    imageEndpoint: img.endpoint || TASK_API_DEFAULTS.imageEndpoint,
+    videoEndpoint: vid.endpoint || TASK_API_DEFAULTS.videoEndpoint,
+    resolution: metadata.resolution || TASK_API_DEFAULTS.resolution,
+    outputFormat: metadata.output_format || TASK_API_DEFAULTS.outputFormat,
+    pollInterval: typeof anySection.poll_interval_sec === 'number' ? anySection.poll_interval_sec : TASK_API_DEFAULTS.pollInterval,
+    timeoutSec: typeof anySection.timeout_sec === 'number' ? anySection.timeout_sec : TASK_API_DEFAULTS.timeoutSec,
+    taskIdField: anySection.task_id_field || '',
+    statusField: anySection.status_field || '',
+    resultUrlField: anySection.result_url_field || '',
+  };
+}
+
+function buildTaskApiConfig(form: TaskApiForm): Record<string, any> {
+  const metadata: Record<string, string> = {};
+  if (form.resolution) metadata.resolution = form.resolution;
+  if (form.outputFormat) metadata.output_format = form.outputFormat;
+  const common: Record<string, any> = {
+    async_task: true,
+    poll_interval_sec: form.pollInterval,
+    timeout_sec: form.timeoutSec,
+  };
+  if (Object.keys(metadata).length > 0) common.payload_extra = { metadata };
+  if (form.taskIdField.trim()) common.task_id_field = form.taskIdField.trim();
+  if (form.statusField.trim()) common.status_field = form.statusField.trim();
+  if (form.resultUrlField.trim()) common.result_url_field = form.resultUrlField.trim();
+  const out: Record<string, any> = {};
+  if (form.applyImage) {
+    out.image = { endpoint: form.imageEndpoint.trim() || TASK_API_DEFAULTS.imageEndpoint, ...common };
+  }
+  if (form.applyVideo) {
+    out.video = { endpoint: form.videoEndpoint.trim() || TASK_API_DEFAULTS.videoEndpoint, ...common };
+  }
+  return out;
+}
+
+export const ExtraConfigEditor: React.FC<{
+  value: Record<string, any> | undefined;
+  onChange: (v: Record<string, any>) => void;
+}> = ({ value, onChange }) => {
+  const { t } = useI18n();
+  const [mode, setMode] = useState<ExtraConfigMode>(() => detectExtraConfigMode(value));
+  const [form, setForm] = useState<TaskApiForm>(() => taskApiFormFromConfig(value));
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [draft, setDraft] = useState(() =>
+    value && Object.keys(value).length ? JSON.stringify(value, null, 2) : ''
+  );
+  const [invalid, setInvalid] = useState(false);
+
+  const patchForm = (patch: Partial<TaskApiForm>) => {
+    const next = { ...form, ...patch };
+    setForm(next);
+    onChange(buildTaskApiConfig(next));
+  };
+
+  const switchMode = (next: ExtraConfigMode) => {
+    setMode(next);
+    setInvalid(false);
+    if (next === 'default') {
+      setDraft('');
+      onChange({});
+      return;
+    }
+    if (next === 'task_api') {
+      // 保留已填字段；从未配置过时默认勾选图像（最常见的任务式场景）
+      const rebuilt = taskApiFormFromConfig(value);
+      const nextForm = rebuilt.applyImage || rebuilt.applyVideo ? rebuilt : { ...rebuilt, applyImage: true };
+      setForm(nextForm);
+      onChange(buildTaskApiConfig(nextForm));
+      return;
+    }
+    // custom：把当前结构化配置序列化进 textarea 供继续编辑
+    const current = value && Object.keys(value).length ? value : buildTaskApiConfig(form);
+    setDraft(Object.keys(current).length ? JSON.stringify(current, null, 2) : '');
+  };
+
+  const commitCustom = (raw: string) => {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      setInvalid(false);
+      onChange({});
+      return;
+    }
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        setInvalid(false);
+        onChange(parsed);
+      } else {
+        setInvalid(true);
+      }
+    } catch {
+      setInvalid(true);
+    }
+  };
+
+  const fieldRow = (label: string, control: React.ReactNode, testId?: string) => (
+    <div className="extra-config-row" data-testid={testId}>
+      <span className="extra-config-row-label">{label}</span>
+      {control}
+    </div>
+  );
+
+  return (
+    <div className="api-field api-field--full">
+      <span className="api-label">{t('canvasApiSettingsExtraConfig')}</span>
+      <div className="extra-config-card">
+        {fieldRow(
+          t('canvasApiSettingsConfigTemplate'),
+          <div className="api-field-frame">
+            <select
+              data-testid="extra-config-template"
+              value={mode}
+              onChange={e => switchMode(e.target.value as ExtraConfigMode)}
+            >
+              <option value="default">{t('canvasApiSettingsTemplateDefault')}</option>
+              <option value="task_api">{t('canvasApiSettingsTemplateTaskApi')}</option>
+              <option value="custom">{t('canvasApiSettingsTemplateCustom')}</option>
+            </select>
+          </div>,
+        )}
+
+        {mode === 'task_api' && (
+          <>
+            <div className="extra-config-row">
+              <span className="extra-config-row-label">{t('canvasApiSettingsApplyTo')}</span>
+              <label className="api-toggle">
+                <input
+                  type="checkbox"
+                  data-testid="extra-config-apply-image"
+                  checked={form.applyImage}
+                  onChange={e => patchForm({ applyImage: e.target.checked })}
+                />
+                {t('canvasApiSettingsMediaImage')}
+              </label>
+              <label className="api-toggle">
+                <input
+                  type="checkbox"
+                  data-testid="extra-config-apply-video"
+                  checked={form.applyVideo}
+                  onChange={e => patchForm({ applyVideo: e.target.checked })}
+                />
+                {t('canvasApiSettingsMediaVideo')}
+              </label>
+            </div>
+            {!form.applyImage && !form.applyVideo && (
+              <span className="api-hint" style={{ color: 'var(--danger, #e5534b)' }}>
+                {t('canvasApiSettingsSelectAtLeastOneKind')}
+              </span>
+            )}
+            {form.applyImage && fieldRow(
+              `${t('canvasApiSettingsSubmitEndpoint')} · ${t('canvasApiSettingsMediaImage')}`,
+              <div className="api-field-frame">
+                <input
+                  data-testid="extra-config-image-endpoint"
+                  value={form.imageEndpoint}
+                  onChange={e => patchForm({ imageEndpoint: e.target.value })}
+                  placeholder={TASK_API_DEFAULTS.imageEndpoint}
+                />
+              </div>,
+            )}
+            {form.applyVideo && fieldRow(
+              `${t('canvasApiSettingsSubmitEndpoint')} · ${t('canvasApiSettingsMediaVideo')}`,
+              <div className="api-field-frame">
+                <input
+                  data-testid="extra-config-video-endpoint"
+                  value={form.videoEndpoint}
+                  onChange={e => patchForm({ videoEndpoint: e.target.value })}
+                  placeholder={TASK_API_DEFAULTS.videoEndpoint}
+                />
+              </div>,
+            )}
+            <div className="extra-config-row">
+              <span className="extra-config-row-label">{t('canvasApiSettingsResolution')}</span>
+              <div className="api-field-frame">
+                <select
+                  data-testid="extra-config-resolution"
+                  value={form.resolution}
+                  onChange={e => patchForm({ resolution: e.target.value })}
+                >
+                  <option value="1k">1k</option>
+                  <option value="2k">2k</option>
+                  <option value="4k">4k</option>
+                </select>
+              </div>
+              <span className="extra-config-row-label">{t('canvasApiSettingsOutputFormat')}</span>
+              <div className="api-field-frame">
+                <select
+                  data-testid="extra-config-output-format"
+                  value={form.outputFormat}
+                  onChange={e => patchForm({ outputFormat: e.target.value })}
+                >
+                  <option value="jpeg">jpeg</option>
+                  <option value="png">png</option>
+                  <option value="webp">webp</option>
+                </select>
+              </div>
+            </div>
+            <div className="extra-config-row">
+              <span className="extra-config-row-label">{t('canvasApiSettingsPollInterval')}</span>
+              <div className="api-field-frame">
+                <input
+                  type="number"
+                  min={1}
+                  data-testid="extra-config-poll-interval"
+                  value={form.pollInterval}
+                  onChange={e => patchForm({ pollInterval: Math.max(1, Number(e.target.value) || 1) })}
+                />
+              </div>
+              <span className="extra-config-row-label">{t('canvasApiSettingsPollTimeout')}</span>
+              <div className="api-field-frame">
+                <input
+                  type="number"
+                  min={10}
+                  data-testid="extra-config-timeout"
+                  value={form.timeoutSec}
+                  onChange={e => patchForm({ timeoutSec: Math.max(10, Number(e.target.value) || 10) })}
+                />
+              </div>
+            </div>
+            <button
+              type="button"
+              className="extra-config-advanced-toggle"
+              data-testid="extra-config-advanced-toggle"
+              onClick={() => setShowAdvanced(v => !v)}
+            >
+              {showAdvanced ? '▾' : '▸'} {t('canvasApiSettingsAdvancedMapping')}
+            </button>
+            {showAdvanced && (
+              <>
+                {fieldRow(
+                  t('canvasApiSettingsTaskIdField'),
+                  <div className="api-field-frame">
+                    <input
+                      data-testid="extra-config-task-id-field"
+                      value={form.taskIdField}
+                      onChange={e => patchForm({ taskIdField: e.target.value })}
+                      placeholder="task_id"
+                    />
+                  </div>,
+                )}
+                {fieldRow(
+                  t('canvasApiSettingsStatusField'),
+                  <div className="api-field-frame">
+                    <input
+                      data-testid="extra-config-status-field"
+                      value={form.statusField}
+                      onChange={e => patchForm({ statusField: e.target.value })}
+                      placeholder="data.status"
+                    />
+                  </div>,
+                )}
+                {fieldRow(
+                  t('canvasApiSettingsResultUrlField'),
+                  <div className="api-field-frame">
+                    <input
+                      data-testid="extra-config-result-url-field"
+                      value={form.resultUrlField}
+                      onChange={e => patchForm({ resultUrlField: e.target.value })}
+                      placeholder="data.result_url"
+                    />
+                  </div>,
+                )}
+              </>
+            )}
+          </>
+        )}
+
+        {mode === 'custom' && (
+          <div className="api-field-frame extra-config-json-frame">
+            <textarea
+              data-testid="extra-config-editor"
+              rows={5}
+              value={draft}
+              placeholder='{"image": {"endpoint": "/v1/image/generations", "async_task": true}}'
+              onChange={e => setDraft(e.target.value)}
+              onBlur={e => commitCustom(e.target.value)}
+            />
+          </div>
+        )}
+      </div>
+      <span className="api-hint" style={invalid ? { color: 'var(--danger, #e5534b)' } : undefined}>
+        {invalid ? t('canvasApiSettingsExtraConfigInvalid') : t('canvasApiSettingsExtraConfigHint')}
+      </span>
+    </div>
+  );
+};
+
 const RECOMMENDED_APIS: Array<{
   name: string;
   baseUrl: string;
@@ -350,7 +690,7 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
       chat_models: p.chatModels || [],
       image_models: p.imageModels || [],
       video_models: p.videoModels || [],
-      extra_config: {},
+      extra_config: p.extraConfig || {},
     });
   };
   const deleteProviderFromDb = async (providerId: string) => {
@@ -1976,6 +2316,15 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
                   {p.hasKey ? t('canvasApiSettingsKeySaved').replace('{preview}', p.keyPreview || '') : t('canvasApiSettingsNoKeySaved')}
                 </span>
               </label>
+            )}
+
+            {/* 高级：自定义配置（非 OpenAI 兼容供应商覆盖默认端点/payload/异步轮询） */}
+            {!isJimeng && !isRunningHub && (
+              <ExtraConfigEditor
+                key={`extra-config-${p.id}`}
+                value={p.extraConfig}
+                onChange={(v) => updateProvider(p.id, { extraConfig: v })}
+              />
             )}
 
             {/* RunningHub Keys */}

@@ -1,5 +1,5 @@
 """Pydantic schema"""
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing import Optional, Dict, Any, List, Literal
 from datetime import datetime
 
@@ -55,6 +55,15 @@ class NodeOut(BaseModel):
     class Config:
         from_attributes = True
         extra = "ignore"
+
+    @field_validator("w", "h", mode="before")
+    @classmethod
+    def _round_fractional_dimension(cls, v):
+        # 前端画布节点尺寸可能是小数（拖拽缩放/自动布局产生），DB 列是 Integer，
+        # 落库前四舍五入，避免 Pydantic v2 int_from_float 直接 422。
+        if isinstance(v, float):
+            return round(v)
+        return v
 
 
 class NodeBatchUpsert(BaseModel):

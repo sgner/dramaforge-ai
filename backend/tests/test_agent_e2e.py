@@ -455,8 +455,8 @@ async def test_e2e_script_step_produces_text_artifact(task_id, media_service):
 
 @pytest.mark.asyncio
 async def test_e2e_total_steps_match_max_steps(task_id, media_service):
-    """未提供 finish_task 时，runtime 应在 max_steps 时停。"""
-    # 10 个 create_plan（不结束）
+    """max_steps 是单轮保护：超限自动扩展检查点窗口继续执行，而不是判失败。"""
+    # 10 个 create_plan（不主动结束）；脚本耗尽后 ScriptedLLM 默认 finish_task
     sequence = [("create_plan", {"plan": PLAN_STEPS})] * 10
     llm = ScriptedLLM(sequence)
     memory = AgentMemory(user_goal="test")
@@ -478,9 +478,10 @@ async def test_e2e_total_steps_match_max_steps(task_id, media_service):
             break
 
     assert last_done is True
-    # 任务因超过 max_steps 而结束 — 状态为 failed（不是 done），
-    # 因为超限是失败，避免 _run_runtime_loop 再发 TASK_DONE 覆盖 TASK_FAILED
-    assert runtime.state.value == "failed"
+    # 超过 max_steps=3 后窗口已自动扩展（超限只是单轮保护，不是任务失败），
+    # runtime 得以继续跑到 finish_task 正常完成。
+    assert runtime.max_steps > 3
+    assert runtime.state.value == "done"
 
 
 @pytest.mark.asyncio

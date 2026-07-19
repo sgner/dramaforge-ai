@@ -78,7 +78,8 @@ async def verify_provider(provider_id: str, db: Session = Depends(get_db)):
 
 
 class ProviderIn(BaseModel):
-    """PUT body。api_key=None/空 → 保留 DB 原 key；非空 → 覆盖。"""
+    """PUT body。api_key=None/空 → 保留 DB 原 key；非空 → 覆盖。
+    extra_config=None → 保留 DB 原值（前端未提供该字段时不被清空）。"""
     name: str = ""
     base_url: str = Field(..., min_length=1, max_length=512)
     api_key: Optional[str] = None  # None/空 → preserve
@@ -88,7 +89,7 @@ class ProviderIn(BaseModel):
     chat_models: List[str] = Field(default_factory=list)
     image_models: List[str] = Field(default_factory=list)
     video_models: List[str] = Field(default_factory=list)
-    extra_config: dict = Field(default_factory=dict)
+    extra_config: Optional[dict] = None  # None → preserve
 
 
 @router.put("/{provider_id}", response_model=ProviderOut)
@@ -117,7 +118,7 @@ def upsert_provider(
             chat_models_json=_json.dumps(body.chat_models),
             image_models_json=_json.dumps(body.image_models),
             video_models_json=_json.dumps(body.video_models),
-            extra_config_json=_json.dumps(body.extra_config),
+            extra_config_json=_json.dumps(body.extra_config or {}),
         )
         db.add(row)
     else:
@@ -133,7 +134,10 @@ def upsert_provider(
         row.chat_models_json = _json.dumps(body.chat_models)
         row.image_models_json = _json.dumps(body.image_models)
         row.video_models_json = _json.dumps(body.video_models)
-        row.extra_config_json = _json.dumps(body.extra_config)
+        # extra_config=None（前端未提供）→ 保留原值，避免被不知情调用方清空；
+        # 显式传 dict（含 {}）→ 覆盖。
+        if body.extra_config is not None:
+            row.extra_config_json = _json.dumps(body.extra_config)
     db.commit()
     db.refresh(row)
     return row.to_dict(mask_key=True)

@@ -259,6 +259,7 @@ function AppContent() {
       apiKey: r.has_key ? '' : (r.api_key || ''),
       hasKey: r.has_key || false,
       keyPreview: r.key_preview || '',
+      extraConfig: r.extra_config || {},
       defaultModel: r.default_model || '',
       chatModels: r.chat_models || [],
       imageModels: r.image_models || [],

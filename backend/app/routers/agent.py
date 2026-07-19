@@ -641,6 +641,29 @@ async def _rebuild_runtime_from_db(task_id: str):
             task_row.task_profile = legacy_profile.model_dump(mode="json")
             task_row.rule_pack_version = legacy_profile.rule_pack_id.rsplit(".", 1)[-1]
             db.commit()
+        # If the user changed the global LLM binding (e.g. old provider ran out of
+        # balance and a new one was bound), prefer the current binding over the
+        # provider/model pinned on the task row at creation; otherwise old tasks stay
+        # stuck on the dead provider forever. Keep pinned values when binding is
+        # missing or fails validation (provider disabled / model not declared).
+        try:
+            current_bindings = resolve_capability_bindings(db, require_llm=False)
+        except CapabilityConfigurationError:
+            current_bindings = {}
+        bound_llm = current_bindings.get("llm")
+        if bound_llm and (
+            bound_llm["provider_id"] != task_row.llm_provider_id
+            or bound_llm["model_id"] != task_row.llm_model_id
+        ):
+            logger.info(
+                "[rebuild_runtime] task %s: model_bindings changed, switching LLM %s/%s -> %s/%s",
+                task_id,
+                task_row.llm_provider_id, task_row.llm_model_id,
+                bound_llm["provider_id"], bound_llm["model_id"],
+            )
+            task_row.llm_provider_id = bound_llm["provider_id"]
+            task_row.llm_model_id = bound_llm["model_id"]
+            db.commit()
         task_dict = {
             "id": task_row.id,
             "user_goal": task_row.user_goal,

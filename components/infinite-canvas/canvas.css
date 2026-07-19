@@ -4368,6 +4368,66 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity: 0 !imp
   background: var(--panel);
 }
 .theme-dark .api-key-input-line .api-field-frame { background: var(--soft); }
+
+/* 自定义配置（extra_config）模板编辑器 */
+.extra-config-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--soft);
+}
+.theme-dark .extra-config-card { background: rgba(255,255,255,.03); border-color: var(--line-strong); }
+.extra-config-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.extra-config-row .api-field-frame { flex: 1; min-width: 120px; background: var(--panel); }
+.theme-dark .extra-config-row .api-field-frame { background: var(--soft); }
+.extra-config-row-label {
+  flex: 0 0 auto;
+  min-width: 88px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+.extra-config-row .api-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--text);
+  cursor: pointer;
+}
+.extra-config-advanced-toggle {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.extra-config-advanced-toggle:hover { color: var(--text); }
+.extra-config-json-frame { align-items: stretch; }
+.extra-config-json-frame textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  outline: none;
+  resize: vertical;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
 .api-key-actions {
   display: flex;
   gap: 8px;
