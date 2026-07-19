@@ -76,7 +76,9 @@ STORYBOARD_SIX_GRID_PROMPT = (
     "Six-panel storyboard sheet, 2 rows by 3 columns, one single image containing exactly six clearly separated panels. "
     "Panel 1 is a pure black buffer frame with no content. Panels 2 through 6 are sequential frozen story frames for the same shot, "
     "each showing one readable action beat with the referenced environment and characters. Use clean thin panel dividers, consistent "
-    "character identity, costume, environment, lighting, color palette and medium across all panels, cinematic storyboard sketch style, "
+    "character identity, costume, environment, lighting, color palette and medium across all panels, "
+    "full color, cinematic storyboard style faithfully inheriting the project's visual signature "
+    "(medium, color palette, lighting, and texture), "
     "no extra panels, no single full-frame composition, no UI, no watermark, no readable text, no numbers, no labels, no annotations."
 )
 
@@ -1431,7 +1433,7 @@ class GenerateStoryboardImageTool(BaseTool):
     """生成分镜草图。"""
 
     name = "generate_storyboard_image"
-    description = "为分镜生成草图（sketch 风格），用于预览构图。"
+    description = "为分镜生成六宫格故事板（2x3，继承视听签名的彩色电影感风格），用于预览构图与连续性。"
     category = "image"
     requires_approval = True
     estimated_cost_usd = 0.02
