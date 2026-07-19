@@ -423,10 +423,23 @@ const ImageNodeBody: React.FC<{ node: CanvasNode }> = React.memo(({ node }) => {
               <img src={node.url} alt="" draggable={false} className="node-img"
                 onLoad={(e) => autoFitMedia(e.currentTarget, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)} />
             )}
+            <button className="mini-x image-replace" type="button" title={t('canvasNodeReplaceImage')}
+              onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}>
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+            </button>
             <button className="mini-x image-delete" type="button" title={t('canvasNodeDeleteImage')} data-image-index="0"
               onClick={(e) => { e.stopPropagation(); updateNode(node.id, { url: '', name: '', mediaKind: 'image' }); }}>
               <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
             </button>
+            {/* 重新选择图片：有图状态下也能唤起文件选择器（空状态的 input 不渲染） */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*,video/*,audio/*"
+              style={{ display: 'none' }}
+              onClick={(e) => { e.currentTarget.value = ''; }}
+              onChange={(e) => handleFileSelect(e.target.files)}
+            />
           </div>
           {renderAssetMeta()}
         </div>

@@ -3239,6 +3239,20 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity: 0 !imp
   opacity: 1;
 }
 
+/* 图片内的重新选择按钮（删除按钮左侧） */
+.image-wrap .mini-x.image-replace {
+  position: absolute;
+  top: 8px;
+  right: 36px;
+  z-index: 3;
+  opacity: 0;
+  transition: opacity .14s ease;
+}
+
+.image-wrap:hover .mini-x.image-replace {
+  opacity: 1;
+}
+
 .thumb-item .mini-x.image-delete {
   position: absolute;
   top: 4px;
