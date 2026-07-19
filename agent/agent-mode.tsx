@@ -28,11 +28,11 @@ import { useAgentTools } from './use-agent-tools';
 import { ThoughtStream } from './thought-stream';
 import { ToolPalette } from './tool-palette';
 import { TaskList } from './task-list';
-import { ErrorRecoveryCard } from './error-recovery-card';
 import { AgentPetController } from './agent-pet-controller';
 import { api } from '@/services/apiClient';
 import { useCanvasStore } from '@/components/infinite-canvas/use-canvas-store';
 import { getBindingForStep } from '@/types';
+import { useI18n } from '@/i18n';
 import { PromptLibraryPanel } from '../components/PromptLibraryPanel';
 import './agent.css';
 
@@ -42,6 +42,7 @@ export interface AgentModeProps {
 }
 
 export const AgentMode: React.FC<AgentModeProps> = ({ projectId, canvasContainerRef: externalCanvasContainerRef }) => {
+  const { lang } = useI18n();
   const [goal, setGoal] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -50,6 +51,17 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId, canvasContainer
   const [taskDrawerOpen, setTaskDrawerOpen] = useState(true);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [promptLibraryOpen, setPromptLibraryOpen] = useState(false);
+  // LLM 错误 banner 状态：从 store 读（runtime LLMError 触发），与本地 error 互不干扰。
+  // 出现时必须显眼（顶部 banner + 抖动动画），不能让用户误以为 agent 还在跑。
+  const llmError = useAgentStore((s) => s.llmError);
+  const llmErrorAt = useAgentStore((s) => s.llmErrorAt);
+  const clearLlmError = useAgentStore((s) => s.clearLlmError);
+  // 任务级错误（task_failed / resume 回滚 / 提交看门狗超时写入的 store.error）。
+  // 之前这个字段没有任何 UI 渲染——线上事故里用户提交回复后 resume 失败，
+  // 前端把 error 写进 store 却无处展示，UI 卡在"已提交"无限等待。
+  const taskError = useAgentStore((s) => s.error);
+  const clearTaskError = useAgentStore((s) => s.clearError);
+  const pendingQuestion = useAgentStore((s) => s.pendingQuestion);
   // 画布容器 ref（用于 fitAgentView 时获取 board 尺寸）
   const internalCanvasContainerRef = useRef<HTMLDivElement | null>(null);
   const canvasContainerRef = externalCanvasContainerRef || internalCanvasContainerRef;
@@ -207,6 +219,7 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId, canvasContainer
       const t = await api.startAgent(projectId, goal.trim(), {
         providerId,
         modelId,
+        language: lang,
       });
       setTask(t.id, 'running', projectId);
       // 后端在 TASK_STARTED 事件里也会再发一次 llm_mode，但 SSE 推送有几十 ms 延迟，
@@ -305,10 +318,15 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId, canvasContainer
                 artifacts: (snapshot.artifacts as any) || {},
                 pending_question: snapshot.pending_question,
                 pending_response: snapshot.pending_response,
+                task_profile: snapshot.task_profile as any,
+                rule_pack_version: snapshot.rule_pack_version,
                 total_cost_usd: snapshot.total_cost_usd,
                 total_tokens: snapshot.total_tokens,
                 llm_provider_id: snapshot.llm_provider_id,
                 llm_model_id: snapshot.llm_model_id,
+                // 关键：传入 steps 让 hydrate 能在 pending_question 缺失时
+                // 从最近 ask_user step 提取真实问题文本（避免提问卡空白）。
+                steps,
               });
               // 检查点：从 DB steps 恢复 thoughts/actions/observations 历史。
               // 在 hydrate 之后调用，避免被 setTask 的 reset 清空。
@@ -472,7 +490,200 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId, canvasContainer
           data-testid="agent-mode-canvas-container"
           style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
           >
-          <ErrorRecoveryCard />
+          {/* LLM 调用错误 banner（runtime LLMError 触发）。
+              与本地 error 互不干扰，必须显眼（红色背景 + 抖动动画），
+              用户看到"已提交"卡上仍显示旧 ask_user 问题时，
+              不会怀疑是 agent 卡住还是 LLM 挂了。 */}
+          {llmError && (
+            <div
+              data-testid="agent-mode-llm-error"
+              className="agent-mode-llm-error"
+              role="alert"
+              style={{
+                position: 'absolute',
+                top: 10,
+                left: '50%',
+                transform: 'translateX(-50%)',
+                zIndex: 50,
+                maxWidth: 'min(640px, calc(100% - 28px))',
+                background: '#fff1f0',
+                border: '1px solid #ffccc7',
+                borderRadius: 8,
+                padding: '12px 14px',
+                boxShadow: '0 6px 24px rgba(255, 77, 79, 0.15)',
+                animation: 'llmErrorPulse 0.6s ease-in-out 2',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 8,
+                color: '#5c0011',
+                // 父容器 pointerEvents: 'none' 会让所有子元素继承不可点击，
+                // 这里必须显式开启才能让 × / 打开 API 设置 / 标记已查看 按钮响应事件
+                pointerEvents: 'auto',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                <span
+                  aria-hidden
+                  style={{
+                    fontSize: 18,
+                    lineHeight: '20px',
+                    flex: '0 0 auto',
+                  }}
+                >
+                  ⚠
+                </span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div
+                    style={{
+                      fontWeight: 600,
+                      fontSize: 13,
+                      marginBottom: 4,
+                    }}
+                  >
+                    LLM 调用失败
+                    {llmErrorAt &&
+                      ` · ${Math.max(1, Math.floor((Date.now() - llmErrorAt) / 1000))}s 前`}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 12,
+                      wordBreak: 'break-word',
+                      maxHeight: 96,
+                      overflow: 'auto',
+                      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                    }}
+                  >
+                    {llmError}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => clearLlmError()}
+                  aria-label="关闭"
+                  style={{
+                    background: 'transparent',
+                    border: 0,
+                    cursor: 'pointer',
+                    fontSize: 16,
+                    lineHeight: '16px',
+                    color: '#5c0011',
+                    padding: 0,
+                    flex: '0 0 auto',
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  data-testid="llm-error-open-settings"
+                  onClick={() => {
+                    clearLlmError();
+                    // 退出 agent 模式到主页，App.tsx 监听该事件后打开 API 设置
+                    window.dispatchEvent(new CustomEvent('agent-mode-exit-and-open-settings'));
+                  }}
+                  style={{
+                    background: '#ff4d4f',
+                    color: '#fff',
+                    border: 0,
+                    borderRadius: 4,
+                    padding: '6px 12px',
+                    cursor: 'pointer',
+                    fontSize: 12,
+                    fontWeight: 500,
+                  }}
+                >
+                  打开 API 设置
+                </button>
+                {pendingQuestion ? (
+                  <span
+                    style={{
+                      fontSize: 12,
+                      color: '#5c0011',
+                      alignSelf: 'center',
+                    }}
+                  >
+                    修复后请在下方问题里重新回答，agent 会自动重试
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    data-testid="llm-error-retry-new"
+                    onClick={() => {
+                      clearLlmError();
+                      // 没有 pending question → 引导用户开新任务
+                      setError(
+                        'LLM 调用已失败，请先在 API 设置中修复 LLM provider，然后开新任务',
+                      );
+                    }}
+                    style={{
+                      background: '#fff',
+                      color: '#5c0011',
+                      border: '1px solid #ffccc7',
+                      borderRadius: 4,
+                      padding: '6px 12px',
+                      cursor: 'pointer',
+                      fontSize: 12,
+                    }}
+                  >
+                    标记已查看
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* 任务级错误 banner — store.error（task_failed / resume 回滚 / 看门狗超时）。
+              放在 LLM banner 下方（top:64），避免与 llmError / 本地 error 重叠。 */}
+          {taskError && (
+            <div
+              data-testid="agent-mode-task-error"
+              className="agent-mode-task-error"
+              role="alert"
+              style={{
+                position: 'absolute',
+                top: 64,
+                left: '50%',
+                transform: 'translateX(-50%)',
+                zIndex: 45,
+                maxWidth: 'min(640px, calc(100% - 28px))',
+                background: '#fffbe6',
+                border: '1px solid #ffe58f',
+                borderRadius: 8,
+                padding: '10px 14px',
+                boxShadow: '0 6px 24px rgba(250, 173, 20, 0.15)',
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: 10,
+                color: '#613400',
+                fontSize: 12,
+                // 父容器 pointerEvents: 'none'，显式开启让关闭按钮可点
+                pointerEvents: 'auto',
+              }}
+            >
+              <span aria-hidden style={{ fontSize: 16, lineHeight: '18px', flex: '0 0 auto' }}>⚠</span>
+              <div style={{ flex: 1, minWidth: 0, wordBreak: 'break-word' }}>{taskError}</div>
+              <button
+                type="button"
+                data-testid="agent-mode-task-error-dismiss"
+                onClick={() => clearTaskError()}
+                aria-label="关闭"
+                style={{
+                  background: 'transparent',
+                  border: 0,
+                  cursor: 'pointer',
+                  fontSize: 16,
+                  lineHeight: '16px',
+                  color: '#613400',
+                  padding: 0,
+                  flex: '0 0 auto',
+                }}
+              >
+                ×
+              </button>
+            </div>
+          )}
 
           {/* 浮动错误提示 — 画布顶部居中 */}
           {error && (
@@ -526,6 +737,9 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId, canvasContainer
 
         {/* 浮层 ThoughtStream */}
         <ThoughtStream floating open={thoughtOpen} onClose={() => setThoughtOpen(false)} />
+
+        {/* 实时活动状态已合并到桌宠状态栏（AgentPetController.petStatusText），
+            画布顶部不再单独显示 chip，避免与桌宠信息重复。 */}
 
         {/* 抽屉 ToolPalette */}
         <aside

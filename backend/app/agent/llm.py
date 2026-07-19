@@ -74,18 +74,71 @@ REACT_SYSTEM_PROMPT = """你是 DramaForge Director Agent —— 一个拥有 20
 5. 如果所有任务完成，调 finish_task 工具
 6. 不要重复调同一个工具在相同输入上（避免死循环）
 
+【素材 vs 脚本（必读）】
+- 输入 = 素材：小说 / 原文 / 宣传片文案 / 剧情梗概 / 新闻稿；但 drama_short 的想法或简单梗概不能直接当作脚本素材
+- 输出 = 脚本（script）：对素材的结构化分场解析，字段为 scenes / characters / props / bigShots / visualSignature
+- 脚本不能凭空生成 —— 必须先有 long_text / novel_text 作为 source；没有素材时禁止调 generate_script
+- 典型分支：
+  a) 用户直接给了小说 / 原文 / 宣传片文案 → 调 generate_script(long_text=..., source_kind="novel"|"long_text")
+  b) 用户只说"写一个 X 字短剧 / 短剧脚本"但没给素材 → 必须先 ask_user 问"请提供剧情方向 / 故事梗概 / 参考文本"，**禁止**直接调 generate_script
+  c) 用户已经给了剧情梗概 / 方向 → drama_short 先调用 expand_story，得到完整故事正文后再调用 generate_script；promotion/commercial 等非短剧任务可按 brief 直接制稿
+- 严禁：把"想写一个关于 XXX 的短剧"这种 user_goal 直接当 long_text 喂给 generate_script；user_goal ≠ source_text
+- 严禁：在没有 script 上下文时调 generate_character_portrait / generate_scene_image / generate_video 等媒体工具（runtime 会自动暂停 + 弹 ask_user）
+
 【任务流程选择（重要）】
-- 完整短剧/纪录片/广告：走完整流程 parse_user_goal → create_plan → generate_script → extract_* → generate_*_image → generate_video
+- drama_short 完整短剧（与 canvas "起始节点" / PipelineNode 流水线一致），按下面顺序执行：
+    1) parse_user_goal  —— 把用户原话转结构化目标
+    2) create_plan      —— 生成执行计划
+    3) expand_story —— 对想法或简单梗概扩写出至少 1000 字的完整故事正文（已有长篇原文时跳过）
+    4) generate_script  —— 把完整故事正文或长篇原文拆成分场脚本
+    5) extract_characters —— 从脚本提取角色 → 列表
+    6) generate_character_portrait —— 给每个角色生成肖像图（遍历）
+    7) extract_props       —— 从脚本提取道具 → 列表
+    8) generate_prop_image  —— 给每个道具生成图（遍历）
+    9) extract_scenes       —— 从脚本提取场景 → 列表
+    10) generate_scene_image —— 给每个场景生成图（遍历）
+    11) extract_shots        —— 从脚本提取分镜 → 列表
+    12) generate_storyboard_image —— 给每个分镜生成图（遍历）
+    13) generate_video  —— 把分镜合成最终视频（遍历或批量）
+  强约束：必须**先**有 generate_script 的产物，**才**能调 extract_characters / extract_props / extract_scenes / extract_shots；
+  **先**有 extract_* 的列表，**才**能遍历调对应的 generate_*_image；**先**有分镜图，**才**能调 generate_video。
+  禁止乱序、禁止漏步、禁止用空 list 跳过。
+- drama_short 输入约定："起始节点" / canvas PipelineNode / 之前对话里的 long_text 是 source；user_goal 只有明确包含故事想法时才可作为 expand_story 输入，不能直接作为 generate_script 输入。
+  无 story idea/source 时必须先 ask_user 索取；idea 或简单梗概必须先 expand_story，禁止直接调 generate_script。
+- documentary：parse_user_goal → research → generate_script → generate_video
+- promotion / commercial / custom：根据 user_confirmed_deliverables 决定要走哪些步骤，不需要 generate_script 时跳过
 - 单一资产生成（用户只要角色图/场景图/道具图等）：不需要先生成脚本。直接 parse_user_goal → 调用对应的 generate_* 工具。
   例如用户说"给我画一个赛博朋克女主角角色图"，直接调 generate_character_portrait，character 参数填结构化字段。
 - 如果不确定用户要什么，先 ask_user 澄清，不要假设必须走脚本流程。
 
+【extract_* 工具调用规范（必读）】
+extract_characters / extract_props / extract_scenes / extract_shots 都接受 script 参数，**3 种传法都合法**：
+  a) dict：直接传 generate_script 返回的 dict（含 scenes/characters/props/bigShots/visualSignature + body + asset_id + save_error）— 工具会自动剥离 body/asset_id 等噪声字段
+  b) 字符串：传 markdown body（一般是 LLM 误把 body 当 script 传），工具会从 ctx.artifacts['script'] 兜底解析
+  c) 不传 script / 传 None：工具从 ctx.artifacts['script'] 取最新一个脚本
+
+工具**自动从 memory.artifacts['script'] 解析出结构化数据**（含 extra.script 完整 V3.0 字段），所以你不需要关心"怎么传对"。
+如果上一轮 generate_script 成功，extract_* 一定能拿到完整脚本。**禁止**：为了"保险"而把整个 generate_script 输出的 body 字符串塞进 script 参数 — 这会浪费 token。
+- 检查点保护：当【已生成资产】中已有 script，说明扩写和脚本生成已经完成。后续步骤失败时必须从失败的 extract 或媒体步骤继续，可重试、改用脚本内已有结构化数据或报告该步骤错误；不得重新索要原始素材，不得重新执行 expand_story / generate_script，也不得回到早期澄清。
+
 【工具参数规范（重要）】
-- generate_character_portrait 的 character 参数：只填 name / age / gender / appearance / personality 等结构化字段
-- 禁止把 thought（思考内容）塞进 character.description 或 character.prompt 字段
-- appearance 字段写具体的外貌描述（如"黑色短发，绿色眼睛，穿皮夹克"），不要写思考过程
-- generate_prop_image 的 prop 参数：只填 name / description（用途和外观），不要写思考内容
-- generate_scene_image 的 scene 参数：只填 name / time / weather / mood / description（环境细节）
+- generate_character_portrait 的 character 参数：必须填 V3.0 B.3 完整结构化字段（name / identity / ageRange / gender / era / faceAnchor{8 字段} / hairSystem{4 字段} / clothingLayers{6 字段} / specialState / voice）
+  字段名严格用 faceAnchor / hairSystem / clothingLayers，不要用 appearance / looks / outfit 等
+  faceAnchor 8 字段：faceShape / eyebrow / eyeType / noseType / lipType / boneStructure / skinTone / landmarks
+  hairSystem 4 字段：lengthAndStyle / color / headwear / bangsDirection
+  clothingLayers 6 字段：inner / outer / overlay / waist / lower / feet
+- 禁止把 thought（思考内容）塞进 character.description / character.prompt 等字段
+- generate_prop_image 的 prop 参数：必须填 V3.0 C.2 完整字段（name / category / plotFunction / era / size / structure / material / craftAndWear / decoration / functionalDetail / specialState / compositionType）
+  compositionType 取值 fourView | single — 关键道具 fourView，次要道具 single
+- generate_scene_image 的 scene 参数：必须填 V3.0 A.2 七层 + A.1.1 场景人物 + A.1.2 画质尾缀
+  七层字段：worldPositioning / geography / mainStructure / extendedSpace / naturalAndDistant / lightAndColor / techSpec
+  ambientCharacters（A.1.1 必填） + qualitySuffix（A.1.2 必填）
+- generate_storyboard_image 的 shot 参数：必须填 V1.6 7 列工业镜头卡
+  shotSize / cameraMovement / action / content / directionMarkers / sound 等
+  directionMarkers 必填 CineForge 【】 方向标
+- generate_video 的 shot 参数：与 generate_storyboard_image 一致 + duration_sec
+- expand_story 的 idea_text 参数：填用户明确提出的故事想法或梗概；输出必须是完整故事正文。
+- generate_script 的 long_text 参数：drama_short 必须填长篇故事正文/小说原文，**禁止**把 user_goal 或短梗概直接传入；已有完整宣传片文案时按任务类型处理
 
 【输出格式（严格 JSON）】
 {
@@ -118,7 +171,9 @@ MEDIA_PARALLEL_POLICY = """
 
 ASSET_INTELLIGENCE_POLICY = """
 Asset intelligence policy:
-- Before generating media, inspect every uploaded asset in the current project with inspect_asset.
+- Before generating media, inspect uploaded visual image/video assets with inspect_asset.
+- Never call inspect_asset for novel or script text assets. Use read_text_asset to read their body and structured content.
+- Generated text assets do not require visual inspection. Do not inspect every item merely because it appears in the asset list.
 - If an uploaded character, prop, or scene does not meet project standards, call prepare_character_asset before downstream generation.
 - Reuse existing usable assets instead of regenerating them. Pass logical reference_asset_ids to media tools; never invent provider URLs.
 - Prefer normalized derivatives over raw uploads while preserving the original source_asset_id relationship.
@@ -183,19 +238,24 @@ def build_react_prompt(
             parts.append("【已生成资产】\n" + "\n".join(artifacts_lines))
 
     # 最近步骤
-    if project_assets:
-        asset_lines = []
-        for asset in project_assets[:30]:
-            asset_lines.append(
-                "- {id}: name={name}; origin={origin}; kind={kind}; inspection={inspection}".format(
-                    id=asset.get("id", "?"),
-                    name=asset.get("name") or asset.get("title") or "(unnamed)",
-                    origin=asset.get("origin", "generated"),
-                    kind=asset.get("asset_kind") or asset.get("kind") or "unknown",
-                    inspection=asset.get("inspection_status", "pending"),
-                )
+    asset_lines = []
+    for asset in (project_assets or [])[:30]:
+        asset_lines.append(
+            "- {id}: name={name}; origin={origin}; kind={kind}; inspection={inspection}".format(
+                id=asset.get("id", "?"),
+                name=asset.get("name") or asset.get("title") or "(unnamed)",
+                origin=asset.get("origin", "generated"),
+                kind=asset.get("asset_kind") or asset.get("kind") or "unknown",
+                inspection=asset.get("inspection_status", "pending"),
             )
+        )
+    if asset_lines:
         parts.append("[CURRENT PROJECT ASSETS]\n" + "\n".join(asset_lines))
+    else:
+        parts.append(
+            "[CURRENT PROJECT ASSETS]\n"
+            "- This project has no assets. Do not infer or reuse assets from another project."
+        )
 
     if recent_steps:
         step_lines = []

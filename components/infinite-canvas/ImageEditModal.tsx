@@ -111,7 +111,12 @@ export const ImageEditModal: React.FC<ImageEditModalProps> = ({
   if (!open) return null;
 
   return (
-    <div className="image-edit-modal open" onClick={onClose}>
+    <div
+      className="image-edit-modal open"
+      onClick={onClose}
+      onWheel={(e) => e.stopPropagation()}
+      onTouchMove={(e) => e.stopPropagation()}
+    >
       <div className="image-edit-panel" onClick={(e) => e.stopPropagation()}>
         <div className="image-edit-head">
           <div className="image-edit-title">{t('canvasImgEditTitle')}</div>

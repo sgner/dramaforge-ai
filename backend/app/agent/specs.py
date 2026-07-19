@@ -196,7 +196,7 @@ def _build_optimize_prompt_spec() -> str:
 
 
 def _build_image_character_spec() -> str:
-    """全资产大师：B.4 概念表布局 + B.5 组织顺序 + A.1.2 画质尾缀。"""
+    """角色设计表规范，并覆盖历史文档中的旧版布局描述。"""
     content = _load_file("asset_master")
     if not content:
         return ""
@@ -205,11 +205,16 @@ def _build_image_character_spec() -> str:
         _extract_between(content, r'^B\.5\s', _ASSET_END),
         _extract_between(content, r'^A\.1\.2\s', _ASSET_END),
     ]
+    parts.append(
+        "运行时硬约束：角色资产必须是无场景背景的角色设计表，不得生成普通肖像。"
+        "固定为左侧三分之一胸像正面特写，右侧三分之二同一角色横向排列的正面、侧面、背面三个全身视图；"
+        "服装、发型、配饰和人物身份保持一致，浅暖灰 F0EDE8 背景，不得出现文字、编号、标签或注释。"
+    )
     return "\n\n".join(p for p in parts if p)
 
 
 def _build_image_scene_spec() -> str:
-    """全资产大师：A.1.2 画质尾缀 + A.2 七层递进字段清单 + A.3 材质标准。"""
+    """场景环境锚点规范，并覆盖历史文档中的人物场景示例。"""
     content = _load_file("asset_master")
     if not content:
         return ""
@@ -218,6 +223,11 @@ def _build_image_scene_spec() -> str:
         _extract_between(content, r'^A\.2\s', _ASSET_END),
         _extract_between(content, r'^A\.3\s', _ASSET_END),
     ]
+    parts.append(
+        "运行时硬约束：场景资产必须是可复用的环境参考图，只表现空间、建筑、陈设、光线和材质；"
+        "不得出现已有角色、人物主体或前景人物。角色只能作为后续分镜或视频生成的独立参考资产输入，"
+        "除非用户明确要求带人物的氛围场景。"
+    )
     return "\n\n".join(p for p in parts if p)
 
 
@@ -235,11 +245,16 @@ def _build_image_prop_spec() -> str:
 
 
 def _build_image_storyboard_spec() -> str:
-    """视频提示词模板 §4 故事板 prompt 规范。"""
+    """六宫格故事板 prompt 规范，并覆盖历史单帧示例。"""
     content = _load_file("video_prompt")
     if not content:
         return ""
-    return _extract_between(content, r'^#\s§4\s', r'^#\s§')
+    return (
+        _extract_between(content, r'^#\s§4\s', r'^#\s§')
+        + "\n\n运行时硬约束：分镜图片必须是一张 2×3 六宫格故事板，第一格为纯黑缓冲格，"
+        "第二至第六格为同一镜头的连续静帧；必须继承视觉签名，并引用对应的纯场景、角色设计表和道具资产；"
+        "不得退化为单图，不得增加额外格子，不得出现 UI、可读文字、编号或注释。"
+    )
 
 
 # ========================

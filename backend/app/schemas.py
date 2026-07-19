@@ -1,5 +1,5 @@
 """Pydantic schema"""
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from typing import Optional, Dict, Any, List, Literal
 from datetime import datetime
 
@@ -102,9 +102,101 @@ class AssetOut(BaseModel):
     visual_identity: Dict[str, Any] = Field(default_factory=dict)
     reference_capabilities: Dict[str, Any] = Field(default_factory=dict)
     usage_count: int = 0
+    # 文本资产正文（小说/脚本）— 来自 extra.body
+    body: Optional[str] = None
+    # 文本资产统计：words / scenes / chapters
+    text_stats: Dict[str, Any] = Field(default_factory=dict)
+    # 任意扩展字段
+    extra: Dict[str, Any] = Field(default_factory=dict)
+    # 生成相关
+    failed: bool = False
+    error: Optional[str] = None
+    generating: bool = False
+    provider_id: Optional[str] = None
+    provider_name: Optional[str] = None
+    model_id: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
     class Config:
         from_attributes = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_datetime_fields(cls, data: Any) -> Any:
+        """ORM Asset 模型上 created_at / updated_at 是 datetime，而 AssetOut 字段
+        是 str（统一 ISO 8601 给前端）。Pydantic 默认会拒绝 datetime 写入 str 字段，
+        触发 `Input should be a valid string`。
+
+        关键修复：在 before 阶段把 datetime 转 isoformat 字符串，避免所有
+        `AssetOut.model_validate(orm_asset)` 调用都报 422。
+
+        注意：from_attributes=True 时 data 可能是 ORM 对象本身（不是 dict），
+        此时 Pydantic 会自己负责抓取字段，但 datetime 仍会进入验证。所以我们
+        也需要把对象里这两个 datetime 属性提前转字符串。
+        """
+        if isinstance(data, dict):
+            new_data = dict(data)
+            for field in ("created_at", "updated_at"):
+                value = new_data.get(field)
+                if value is None or isinstance(value, str):
+                    continue
+                if hasattr(value, "isoformat"):
+                    new_data[field] = value.isoformat()
+            return new_data
+        # ORM 对象：直接覆盖 datetime 属性为字符串
+        for field in ("created_at", "updated_at"):
+            value = getattr(data, field, None)
+            if value is None or isinstance(value, str):
+                continue
+            if hasattr(value, "isoformat"):
+                try:
+                    setattr(data, field, value.isoformat())
+                except (AttributeError, TypeError):
+                    pass
+        return data
+
+    @classmethod
+    def from_asset_model(cls, a) -> "AssetOut":
+        """从 ORM Asset 模型构造。
+
+        把 extra 字典里的 body / text_stats 提升到顶层字段，方便前端直接使用。
+        """
+        extra = a.extra or {}
+        return cls(
+            id=a.id,
+            project_id=a.project_id,
+            kind=a.kind or "image",
+            asset_kind=a.asset_kind,
+            title=a.title or "",
+            name=a.name or "",
+            url=a.url,
+            prompt=a.prompt,
+            origin=a.origin or "generated",
+            source_asset_id=a.source_asset_id,
+            status=a.status or "uploaded",
+            version=a.version or 1,
+            derived_from=a.derived_from or [],
+            reference_role=a.reference_role,
+            prompt_source=a.prompt_source,
+            prompt_optimized=a.prompt_optimized,
+            inspection_status=a.inspection_status or "pending",
+            inspection=a.inspection or {},
+            visual_identity=a.visual_identity or {},
+            reference_capabilities=a.reference_capabilities or {},
+            usage_count=a.usage_count or 0,
+            body=extra.get("body") or a.url,  # 兼容：旧数据 url 即 body
+            text_stats=extra.get("text_stats") or {},
+            extra=extra,
+            failed=bool(a.failed),
+            error=a.error,
+            generating=bool(a.generating),
+            provider_id=a.provider_id,
+            provider_name=a.provider_name,
+            model_id=a.model_id,
+            created_at=a.created_at.isoformat() if getattr(a, "created_at", None) else None,
+            updated_at=a.updated_at.isoformat() if getattr(a, "updated_at", None) else None,
+        )
 
 
 # ========================
@@ -113,6 +205,7 @@ class AssetOut(BaseModel):
 
 class AgentTaskCreate(BaseModel):
     user_goal: str
+    language: Literal["zh", "en", "ja", "ko"] = "en"
     project_id: Optional[str] = None
     max_steps: int = 30
     skip_confirm: bool = False
@@ -235,6 +328,38 @@ class AssetCreate(BaseModel):
     visual_identity: Dict[str, Any] = Field(default_factory=dict)
     reference_capabilities: Dict[str, Any] = Field(default_factory=dict)
     usage_count: int = 0
+    # 文本资产正文（novel/script 用）— 持久化到 extra.body
+    # exclude=True 让 model_dump() 不输出这两个字段（已被 _move_text_fields_to_extra
+    # 移到 extra），避免 `Asset(**payload.model_dump())` 报
+    # `TypeError: 'body' is an invalid keyword argument for Asset`。
+    body: Optional[str] = Field(default=None, exclude=True)
+    # 文本统计：words / scenes / chapters
+    text_stats: Optional[Dict[str, Any]] = Field(default=None, exclude=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _move_text_fields_to_extra(cls, data: Any) -> Any:
+        """Asset ORM 没有 body / text_stats 列，传给 ORM 构造函数会报
+        `TypeError: 'body' is an invalid keyword argument for Asset`。
+
+        关键修复：构造前把 body / text_stats 复制到 extra，并从顶层移除这两个
+        字段，避免 model_dump() 后再传给 Asset(**) 时仍然包含它们。
+        AssetOut.from_asset_model 会从 extra.body / extra.text_stats 提回顶层。
+        """
+        if not isinstance(data, dict):
+            return data
+        # 不修改调用方传入的 dict
+        new_data = dict(data)
+        extra = dict(new_data.get("extra") or {})
+        body = new_data.pop("body", None)
+        if body is not None and "body" not in extra:
+            extra["body"] = body
+        text_stats = new_data.pop("text_stats", None)
+        if text_stats is not None and "text_stats" not in extra:
+            extra["text_stats"] = text_stats
+        if extra:
+            new_data["extra"] = extra
+        return new_data
 
 
 class AssetUpdate(BaseModel):
@@ -255,6 +380,9 @@ class AssetUpdate(BaseModel):
     reference_role: Optional[str] = None
     prompt_source: Optional[str] = None
     prompt_optimized: Optional[str] = None
+    # 文本资产
+    body: Optional[str] = None
+    text_stats: Optional[Dict[str, Any]] = None
     inspection_status: Optional[str] = None
     inspection: Optional[Dict[str, Any]] = None
     visual_identity: Optional[Dict[str, Any]] = None

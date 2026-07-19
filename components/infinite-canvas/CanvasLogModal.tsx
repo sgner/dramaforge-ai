@@ -24,7 +24,12 @@ export const CanvasLogModal: React.FC<CanvasLogModalProps> = ({
   if (!open) return null;
 
   return (
-    <div className="log-modal open" onClick={onClose}>
+    <div
+      className="log-modal open"
+      onClick={onClose}
+      onWheel={(e) => e.stopPropagation()}
+      onTouchMove={(e) => e.stopPropagation()}
+    >
       <div className="log-panel" onClick={(e) => e.stopPropagation()}>
         <div className="log-head">
           <div className="log-title">{t('canvasLogTitle')}</div>

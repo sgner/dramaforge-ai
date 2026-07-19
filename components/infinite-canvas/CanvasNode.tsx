@@ -6,6 +6,7 @@ import { estimatedNodeRect } from './engine';
 import { useI18n } from '../../i18n';
 import { getProviderForStep, getModelForStep, Provider as AIProvider } from '../../types';
 import { continueStory } from '../../services/llmClient';
+import { toast } from '../../utils/toast';
 
 /* ===== 参考项目智能画布节点类型映射 =====
  * 参考项目只有三种节点类型：smart-image, smart-prompt, smart-loop
@@ -1188,6 +1189,8 @@ const NovelNodeBody: React.FC<{ node: CanvasNode }> = React.memo(({ node }) => {
   const { t } = useI18n();
   const updateNode = useCanvasStore((s) => s.updateNode);
   const apiConfig = useCanvasStore((s) => s.apiConfig);
+  const taskAssets = useCanvasStore((s) => s.taskAssets);
+  const openTextReader = useCanvasStore((s) => s.openTextReader);
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState((node.text as string) || '');
   const [aiRunning, setAiRunning] = useState(false);
@@ -1195,8 +1198,29 @@ const NovelNodeBody: React.FC<{ node: CanvasNode }> = React.memo(({ node }) => {
   const abortRef = useRef<AbortController | null>(null);
 
   const text = (node.text as string) || '';
-  const charCount = text.length;
+
+  // 关联的资产（如果有 _assetId，优先从资产读取 body）
+  const linkedAssetId = (node._assetId as string) || '';
+  const linkedAsset = linkedAssetId ? taskAssets.find(a => a.id === linkedAssetId) : undefined;
+  const body = linkedAsset?.body ?? text;
+  const charCount = body.length;
   const isGenerating = (node._assetProviderName as string) || (node._assetModelId as string);
+
+  const handleOpenReader = useCallback(() => {
+    if (linkedAsset) {
+      openTextReader(linkedAsset);
+    } else if (text) {
+      // 旧数据没有资产关联：用 text 临时构造虚拟资产
+      openTextReader({
+        id: node.id,
+        kind: 'novel',
+        title: (node.title as string) || '',
+        name: (node.title as string) || '',
+        url: '',
+        body: text,
+      });
+    }
+  }, [linkedAsset, text, node.id, node.title, openTextReader]);
 
   const handleEdit = useCallback(() => {
     setDraft(text);
@@ -1221,7 +1245,7 @@ const NovelNodeBody: React.FC<{ node: CanvasNode }> = React.memo(({ node }) => {
       const provider = getProviderForStep(apiConfig, 'preprocessing');
       const model = getModelForStep(apiConfig, 'preprocessing');
       if (!provider || !model) {
-        alert(t('canvasNovelNoProvider'));
+        toast.warning(t('canvasNovelNoProvider'));
         return;
       }
 
@@ -1305,8 +1329,15 @@ const NovelNodeBody: React.FC<{ node: CanvasNode }> = React.memo(({ node }) => {
           style={{ flex: 1, minHeight: 0 }}
         />
       ) : (
-        <div className="novel-node-content">
-          {text || (
+        <div
+          className="novel-node-content"
+          onClick={(e) => {
+            e.stopPropagation();
+            handleOpenReader();
+          }}
+          title="点击打开阅读器（拖动节点可移动）"
+        >
+          {body || (
             <div className="novel-node-empty">
               {t('canvasNovelEmpty')}
             </div>
@@ -1337,6 +1368,16 @@ const NovelNodeBody: React.FC<{ node: CanvasNode }> = React.memo(({ node }) => {
           </>
         ) : (
           <>
+            <button
+              className="novel-node-btn novel-node-btn-primary"
+              type="button"
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={handleOpenReader}
+              disabled={aiRunning}
+              title="打开阅读器查看/编辑完整正文"
+            >
+              <BookOpen size={12} /> 阅读
+            </button>
             <button
               className="novel-node-btn"
               type="button"
@@ -1406,15 +1447,59 @@ const NovelNodeBody: React.FC<{ node: CanvasNode }> = React.memo(({ node }) => {
 NovelNodeBody.displayName = 'NovelNodeBody';
 
 /* ===== Script Node (脚本分析渲染器 — JSON 预览) ===== */
+export const formatVisualSignatureColors = (colors: unknown[]): string => (
+  colors
+    .map((color) => {
+      if (typeof color === 'string') return color.trim();
+      if (!color || typeof color !== 'object') return '';
+      const item = color as Record<string, unknown>;
+      const entity = String(item.entity ?? item.name ?? '').trim();
+      const hue = String(item.hue ?? item.color ?? '').trim();
+      return entity && hue ? `${entity}: ${hue}` : entity || hue;
+    })
+    .filter(Boolean)
+    .join(' / ')
+);
+
 const ScriptNodeBody: React.FC<{ node: CanvasNode }> = React.memo(({ node }) => {
   const { t } = useI18n();
+  const taskAssets = useCanvasStore((s) => s.taskAssets);
+  const openTextReader = useCanvasStore((s) => s.openTextReader);
   const [activeTab, setActiveTab] = useState<'overview' | 'characters' | 'props' | 'scenes' | 'shots' | 'raw'>('overview');
 
+  // 关联的资产（如果有 _assetId，优先从资产读取 body；否则回退到 node.text）
+  const linkedAssetId = (node._assetId as string) || '';
+  const linkedAsset = linkedAssetId ? taskAssets.find(a => a.id === linkedAssetId) : undefined;
+  const text = (linkedAsset?.body ?? (node.text as string)) || '';
+  const charCount = text.length;
+
+  const handleOpenReader = useCallback(() => {
+    if (linkedAsset) {
+      openTextReader(linkedAsset);
+    } else if (text) {
+      openTextReader({
+        id: node.id,
+        kind: 'script',
+        title: (node.title as string) || '',
+        name: (node.title as string) || '',
+        url: '',
+        body: text,
+      });
+    }
+  }, [linkedAsset, text, node.id, node.title, openTextReader]);
+
   // 解析 JSON 数据
+  // 关键：优先从后端写入的 extra.script 读综合 JSON（角色/道具/场景/分镜/视觉签名），
+  // 失败时回退到 text（markdown）的 JSON.parse 兼容老数据。
+  // 之前 _build_script_asset_payload 只在 extra 存 markdown body，ScriptNodeBody 拿到
+  // markdown → JSON.parse 失败 → 角色/道具/场景/分镜 tabs 全空。
   const parseScript = (): any => {
-    const raw = (node.text as string) || '';
+    const extraScript = linkedAsset?.extra?.script;
+    if (extraScript && typeof extraScript === 'object') {
+      return extraScript;
+    }
     try {
-      return JSON.parse(raw);
+      return JSON.parse(text);
     } catch {
       return null;
     }
@@ -1451,13 +1536,29 @@ const ScriptNodeBody: React.FC<{ node: CanvasNode }> = React.memo(({ node }) => 
     shots: shots.length,
   };
 
+  const handleBodyClick = useCallback((e: React.MouseEvent) => {
+    if (!text) return;
+    const target = e.target as HTMLElement;
+    if (target.closest('button, a, input, textarea, select, .script-node-tab, .script-node-list-item, .script-node-section, .script-node-stat, pre')) return;
+    e.stopPropagation();
+    handleOpenReader();
+  }, [text, handleOpenReader]);
+
   return (
-    <div className="script-node-body">
+    <div
+      className="script-node-body"
+      onClick={handleBodyClick}
+      title={text ? t('canvasScriptClickToOpenReader') || '点击打开阅读器' : ''}
+      style={text ? { cursor: 'pointer' } : undefined}
+    >
       {/* 标题栏 */}
       <div className="script-node-head">
         <div className="script-node-title">
           <FileText size={14} />
           <span>{node.title || t('canvasPipelineAssetScript')}</span>
+        </div>
+        <div className="script-node-count">
+          {t('canvasPanelAssetChars').replace('{0}', String(charCount))}
         </div>
       </div>
 
@@ -1550,7 +1651,7 @@ const ScriptNodeBody: React.FC<{ node: CanvasNode }> = React.memo(({ node }) => 
                   {Array.isArray(visualSignature.colorIds) && visualSignature.colorIds.length > 0 && (
                     <div className="script-node-vsig-row">
                       <span className="script-node-vsig-label">{t('canvasScriptVsigColorIds')}</span>
-                      <span>{visualSignature.colorIds.map((c: any) => `${c.entity}: ${c.hue}`).join(' / ')}</span>
+                      <span>{formatVisualSignatureColors(visualSignature.colorIds)}</span>
                     </div>
                   )}
                   {visualSignature.coreTheme && (

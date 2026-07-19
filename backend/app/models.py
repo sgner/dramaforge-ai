@@ -49,6 +49,7 @@ class Project(Base):
     nodes = relationship("Node", back_populates="project", cascade="all, delete-orphan")
     connections = relationship("Connection", back_populates="project", cascade="all, delete-orphan")
     assets = relationship("Asset", back_populates="project", cascade="all, delete-orphan")
+    agent_tasks = relationship("AgentTask", back_populates="project", cascade="all, delete-orphan")
 
 
 class Node(Base):
@@ -133,7 +134,7 @@ class AgentTask(Base):
 
     id = Column(String, primary_key=True)
     # 索引：项目页常按 project_id 查 agent 任务
-    project_id = Column(String, ForeignKey("projects.id"), nullable=True, index=True)
+    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"), nullable=True, index=True)
     user_goal = Column(Text, nullable=True)
     status = Column(String, default="pending")  # pending | running | paused | done | failed
     plan = Column(JSON, default=list)            # 计划步骤
@@ -156,6 +157,7 @@ class AgentTask(Base):
     updated_at = Column(DateTime, default=_now, onupdate=_now)
 
     steps = relationship("AgentStep", back_populates="task", cascade="all, delete-orphan")
+    project = relationship("Project", back_populates="agent_tasks")
 
     @property
     def task_profile(self) -> dict | None:

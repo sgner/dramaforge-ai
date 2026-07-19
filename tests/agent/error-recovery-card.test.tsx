@@ -44,6 +44,23 @@ describe('<ErrorRecoveryCard />', () => {
     expect(screen.getByTestId('erc-error')).toHaveTextContent('network timeout');
   });
 
+  it('renders as an inline pet interaction and keeps the recovery controls interactive', () => {
+    useAgentStore.getState().applyEvent({
+      type: 'tool_error',
+      payload: { step_id: '1', tool: 'x', error: 'e', params: {}, fallback_model_id: null, available_models: [] },
+      timestamp: 1,
+    });
+    render(<ErrorRecoveryCard />);
+    const overlay = screen.getByTestId('error-recovery-card') as HTMLElement;
+    expect(overlay.getAttribute('role')).toBe('region');
+    expect(overlay.style.position).toBe('relative');
+    expect(overlay.style.width).toBe('100%');
+    expect(overlay.style.pointerEvents).toBe('auto');
+    expect(screen.getByDisplayValue('retry')).toHaveClass('agent-error-recovery-radio');
+    fireEvent.click(screen.getByDisplayValue('skip'));
+    expect((screen.getByDisplayValue('skip') as HTMLInputElement).checked).toBe(true);
+  });
+
   it('defaults to retry action', () => {
     useAgentStore.getState().applyEvent({
       type: 'tool_error',
@@ -97,6 +114,7 @@ describe('<ErrorRecoveryCard />', () => {
         new_model_id: 'dall-e-2',
       });
       expect(api.resumeAgent).toHaveBeenCalledWith('t-1');
+      expect(screen.queryByTestId('error-recovery-card')).toBeNull();
     });
   });
 

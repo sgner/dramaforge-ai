@@ -34,6 +34,12 @@ def _asset_dict(row: Any) -> dict:
 def begin_media_asset(db: Any, *, project_id: str | None, kind: str, asset_kind: str | None, name: str, prompt: str, provider_id: str | None = None, provider_name: str | None = None, model_id: str | None = None, extra: dict | None = None) -> dict:
     from ..models import Asset
 
+    # 关键：去重条件必须同时考虑 FAILED 和已成功的资产。
+    # 历史 bug：之前只对 failed.is_(True) 的资产做去重，导致 agent 在 plan 重跑、
+    # retry、error recovery 等场景下重复调用同一 generate_* 工具时，第一次成功的
+    # 资产不会被复用，而是被创建一个新的、不同 id 的资产 → 画布/资产库出现重复条目。
+    # 修复：去重时同时匹配 status='ready'/'processing' 的资产，返回已有记录（idempotent）。
+    # 用户若想强制创建新版本，应通过传不同的 name / source_asset_id / 不同的 prompt 区分。
     query = db.query(Asset).filter(
         Asset.project_id == project_id,
         Asset.kind == kind,
@@ -41,28 +47,62 @@ def begin_media_asset(db: Any, *, project_id: str | None, kind: str, asset_kind:
         Asset.name == (name or ""),
         Asset.prompt == prompt,
         Asset.source_asset_id == (extra or {}).get("source_asset_id"),
+        Asset.failed.is_(False),
+        Asset.status.in_(["ready", "processing", "uploaded"]),
+    )
+    existing_successful = query.order_by(Asset.created_at.desc()).first()
+    if existing_successful is not None:
+        # 已存在同名/同 prompt 的成功资产 → 直接复用，不创建新记录。
+        # 注意：这里不更新已有资产的 url/状态，调用方在生成完成后会通过
+        # finish_media_asset 写入 url。如果用户希望"重新生成"，finish_media_asset
+        # 会覆盖 url，相当于"regenerate"语义。
+        if provider_id is not None and not existing_successful.provider_id:
+            existing_successful.provider_id = provider_id
+        if provider_name is not None and not existing_successful.provider_name:
+            existing_successful.provider_name = provider_name
+        if model_id is not None and not existing_successful.model_id:
+            existing_successful.model_id = model_id
+        db.commit()
+        db.refresh(existing_successful)
+        return _asset_dict(existing_successful)
+
+    # 第二步：尝试恢复 FAILED 的同名同 prompt 资产（retry 语义）。
+    retry_query = db.query(Asset).filter(
+        Asset.project_id == project_id,
+        Asset.kind == kind,
+        Asset.asset_kind == asset_kind,
+        Asset.name == (name or ""),
+        Asset.prompt == prompt,
+        Asset.source_asset_id == (extra or {}).get("source_asset_id"),
+        Asset.failed.is_(True),
     )
     if not (extra or {}).get("batch"):
-        query = query.filter(Asset.failed.is_(True))
-    existing = query.order_by(Asset.created_at.desc()).first()
-    if existing:
-        existing.generating = True
-        existing.failed = False
-        existing.error = None
-        existing.url = None
-        existing.status = "processing"
-        if provider_id is not None:
-            existing.provider_id = provider_id
-        if provider_name is not None:
-            existing.provider_name = provider_name
-        if model_id is not None:
-            existing.model_id = model_id
-        if extra:
-            existing.extra = extra
-        db.commit()
-        db.refresh(existing)
-        return _asset_dict(existing)
+        # 非 batch 场景：把 FAILED 资产重置为 processing（保持同一 id 便于 UI 关联）
+        existing = retry_query.order_by(Asset.created_at.desc()).first()
+        if existing:
+            existing.generating = True
+            existing.failed = False
+            existing.error = None
+            existing.url = None
+            existing.status = "processing"
+            if provider_id is not None:
+                existing.provider_id = provider_id
+            if provider_name is not None:
+                existing.provider_name = provider_name
+            if model_id is not None:
+                existing.model_id = model_id
+            if extra:
+                existing.extra = extra
+            db.commit()
+            db.refresh(existing)
+            return _asset_dict(existing)
+    else:
+        # batch 场景：FAILED 资产也走"更新已有记录"分支
+        existing = retry_query.order_by(Asset.created_at.desc()).first()
+        if existing:
+            return _asset_dict(existing)
 
+    # 第三步：创建新资产（无可复用记录时）
     row = Asset(
         id=f"agent-{uuid.uuid4().hex[:16]}",
         project_id=project_id,
@@ -100,11 +140,21 @@ def finish_media_asset(
     prompt_source: str | None = None,
     prompt_optimized: str | None = None,
     extra: dict | None = None,
+    dev_fallback: bool = False,
 ) -> dict:
     from ..models import Asset
 
     row = db.query(Asset).filter(Asset.id == asset_id).one()
     row.generating = False
+    if dev_fallback:
+        # dev fallback（上游无视频端点时返回的占位 URL）不是真实交付物：
+        # 标记 failed + status="warning"，使 compute_assets_summary / finish_task
+        # 完成度校验不把它计入"已交付"，同时保留 URL 供本地开发调试。
+        error = error or (
+            "dev fallback: upstream provider has no video endpoint; "
+            "returned placeholder URL (not a real deliverable)"
+        )
+        extra = {**(extra or {}), "dev_fallback": True}
     row.failed = bool(error)
     row.error = error
     if url is not None:
@@ -117,7 +167,7 @@ def finish_media_asset(
         row.prompt_optimized = prompt_optimized
     if extra:
         row.extra = {**(row.extra or {}), **extra}
-    row.status = "failed" if error else "ready"
+    row.status = "warning" if dev_fallback else ("failed" if error else "ready")
     db.commit()
     db.refresh(row)
     return _asset_dict(row)

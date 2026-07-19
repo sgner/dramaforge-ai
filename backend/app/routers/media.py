@@ -52,6 +52,9 @@ class GenerateOut(BaseModel):
     provider_id: str
     model: str
     raw: dict = Field(default_factory=dict)
+    # 上游无端点时返回的 dev fallback 占位结果显式标记，
+    # 调用方（agent / 前端）不得把它当作真实交付物。
+    dev_fallback: bool = False
 
 
 # ============ Helpers ============
@@ -140,9 +143,21 @@ async def _openai_video(provider: dict, body: VideoGenerateIn) -> GenerateOut:
         except httpx.HTTPError as e:
             raise HTTPException(status_code=502, detail=f"video API network error: {e}")
     if r.status_code == 404:
-        raise HTTPException(
-            status_code=502,
-            detail=f"video provider '{provider['provider_id']}' model '{body.model}' endpoint not found: {url}",
+        # 上游供应商还没实现 /v1/videos/generations（绝大多数 dev 阶段供应商都这样）。
+        # 返回 dev fallback URL 让前端能继续播放/预览，不阻塞工作流。
+        # 关键：必须显式标记 dev_fallback=True（顶层字段 + raw），调用方
+        # （agent finish_media_asset）会把对应资产标为 warning/failed 而不是 ready，
+        # 避免"假成功"资产通过 finish_task 的交付物校验。
+        logger.warning(
+            "video provider '%s' model '%s' endpoint not found (%s); using dev fallback",
+            provider["provider_id"], body.model, url,
+        )
+        return GenerateOut(
+            url="/files/dev-fallback.mp4",
+            provider_id=provider["provider_id"],
+            model=body.model,
+            raw={"fallback": True, "dev_fallback": True, "reason": "upstream_404", "endpoint": url},
+            dev_fallback=True,
         )
     if r.status_code >= 400:
         raise HTTPException(

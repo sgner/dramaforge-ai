@@ -1,4 +1,5 @@
 import uuid
+import asyncio
 
 import pytest
 from fastapi.testclient import TestClient
@@ -6,7 +7,7 @@ from fastapi.testclient import TestClient
 from app import app
 from app.agent.events import event_bus, AgentEvent, EventType
 from app.database import SessionLocal
-from app.models import AgentTask
+from app.models import AgentTask, AgentStep, Project
 
 
 @pytest.fixture
@@ -27,7 +28,7 @@ def db_session():
             from app.models import AgentTask, AgentStep
             from app.database import SessionLocal as _SL
             with _SL() as cleanup_db:
-                for tid in ("t-rec-1", "t-rec-2", "t-rec-3", "t-stop", "t-retry", "t-retry-stale", "t-resume-running", "t-rollback-1", "t-rollback-2", "t-continue-1", "t-continue-bad"):
+                for tid in ("t-rec-1", "t-rec-2", "t-rec-3", "t-stop", "t-retry", "t-retry-stale", "t-resume-running", "t-rollback-1", "t-rollback-2", "t-continue-1", "t-continue-bad", "t-zombie-startup"):
                     cleanup_db.query(AgentStep).filter_by(task_id=tid).delete()
                     cleanup_db.query(AgentTask).filter_by(id=tid).delete()
                 cleanup_db.commit()
@@ -498,3 +499,44 @@ def test_continue_conversation_endpoint_sets_pending_and_schedules(client, db_se
     db_session.refresh(task)
     assert task.status == "paused"
     assert task.pending_response["continue_message"] == "再生成一个反派角色"
+
+
+def test_startup_zombie_tasks_are_paused_for_explicit_resume(db_session, monkeypatch):
+    """A process restart must not silently rerun an old running task."""
+    from app.routers import agent as agent_router
+
+    task_id = f"t-zombie-startup-{uuid.uuid4().hex[:8]}"
+    task = AgentTask(id=task_id, user_goal="生成资产", status="running")
+    db_session.add(task)
+    db_session.commit()
+    scheduled = []
+    monkeypatch.setattr(
+        agent_router,
+        "_schedule_runtime",
+        lambda task_id, coroutine: scheduled.append(task_id),
+    )
+
+    recovered = asyncio.run(agent_router.recover_zombie_agent_tasks())
+
+    db_session.expire(task)
+    db_session.refresh(task)
+    assert task_id in recovered
+    assert scheduled == []
+    assert task.status == "paused"
+    assert task.pending_response["type"] == "service_interrupted"
+
+
+def test_delete_project_removes_agent_tasks_and_steps(client, db_session):
+    project_id = f"project-task-delete-{uuid.uuid4().hex[:8]}"
+    task_id = f"task-delete-{uuid.uuid4().hex[:8]}"
+    db_session.add(Project(id=project_id, name="delete task test"))
+    db_session.add(AgentTask(id=task_id, project_id=project_id, user_goal="test", status="paused"))
+    db_session.add(AgentStep(id=f"step-{uuid.uuid4().hex[:8]}", task_id=task_id, step_number=1))
+    db_session.commit()
+
+    response = client.delete(f"/api/projects/{project_id}")
+
+    assert response.status_code == 200
+    assert db_session.query(Project).filter_by(id=project_id).first() is None
+    assert db_session.query(AgentTask).filter_by(id=task_id).first() is None
+    assert db_session.query(AgentStep).filter_by(task_id=task_id).count() == 0

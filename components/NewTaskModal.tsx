@@ -96,26 +96,26 @@ export const NewTaskModal = ({ isOpen, onClose, onCreate, hasApiKey, onOpenSetti
             <div className="grid grid-cols-2 gap-3">
               <button
                 onClick={() => setSourceType('idea')}
-                className={`p-4 rounded-xl border text-left transition-all duration-300 ${
+                className={`p-4 rounded-xl text-left transition-all duration-300 ${
                   sourceType === 'idea'
-                    ? 'bg-brand-600/10 border-brand-500/30'
-                    : 'bg-black/[0.02] border-[#e8edf3] hover:border-black/[0.12]'
+                    ? 'bg-black/[0.04] border-[1.5px] border-slate-900'
+                    : 'bg-black/[0.02] border border-[#e8edf3] hover:border-black/[0.12]'
                 }`}
               >
-                <Lightbulb className={`w-5 h-5 mb-2 transition-colors ${sourceType === 'idea' ? 'text-brand-400' : 'text-[#94a3b8]'}`} />
-                <div className={`text-sm font-semibold transition-colors ${sourceType === 'idea' ? 'text-brand-300' : 'text-[#64748b]'}`}>{t('fromIdea')}</div>
+                <Lightbulb className={`w-5 h-5 mb-2 transition-colors ${sourceType === 'idea' ? 'text-slate-900' : 'text-[#94a3b8]'}`} />
+                <div className={`text-sm font-semibold transition-colors ${sourceType === 'idea' ? 'text-slate-900' : 'text-[#64748b]'}`}>{t('fromIdea')}</div>
                 <div className="text-[10px] text-[#94a3b8] mt-1">{t('ideaDesc') || 'Start from a creative concept'}</div>
               </button>
               <button
                 onClick={() => setSourceType('novel')}
-                className={`p-4 rounded-xl border text-left transition-all duration-300 ${
+                className={`p-4 rounded-xl text-left transition-all duration-300 ${
                   sourceType === 'novel'
-                    ? 'bg-accent-600/10 border-accent-500/30'
-                    : 'bg-black/[0.02] border-[#e8edf3] hover:border-black/[0.12]'
+                    ? 'bg-black/[0.04] border-[1.5px] border-slate-900'
+                    : 'bg-black/[0.02] border border-[#e8edf3] hover:border-black/[0.12]'
                 }`}
               >
-                <BookOpen className={`w-5 h-5 mb-2 transition-colors ${sourceType === 'novel' ? 'text-accent-400' : 'text-[#94a3b8]'}`} />
-                <div className={`text-sm font-semibold transition-colors ${sourceType === 'novel' ? 'text-accent-300' : 'text-[#64748b]'}`}>{t('fromNovel')}</div>
+                <BookOpen className={`w-5 h-5 mb-2 transition-colors ${sourceType === 'novel' ? 'text-slate-900' : 'text-[#94a3b8]'}`} />
+                <div className={`text-sm font-semibold transition-colors ${sourceType === 'novel' ? 'text-slate-900' : 'text-[#64748b]'}`}>{t('fromNovel')}</div>
                 <div className="text-[10px] text-[#94a3b8] mt-1">{t('novelDesc') || 'Adapt from existing text'}</div>
               </button>
             </div>

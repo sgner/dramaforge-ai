@@ -31,8 +31,20 @@ const MAX_BACKOFF_MS = 30000;
 // 之前 45s 在用户回答 ask_user 期间仍可能触发误判；60s（4 倍心跳）更稳。
 const HEARTBEAT_TIMEOUT = 60_000;
 
+/**
+ * ⚠️ 同步要求：此清单必须与后端 backend/app/agent/events.py 的 EventType 枚举保持一致。
+ * 后端 to_sse() 一律发送 named event（`event: <type>`），EventSource 对未注册的
+ * 事件名会静默丢弃（onmessage 收不到 named event），因此后端新增事件类型时
+ * 必须同步加到这里，否则对应事件（如 tool_error 错误恢复）在前端是死代码。
+ *
+ * 例外（不在 EventType 枚举内，但后端同样以 named event 发射）：
+ *   - heartbeat：backend/app/routers/agent.py 的 _sse_heartbeat() 保活帧
+ *   - asset_updated：backend/app/agent/tools/asset_tools.py 以裸字符串 emit
+ */
 const EVENT_TYPES = [
+  // --- 非枚举：连接保活 ---
   'heartbeat',
+  // --- 以下与 backend EventType 一一对应（保持同步！） ---
   'task_started',
   'goal_parsed',
   'thought',
@@ -52,6 +64,22 @@ const EVENT_TYPES = [
   'text_delta',
   'prompt_optimization_started',
   'prompt_optimization_finished',
+  // Spec B: 工具失败恢复
+  'tool_retrying',
+  'tool_fallback_model',
+  'tool_error',
+  'tool_resumed',
+  'media_recovery_started',
+  'media_recovery_finished',
+  'asset_inspection_started',
+  'asset_inspection_finished',
+  'asset_normalization_started',
+  'asset_normalization_finished',
+  // 多轮对话记忆
+  'conversation_continued',
+  'memory_compressed',
+  // --- 非枚举：asset_tools.py 裸字符串发射 ---
+  'asset_updated',
 ];
 
 function streamUrl(taskId: string): string {
@@ -159,6 +187,8 @@ async function rehydrateAfterReconnect(taskId: string): Promise<void> {
       artifacts: (snapshot.artifacts as any) || {},
       pending_question: snapshot.pending_question,
       pending_response: snapshot.pending_response,
+      task_profile: snapshot.task_profile as any,
+      rule_pack_version: snapshot.rule_pack_version,
       total_cost_usd: snapshot.total_cost_usd,
       total_tokens: snapshot.total_tokens,
       llm_provider_id: snapshot.llm_provider_id,

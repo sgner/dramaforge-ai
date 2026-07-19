@@ -1,3 +1,5 @@
+import { toast } from '../utils/toast';
+
 interface StorageData {
   tasks: any[];
   timestamp: number;
@@ -92,7 +94,7 @@ class StorageService {
           this.clearOldBackups();
           
           if (retries >= this.MAX_RETRIES) {
-            alert('存储空间不足，请清理浏览器缓存或导出项目备份');
+            toast.error('存储空间不足，请清理浏览器缓存或导出项目备份');
             return false;
           }
         }

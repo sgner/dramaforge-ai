@@ -36,10 +36,10 @@ BUILTIN_PROMPT_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "id": "builtin_md_3",
-        "name": "剧情推演四宫格",
+        "name": "剧情推演六宫格",
         "category": "storyboard",
-        "scene": "同一事件的4个连续阶段/情绪递进，用于故事板预览、情绪弧线设计、叙事节奏测试",
-        "positive": "A 4-panel storyboard sequence in 2x2 grid, showing narrative progression of [事件/场景]: top-left [阶段1描述], top-right [阶段2描述], bottom-left [阶段3描述], bottom-right [阶段4描述]. Consistent character design across all panels, coherent lighting and color palette, uniform light warm gray background color F0EDE8, subjects softly blending with background with natural edge transition, no hard edges no white halo no light bleed, cinematic composition, emotional arc from [情绪A] to [情绪B], film grain texture, clean thin white grid dividers, absolutely no visible numbers text labels frame counters corner marks or annotations anywhere on the image",
+        "scene": "同一事件的5个连续阶段/情绪递进，用于六宫格故事板预览、情绪弧线设计、叙事节奏测试；第1格为纯黑缓冲格",
+        "positive": "Six-panel storyboard sheet in a 2x3 grid for [事件/场景], exactly six clearly separated panels. Panel 1 is a pure black buffer panel. Panels 2-6 show the same shot as a continuous sequence of frozen story frames: [阶段1描述], [阶段2描述], [阶段3描述], [阶段4描述], [阶段5描述]. Consistent character design, environment, props, camera language, lighting, color palette, visual medium, and continuity across all panels. Preserve the project's visual continuity anchor. Clean storyboard composition, subtle grid dividers, absolutely no extra panels, no single full-frame image, no UI, watermark, readable text, numbers, labels, frame counters, corner marks or annotations anywhere on the image",
         "negative": "numbers, text, letters, labels, frame numbers, corner marks, annotations, captions, watermarks, signatures, logos, readable text, font, typography, grid numbers, sequence markers, page numbers, index, hard edge, glowing edge, white halo, light bleed, overexposed edge, cutout look, pasted on background, floating subject, disconnected shadow, pure white background, stark white, cold gray, bad anatomy, distorted face, extra fingers, deformed hands, inconsistent character design, lighting mismatch between frames, discontinuous action, jump cut feel, blurry, low quality, cropped, out of frame",
         "params": {
             "Midjourney": "`--ar 1:1 --style raw --s 75`",
@@ -49,9 +49,9 @@ BUILTIN_PROMPT_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "id": "builtin_md_4",
-        "name": "角色脸部三视图",
+        "name": "角色脸部三视图（V3.0 B.4 补充信息区抽出版本）",
         "category": "character",
-        "scene": "角色面部正面/侧面/四分之三侧面的设定参考，用于Actor ID锁定、表情一致性控制",
+        "scene": "角色面部正面/侧面/四分之三侧面的设定参考 — B.4 角色概念表「补充信息区」单独抽出版本，用于Actor ID锁定、表情一致性控制",
         "positive": "Character face reference sheet, three views side by side in single row: left panel front view straight-on, center panel 3/4 angle view, right panel side profile view. [角色面部详细描述]. Consistent lighting from 45-degree top-side across all three views, light warm gray background color F0EDE8, subjects softly blending with background with natural edge transition, no hard edges no white halo no light bleed, neutral clean backdrop, professional character design sheet, clean linework, subtle skin texture, identical facial features maintained across all angles, absolutely no visible numbers text labels frame counters corner marks or annotations anywhere on the image",
         "negative": "numbers, text, letters, labels, frame numbers, corner marks, annotations, captions, watermarks, signatures, logos, readable text, font, typography, grid numbers, sequence markers, page numbers, index, hard edge, glowing edge, white halo, light bleed, overexposed edge, cutout look, pasted on background, floating subject, disconnected shadow, pure white background, stark white, cold gray, bad anatomy, distorted face, asymmetrical eyes, crossed eyes, extra fingers, deformed hands, inconsistent facial features between panels, lighting mismatch, blurry, low quality, cropped, out of frame",
         "params": {
@@ -62,10 +62,10 @@ BUILTIN_PROMPT_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "id": "builtin_md_5",
-        "name": "产品三视图",
+        "name": "产品四视图（V3.0 C.3 标准）",
         "category": "product",
-        "scene": "产品设计的正面/侧面/顶面展示，用于工业设计、电商详情、技术文档",
-        "positive": "Product design reference sheet, three orthographic views in single row: front view, side view, top view. [产品详细描述]. Light warm gray background color F0EDE8, products softly blending with background with natural edge transition, no hard edges no white halo no light bleed, studio lighting with soft shadows, technical drawing aesthetic, precise proportions, material texture visible, no perspective distortion, professional product photography, absolutely no visible numbers text labels frame counters corner marks or annotations anywhere on the image",
+        "scene": "产品设计的正面/背面/侧面/细节四视图，严格遵循 V3.0 C.3 道具四视图布局（默认关键道具），用于工业设计、电商详情、技术文档",
+        "positive": "Product design reference sheet, V3.0 C.3 four-view composition: top-left full front view, top-right full back view, bottom-left side view (showing thickness and layering), bottom-right detail close-up (showing engravings, inscriptions, mechanisms, wear marks). [产品详细描述]. Light warm gray background color F0EDE8, products softly blending with background with natural edge transition, no hard edges no white halo no light bleed, studio lighting with soft top light, technical drawing aesthetic, precise proportions, material texture visible, no perspective distortion, professional product photography, 8K ultra high detail, cinema-grade still life, absolutely no visible numbers text labels frame counters corner marks or annotations anywhere on the image",
         "negative": "numbers, text, letters, labels, frame numbers, corner marks, annotations, captions, watermarks, signatures, logos, readable text, font, typography, grid numbers, sequence markers, page numbers, index, hard edge, glowing edge, white halo, light bleed, overexposed edge, cutout look, pasted on background, floating subject, disconnected shadow, pure white background, stark white, cold gray, distorted proportions, perspective distortion, blurry, low quality, cropped, out of frame, cluttered background, random objects, inconsistent material texture between views",
         "params": {
             "Midjourney": "`--ar 16:9 --style raw --s 50`",
@@ -101,9 +101,9 @@ BUILTIN_PROMPT_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "id": "builtin_md_8",
-        "name": "角色设定参考表（胸口特写+全身三视图）",
+        "name": "角色概念表（V3.0 B.4 4 区域布局）",
         "category": "character",
-        "scene": "角色一致性设定参考：左侧1/3脸部大特写锚定面部，右侧2/3三格横排全身三视图（正/侧/背）锚定服装与身形，用于Actor ID锁定、服装一致性控制、Seedance Canvas故事板",
+        "scene": "角色一致性设定参考 — 严格遵循 V3.0 B.4 角色概念表 4 区域布局：主视觉区（正/侧/背 3 视角）+ 补充信息区（面部特写+配色板）+ 局部细节区（关键部件）+ 半身照比例照。用于Actor ID锁定、服装一致性控制、Seedance Canvas故事板",
         "positive": "Character reference sheet, left-right split layout: left one-third area is chest-up close-up front view portrait (shoulder-up framing, extreme facial detail clarity, gentle natural expression, bright eyes looking straight at camera, realistic skin texture with visible pores and subtle imperfections, refined classical makeup); right two-thirds area is three full-body views in horizontal row, from left to right: full-body front standing pose (arms hanging naturally, feet together, complete front costume and body proportions), full-body side profile view (weight slightly shifted, waist-hip curve and silhouette visible, complete side costume and footwear), full-body back view (complete back neckline, hairstyle from behind, back costume details). Consistent front-top-side lighting across all panels, soft diffused light quality, light warm gray background color F0EDE8, subjects softly blending with background with natural edge transition, no hard edges no white halo no light bleed, identical character design, costume, hairstyle and accessories across all panels, professional character design sheet style, clean edges, accurate proportions, material texture visible from all angles, absolutely no visible numbers, text, labels, frame counters, corner marks or annotations anywhere on the image",
         "negative": "numbers, text, letters, labels, frame numbers, corner marks, annotations, captions, watermarks, signatures, logos, readable text, font, typography, grid numbers, sequence markers, page numbers, index, hard edge, glowing edge, white halo, light bleed, overexposed edge, cutout look, pasted on background, floating subject, disconnected shadow, pure white background, stark white, cold gray, dividing line labels, panel markers, bad anatomy, distorted face, extra fingers, deformed hands, inconsistent character design, lighting mismatch between frames, different hairstyle between panels, different clothing between panels, blurry, low quality, cropped, out of frame, asymmetrical eyes, crossed eyes, plastic skin, over-smoothing, textureless skin, uniform skin tone, digital sharpening, filter look, CG look, retouched, airbrushed, multiple heads, mutated limbs, floating limbs, disconnected limbs, uneven panel sizes, broken layout",
         "params": {

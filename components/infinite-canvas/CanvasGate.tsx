@@ -4,6 +4,7 @@ import { CanvasInfo } from './types';
 import { uid } from './types';
 import { useI18n } from '../../i18n';
 import { api } from '../../services/apiClient';
+import { toast } from '../../utils/toast';
 
 // 项目列表走 FastAPI + SQLite（数据本身在 DB）。
 // 用户偏好（trash 列表 / 当前画布 id / 画布 emoji）也走 FastAPI user_preferences。
@@ -174,7 +175,7 @@ export const CanvasGate: React.FC<CanvasGateProps> = React.memo(({ onOpenCanvas,
       onNewCanvas();
     } catch (e: any) {
       console.error('[CanvasGate] createProject failed', e);
-      alert('创建项目失败：' + (e?.message || 'unknown error'));
+      toast.error('创建项目失败：' + (e?.message || 'unknown error'));
     }
   }, [onNewCanvas, t]);
 
@@ -214,7 +215,7 @@ export const CanvasGate: React.FC<CanvasGateProps> = React.memo(({ onOpenCanvas,
       });
     } catch (e: any) {
       console.error('[CanvasGate] deleteProject failed', e);
-      alert('永久删除失败：' + (e?.message || 'unknown error'));
+      toast.error('永久删除失败：' + (e?.message || 'unknown error'));
     }
   }, []);
 

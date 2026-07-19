@@ -155,6 +155,8 @@ export interface TaskAssetRef {
   id: string;
   kind: TaskAssetKind;
   name: string;
+  /** 显示标题（可与 name 不同；如未设置则用 name） */
+  title?: string;
   url: string;
   tags?: string[];
   /** 资产生成使用的提示词 */
@@ -179,6 +181,17 @@ export interface TaskAssetRef {
   promptSource?: string;
   promptOptimized?: string;
   inspectionStatus?: string;
+  /** 文本资产正文（小说/脚本用） */
+  body?: string;
+  /** 文本资产字数/场数（统计字段，避免每次计算） */
+  textStats?: { words?: number; scenes?: number; chapters?: number };
+  /**
+   * 后端原始 extra 字典（含脚本节点需要的结构化 JSON 字段 extra.script）。
+   * 前端 ScriptNodeBody 优先从 extra.script 读综合 JSON（角色/道具/场景/分镜/视觉签名），
+   * 失败时回退到 text（markdown）的 JSON.parse。
+   * 之前这个字段没被 toTaskAssetRef 透传，ScriptNodeBody 拿到 markdown → JSON.parse 失败 → 全部为空。
+   */
+  extra?: Record<string, any>;
 }
 
 export const UNDO_MAX = 30;

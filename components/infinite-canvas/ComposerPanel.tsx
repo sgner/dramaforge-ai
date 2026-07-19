@@ -19,6 +19,7 @@ export const ComposerPanel: React.FC = React.memo(() => {
   const connections = useCanvasStore((s) => s.connections);
   const viewport = useCanvasStore((s) => s.viewport);
   const apiConfig = useCanvasStore((s) => s.apiConfig);
+  const taskAssets = useCanvasStore((s) => s.taskAssets);
   const cascadeRunning = useCanvasStore((s) => s.cascadeRunning);
   const startCascadeRun = useCanvasStore((s) => s.startCascadeRun);
   const stopCascadeRun = useCanvasStore((s) => s.stopCascadeRun);
@@ -62,12 +63,18 @@ export const ComposerPanel: React.FC = React.memo(() => {
   // 同步提示词 + 资产元数据：选中节点变化时加载
   useEffect(() => {
     if (selectedNode) {
-      // 提示词优先级：_assetPrompt > text > promptDraftText > 连接的输入 prompt 节点
+      // 提示词优先级：_assetPrompt > text > promptDraftText > 连接的输入 prompt / script / novel 节点
       const inputPrompt = connections
         .filter(c => c.to === selectedNode.id)
         .map(c => nodes.find(n => n.id === c.from))
-        .filter((n): n is NonNullable<typeof n> => !!n && n.type === 'prompt' && !!n.text)
-        .map(n => n.text || '')
+        .filter((n): n is NonNullable<typeof n> => !!n && (n.type === 'prompt' || n.type === 'script' || n.type === 'novel'))
+        .map((n) => {
+          // script/novel 节点优先从 _assetId 关联的资产 body 读取；否则用 node.text
+          const assetId = (n._assetId as string) || '';
+          const linkedAsset = assetId ? taskAssets.find(a => a.id === assetId) : undefined;
+          return linkedAsset?.body ?? (n.text as string) ?? '';
+        })
+        .filter((s) => !!s)
         .join('\n')
         .trim();
       const prompt = (selectedNode._assetPrompt as string)
@@ -89,7 +96,7 @@ export const ComposerPanel: React.FC = React.memo(() => {
       }
       if (assetModelId) setModelId(assetModelId);
     }
-  }, [selectedNode?.id, connections, nodes, apiConfig.providers]);
+  }, [selectedNode?.id, connections, nodes, apiConfig.providers, taskAssets]);
 
   // 保存提示词草稿到节点
   const savePromptDraft = useCallback(() => {
@@ -110,16 +117,25 @@ export const ComposerPanel: React.FC = React.memo(() => {
   }, [selectedNode, connections, nodes]);
 
   // 查找连接到当前节点的输入提示词（参考项目 inputPromptTextFor）
+  // 支持 prompt / script / novel 类型节点（script/novel 通过 _assetId 关联的资产 body 读取）
   const inputPromptText = useMemo(() => {
     if (!selectedNode) return '';
     return connections
       .filter(c => c.to === selectedNode.id)
       .map(c => nodes.find(n => n.id === c.from))
-      .filter((n): n is NonNullable<typeof n> => !!n && n.type === 'prompt' && !!n.text)
-      .map(n => n.text || '')
+      .filter((n): n is NonNullable<typeof n> => !!n && (n.type === 'prompt' || n.type === 'script' || n.type === 'novel'))
+      .map((n) => {
+        if (n.type === 'script' || n.type === 'novel') {
+          const assetId = (n._assetId as string) || '';
+          const linkedAsset = assetId ? taskAssets.find(a => a.id === assetId) : undefined;
+          return linkedAsset?.body ?? (n.text as string) ?? '';
+        }
+        return n.text || '';
+      })
+      .filter((s) => !!s)
       .join('\n')
       .trim();
-  }, [selectedNode, connections, nodes]);
+  }, [selectedNode, connections, nodes, taskAssets]);
 
   const enabledProviders = apiConfig.providers.filter(p => p.enabled);
   const selectedProvider = enabledProviders.find(p => p.id === providerId);

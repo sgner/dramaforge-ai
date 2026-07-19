@@ -1,12 +1,17 @@
 """SQLite 数据库 — SQLAlchemy ORM"""
 import logging
+import os
 from sqlalchemy import create_engine, inspect, text, event
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 logger = logging.getLogger("dramaforge.db")
 
 BASE_DIR = __import__('pathlib').Path(__file__).resolve().parent.parent
-DB_PATH = BASE_DIR / "dramaforge.db"
+# 关键：支持用环境变量覆盖 DB 路径。测试套件（tests/conftest.py）会把它指向
+# 独立的测试库文件——此前测试直连本开发库，test_media_providers /
+# test_video_dev_fallback 里的 query(ProviderConfig).delete() 和 conftest 的
+# DELETE FROM drama_tasks 会把用户真实 API 配置和任务记录清空。
+DB_PATH = os.environ.get("DRAMAFORGE_DB_PATH") or str(BASE_DIR / "dramaforge.db")
 
 SQLALCHEMY_DATABASE_URL = f"sqlite:///{DB_PATH}"
 

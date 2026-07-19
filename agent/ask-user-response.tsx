@@ -1,5 +1,6 @@
 import React from 'react';
 import { api } from '@/services/apiClient';
+import { toast } from '@/utils/toast';
 import { useAgentStore, type PendingQuestion } from './use-agent-store';
 
 type ResponsePayload = {
@@ -76,8 +77,15 @@ export const AskUserResponse: React.FC = () => {
     if (mode === 'confirm' && hasValidSelection) payload.approved = selected[0] === 'approved';
     setSubmitting(true);
     setError(null);
+    // 关键：区分 respond 与 resume 两个阶段的失败。
+    // - respond 失败：用户输入没写进后端，直接重试即可。
+    // - respond 成功但 resume 失败：pending_response 已写入（后端已收到回复），
+    //   只是 agent 没被拉起。此时绝不能静默停在"已提交"——要提示失败原因，
+    //   并允许用户重新发送（respond 会覆盖 pending_response，重试安全）。
+    let responded = false;
     try {
       await api.respondAgent(taskId, payload);
+      responded = true;
       await api.resumeAgent(taskId);
       if (draftKey) questionDrafts.delete(draftKey);
       // 标记 answered（store 层），UI 立即变灰锁定，避免 backend resume 期间
@@ -87,7 +95,12 @@ export const AskUserResponse: React.FC = () => {
       markAnswered();
     } catch (cause) {
       console.error('[ask-user] failed to respond', cause);
-      setError('发送失败，请重试');
+      const detail = briefApiError(cause);
+      const message = responded
+        ? `回复已提交，但启动 agent 继续执行失败：${detail}。请重新发送重试。`
+        : `发送失败：${detail}。请重试。`;
+      setError(message);
+      toast.error(message);
     } finally {
       setSubmitting(false);
     }
@@ -183,6 +196,26 @@ export const AskUserResponse: React.FC = () => {
     </div>
   );
 };
+
+/**
+ * 把 apiClient 抛出的错误（`API 400 Bad Request: {"detail":"..."}`）压缩成
+ * 一句用户可读的原因：优先提取 FastAPI 的 detail 字段，否则截断原始 message。
+ */
+function briefApiError(cause: unknown): string {
+  const raw = cause instanceof Error ? cause.message : String(cause);
+  const jsonStart = raw.indexOf('{');
+  if (jsonStart >= 0) {
+    try {
+      const parsed = JSON.parse(raw.slice(jsonStart));
+      if (parsed && typeof parsed.detail === 'string' && parsed.detail.trim()) {
+        return parsed.detail;
+      }
+    } catch {
+      /* 非 JSON body，走截断兜底 */
+    }
+  }
+  return raw.length > 120 ? `${raw.slice(0, 120)}…` : raw;
+}
 
 function questionText(question: PendingQuestion, options: PendingQuestion['options']) {
   const raw = String(question.question || '');

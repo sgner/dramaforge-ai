@@ -91,3 +91,148 @@ def test_retry_reuses_failed_asset_identity_and_updates_prompt(db_session):
     assert retried["generating"] is True
     assert retried["failed"] is False
     assert db_session.query(Asset).filter_by(project_id="p1", name="阿瑞斯").count() == 1
+
+
+# ========================
+# 防御重复资产（用户最近反馈）
+# ========================
+# 历史 bug：之前 begin_media_asset 只对 failed.is_(True) 的资产做去重。当 agent 在
+# plan 重跑 / retry / error recovery 等场景下重复调用同一 generate_* 工具时，
+# 第一次成功的资产不会被复用，会被创建一个新的不同 id 的资产，导致画布节点
+# 和资产库侧栏出现重复条目。
+# 修复：去重时同时匹配 status='ready'/'processing'/'uploaded' 且 failed=False
+# 的资产，返回已有记录（idempotent）。
+
+def test_repeated_call_for_succeeded_asset_is_idempotent(db_session):
+    """同一 generate_* 工具被重复调用时，已成功的资产应被复用，不创建新记录。"""
+    first = begin_media_asset(
+        db_session,
+        project_id="p1",
+        kind="image",
+        asset_kind="prop",
+        name="火把道具",
+        prompt="a torch made of wood",
+    )
+    finish_media_asset(db_session, first["id"], url="https://cdn.test/torch.png", prompt="a torch made of wood")
+
+    # 第二次"生成"火把道具（同样的 name/prompt/source_asset_id），应该是 idempotent
+    second = begin_media_asset(
+        db_session,
+        project_id="p1",
+        kind="image",
+        asset_kind="prop",
+        name="火把道具",
+        prompt="a torch made of wood",
+    )
+
+    assert second["id"] == first["id"]
+    # 第二次调用不应清空已有 url（idempotent 语义：复用已有资产）
+    assert second["url"] == "https://cdn.test/torch.png"
+    # 数据库中只有 1 条记录
+    assert db_session.query(Asset).filter_by(project_id="p1", name="火把道具").count() == 1
+
+
+def test_repeated_call_with_different_name_creates_new_asset(db_session):
+    """同名但不同 name（不同实体）时，应允许创建新资产。"""
+    first = begin_media_asset(
+        db_session,
+        project_id="p1",
+        kind="image",
+        asset_kind="prop",
+        name="火把",
+        prompt="a torch made of wood",
+    )
+    finish_media_asset(db_session, first["id"], url="https://cdn.test/torch1.png")
+
+    # 不同 name（不同实体），应创建新资产
+    second = begin_media_asset(
+        db_session,
+        project_id="p1",
+        kind="image",
+        asset_kind="prop",
+        name="钥匙",
+        prompt="a rusty key",
+    )
+
+    assert second["id"] != first["id"]
+    assert db_session.query(Asset).filter_by(project_id="p1").count() == 2
+
+
+def test_repeated_call_with_different_prompt_creates_new_asset(db_session):
+    """同一实体但 prompt 不同时（用户主动要求"换风格"），应创建新版本。"""
+    first = begin_media_asset(
+        db_session,
+        project_id="p1",
+        kind="image",
+        asset_kind="prop",
+        name="火把",
+        prompt="a torch made of wood (oil painting style)",
+    )
+    finish_media_asset(db_session, first["id"], url="https://cdn.test/torch1.png")
+
+    # 同一实体但不同 prompt（用户要求"换成写实风格"）
+    second = begin_media_asset(
+        db_session,
+        project_id="p1",
+        kind="image",
+        asset_kind="prop",
+        name="火把",
+        prompt="a torch made of wood (photorealistic style)",
+    )
+
+    assert second["id"] != first["id"]
+    assert db_session.query(Asset).filter_by(project_id="p1", name="火把").count() == 2
+
+
+def test_repeated_call_does_not_break_batch_dedup(db_session):
+    """batch 场景下，failed 资产仍应被复用（不破坏原 retry 语义）。"""
+    # 第一次 batch 创建并失败
+    first = begin_media_asset(
+        db_session,
+        project_id="p1",
+        kind="image",
+        asset_kind="prop",
+        name="批次道具",
+        prompt="batch prop",
+        extra={"batch": True},
+    )
+    finish_media_asset(db_session, first["id"], error="provider down")
+
+    # 第二次 batch（retry）应复用同一记录
+    second = begin_media_asset(
+        db_session,
+        project_id="p1",
+        kind="image",
+        asset_kind="prop",
+        name="批次道具",
+        prompt="batch prop",
+        extra={"batch": True},
+    )
+
+    assert second["id"] == first["id"]
+    assert db_session.query(Asset).filter_by(project_id="p1", name="批次道具").count() == 1
+
+
+def test_repeated_call_does_not_affect_different_projects(db_session):
+    """不同项目的同名同 prompt 资产不应互相去重。"""
+    first = begin_media_asset(
+        db_session,
+        project_id="project-A",
+        kind="image",
+        asset_kind="prop",
+        name="火把",
+        prompt="a torch",
+    )
+    finish_media_asset(db_session, first["id"], url="https://cdn.test/A.png")
+
+    second = begin_media_asset(
+        db_session,
+        project_id="project-B",
+        kind="image",
+        asset_kind="prop",
+        name="火把",
+        prompt="a torch",
+    )
+
+    assert second["id"] != first["id"]
+    assert db_session.query(Asset).count() == 2

@@ -14,6 +14,23 @@ export enum TaskStatus {
   CANCELLED = 'CANCELLED'
 }
 
+/**
+ * 任务流水线步骤顺序（单一事实源）。
+ * App.tsx 自动推进、useTaskExecutor.proceedToNextStep、StepProgress 进度条
+ * 都必须从这里 import，禁止再各自定义（历史上双定义不一致曾导致
+ * auto 模式跳过 PROP_DESIGN/SCENE_DESIGN，且 indexOf 返回 -1 时流程回退到第一步）。
+ */
+export const LOGICAL_STEPS: TaskStatus[] = [
+  TaskStatus.PREPROCESSING,
+  TaskStatus.SCRIPT_GENERATION,
+  TaskStatus.CHARACTER_DESIGN,
+  TaskStatus.PROP_DESIGN,
+  TaskStatus.SCENE_DESIGN,
+  TaskStatus.STORYBOARDING,
+  TaskStatus.PROMPT_OPTIMIZATION,
+  TaskStatus.COMPLETED
+];
+
 export enum ArtStyle {
   ANIMATION = 'Animation (2D)',
   REALISTIC = 'Cinematic Realistic',

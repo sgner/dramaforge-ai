@@ -1,20 +1,12 @@
 import React, { useCallback, useRef } from 'react';
 import axios from 'axios';
-import { DramaTask, TaskStatus, BigShot, Character, Prop, SceneAsset, ProcessedSegment, ApiConfig, getProviderForStep, getModelForStep, getBindingForStep } from '../types';
+import { DramaTask, TaskStatus, BigShot, Character, Prop, SceneAsset, ProcessedSegment, ApiConfig, getProviderForStep, getModelForStep, getBindingForStep, LOGICAL_STEPS } from '../types';
 import { generateScriptFromNovel, optimizeSoraPrompt, expandIdeaToStory, continueStory, preprocessNovel } from '../services/llmClient';
 import { generateCharacterDesign, generateStoryboardImage, generatePropImage } from '../services/mediaService';
 import { playSuccessSound, playErrorSound } from '../utils/helpers';
 
-const LOGICAL_STEPS = [
-  TaskStatus.PREPROCESSING,
-  TaskStatus.SCRIPT_GENERATION,
-  TaskStatus.CHARACTER_DESIGN,
-  TaskStatus.PROP_DESIGN,
-  TaskStatus.SCENE_DESIGN,
-  TaskStatus.STORYBOARDING,
-  TaskStatus.PROMPT_OPTIMIZATION,
-  TaskStatus.COMPLETED
-];
+// LOGICAL_STEPS 已收敛到 types.ts 单一事实源（8 步，含 PROP_DESIGN/SCENE_DESIGN），此处不再重复定义。
+
 // 视频生成已移至画布手动操作，不再在任务流水线中自动执行
 
 export const useTaskExecutor = (
@@ -601,7 +593,10 @@ export const useTaskExecutor = (
   const proceedToNextStep = useCallback((taskId: string) => {
       const task = tasksRef.current.find(t => t.id === taskId);
       if (!task) return;
-      const next = LOGICAL_STEPS[LOGICAL_STEPS.indexOf(task.status) + 1];
+      const stepIndex = LOGICAL_STEPS.indexOf(task.status);
+      // 守卫：CANCELLED/FAILED/IDLE 等非流水线状态 indexOf 返回 -1，不得回退到第一步重跑
+      if (stepIndex === -1) return;
+      const next = LOGICAL_STEPS[stepIndex + 1];
       if (next) executeTaskStep(taskId, next);
   }, [tasks, executeTaskStep]);
 

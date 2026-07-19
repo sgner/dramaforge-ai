@@ -95,8 +95,195 @@ describe('useAgentStore', () => {
       status: 'paused',
       pending_response: { response: '科幻', approved: true },
     });
-    // 不应当把已 answered 的 pending_response 还原成 pendingQuestion
-    expect(useAgentStore.getState().pendingQuestion).toBeNull();
+    // 已 answered 的 pending_response：旧逻辑期望 null；新行为是给一个
+    // 通用"已提交"灰色卡，避免图2"异常刷新后状态丢失"——因为任务实际处于
+    // 等待 backend resume 的状态，UI 必须保留可见的灰色卡。
+    const after = useAgentStore.getState();
+    expect(after.pendingQuestion).not.toBeNull();
+    expect(after.pendingQuestion!.question).toContain('已提交');
+    expect(after.pendingQuestionAnswered).toBe(true);
+  });
+
+  it('hydrate 用 pending_response.question 重建灰色 question 卡（resume 失败回滚场景）', () => {
+    // 回归：用户提交回复后 backend resume 失败，回滚到 paused。
+    // 旧逻辑：pendingQuestion=null，UI 出现空白卡，pendingQuestionAnswered=false
+    // 状态显示异常。
+    // 新逻辑：从 pending_response.question 还原灰色 question，并标记 answered。
+    useAgentStore.getState().setTask('t-resume-fail', 'paused');
+    useAgentStore.getState().hydrate({
+      status: 'paused',
+      pending_response: {
+        response: '角色、道具、场景、分镜',
+        question: '你希望我为你生成哪些交付物？',
+      },
+    });
+    const after = useAgentStore.getState();
+    expect(after.pendingQuestion).not.toBeNull();
+    expect(after.pendingQuestion!.question).toBe('你希望我为你生成哪些交付物？');
+    // 关键：标记为已答，UI 显示灰色"已提交"卡
+    expect(after.pendingQuestionAnswered).toBe(true);
+  });
+
+  it('hydrate 兜底：用 task_profile.user_confirmed_deliverables 重建灰色 question', () => {
+    // 后端 user_respond 在更早版本没存 question 字段，
+    // task_profile 里有 user_confirmed_deliverables 时可还原。
+    useAgentStore.getState().setTask('t-confirmed', 'paused');
+    useAgentStore.getState().hydrate({
+      status: 'paused',
+      pending_response: { response: '角色、道具、场景、分镜', approved: true },
+      task_profile: {
+        task_type: 'custom',
+        input_mode: 'single_asset',
+        source_kind: 'topic',
+        script_required: false,
+        needs_clarification: false,
+        deliverables: ['character', 'prop', 'scene', 'storyboard'],
+        asset_strategy: 'request or create required assets',
+        confidence: 0.85,
+        missing_inputs: [],
+        rule_pack_id: 'custom.v1',
+        user_confirmed_deliverables: ['character', 'prop', 'scene', 'storyboard'],
+        user_excluded_deliverables: [],
+      },
+    });
+    const after = useAgentStore.getState();
+    expect(after.pendingQuestion).not.toBeNull();
+    expect(after.pendingQuestion!.question).toContain('你已确认交付物');
+    expect(after.pendingQuestion!.question).toContain('character');
+    expect(after.pendingQuestionAnswered).toBe(true);
+  });
+
+  it('hydrate 兜底：无 question 缓存 + 无 confirmed 时给通用"已提交"提示', () => {
+    // 极端情况：旧数据无 question 缓存、task_profile 也无 user_confirmed 信息。
+    // UI 至少要显示一个非空 question 卡，避免空白卡。
+    useAgentStore.getState().setTask('t-fallback', 'paused');
+    useAgentStore.getState().hydrate({
+      status: 'paused',
+      pending_response: { response: '一些文字回答' },
+    });
+    const after = useAgentStore.getState();
+    expect(after.pendingQuestion).not.toBeNull();
+    expect(after.pendingQuestion!.question).toContain('已提交');
+    expect(after.pendingQuestionAnswered).toBe(true);
+  });
+
+  it('hydrate 兜底：steps 中最近 ask_user step 的 question 文本被用于恢复', () => {
+    // 关键：即使 pending_response.question 缺失、task_profile 也无 confirmed，
+    // hydrate 必须能从 steps 历史中提取真实问题文本。
+    // 解决了"图1：agent 正在等待你的回复"卡片下方空白的 bug。
+    useAgentStore.getState().setTask('t-steps', 'paused');
+    useAgentStore.getState().hydrate({
+      status: 'paused',
+      pending_response: { response: '我的回答' },
+      steps: [
+        {
+          step_number: 1,
+          action: { tool: 'parse_user_goal', params: {} },
+          observation: { success: true },
+          status: 'success',
+        },
+        {
+          step_number: 2,
+          action: {
+            tool: 'ask_user',
+            params: {
+              question: '请提供异世界主题的世界观细节（西式奇幻/东方仙侠/赛博魔法等）',
+            },
+          },
+          observation: { user_response: '我的回答' },
+          status: 'success',
+        },
+      ],
+    });
+    const after = useAgentStore.getState();
+    expect(after.pendingQuestion).not.toBeNull();
+    expect(after.pendingQuestion!.question).toContain('异世界主题');
+    expect(after.pendingQuestionAnswered).toBe(true);
+  });
+
+  it('currentActivity 由 action 事件的 tool 字段推导', () => {
+    // 关键：用户应该能在不打开 ThoughtStream 的情况下感知 agent 在做什么
+    // （如"正在优化提示词"/"正在生成角色图"）。
+    useAgentStore.getState().setTask('t-activity', 'running');
+    useAgentStore.getState().applyEvent({
+      type: 'action',
+      payload: { tool: 'optimize_prompt', params: { target: 'image' } },
+      timestamp: 1,
+    });
+    // optimize_prompt 工具动作的 label 暂不区分 video/image，区分在
+    // prompt_optimization_started 事件里覆盖。
+    expect(useAgentStore.getState().currentActivity).toBe('正在优化提示词…');
+
+    useAgentStore.getState().applyEvent({
+      type: 'action',
+      payload: { tool: 'generate_character_portrait', params: { character: { name: '林尘' } } },
+      timestamp: 2,
+    });
+    expect(useAgentStore.getState().currentActivity).toBe('正在生成角色图：林尘…');
+  });
+
+  it('currentActivity 被 prompt_optimization_started 覆盖（提示词优化期间）', () => {
+    // 关键：当 agent 调用 optimize_prompt 工具时，活动指示器必须切换成
+    // "正在优化提示词"，让用户知道当前阶段。
+    useAgentStore.getState().setTask('t-prompt', 'running');
+    useAgentStore.getState().applyEvent({
+      type: 'action',
+      payload: { tool: 'generate_character_portrait', params: { character: { name: 'A' } } },
+      timestamp: 1,
+    });
+    expect(useAgentStore.getState().currentActivity).toBe('正在生成角色图：A…');
+    useAgentStore.getState().applyEvent({
+      type: 'prompt_optimization_started',
+      payload: { target: 'image' },
+      timestamp: 2,
+    });
+    expect(useAgentStore.getState().currentActivity).toBe('正在优化图像提示词…');
+  });
+
+  it('currentActivity 在 task_paused / task_done / task_failed 时清空', () => {
+    // 关键：暂停（被问问题）或终态时，活动指示器必须隐藏，避免误导用户。
+    useAgentStore.getState().setTask('t-clear', 'running');
+    useAgentStore.getState().applyEvent({
+      type: 'action',
+      payload: { tool: 'generate_video', params: {} },
+      timestamp: 1,
+    });
+    expect(useAgentStore.getState().currentActivity).toBe('正在生成视频…');
+    useAgentStore.getState().applyEvent({
+      type: 'task_paused',
+      payload: {},
+      timestamp: 2,
+    });
+    expect(useAgentStore.getState().currentActivity).toBeNull();
+
+    // task_done 也会清空
+    useAgentStore.getState().applyEvent({
+      type: 'action',
+      payload: { tool: 'generate_script', params: {} },
+      timestamp: 3,
+    });
+    expect(useAgentStore.getState().currentActivity).toBe('正在编写脚本…');
+    useAgentStore.getState().applyEvent({
+      type: 'task_done',
+      payload: {},
+      timestamp: 4,
+    });
+    expect(useAgentStore.getState().currentActivity).toBeNull();
+  });
+
+  it('hydrate 不修改 pendingQuestionAnswered when pending_question 已存在', () => {
+    // 重开历史 paused 任务，已有 pending_question → 保留 store 中已有的 answered 状态
+    useAgentStore.getState().setTask('t-keep', 'paused');
+    useAgentStore.getState().applyEvent({ type: 'request_user_input', payload: { question: 'q' }, timestamp: 1 });
+    useAgentStore.getState().markPendingQuestionAnswered();
+    expect(useAgentStore.getState().pendingQuestionAnswered).toBe(true);
+
+    useAgentStore.getState().hydrate({
+      status: 'paused',
+      pending_question: { question: 'q' },
+    });
+    // 仍为 true，因为 pending_question 存在
+    expect(useAgentStore.getState().pendingQuestionAnswered).toBe(true);
   });
 
   it('hydrate clears pendingQuestion when status is not paused (forceReconnect race)', () => {
@@ -639,5 +826,40 @@ describe('useAgentStore', () => {
     expect(useAgentStore.getState().pendingErrorRecovery).not.toBeNull();
     useAgentStore.getState().clearErrorRecovery();
     expect(useAgentStore.getState().pendingErrorRecovery).toBeNull();
+  });
+
+  it('expand_story action resumes a stale paused pet state and reports story expansion', () => {
+    const store = useAgentStore.getState();
+    store.setTask('t-expand', 'paused');
+    store.applyEvent({
+      type: 'request_user_input',
+      payload: { question: '请提供故事方向' },
+      timestamp: 1,
+    });
+    store.markPendingQuestionAnswered();
+
+    store.applyEvent({
+      type: 'action',
+      payload: { tool: 'expand_story', params: { idea_text: '后室' } },
+      timestamp: 2,
+    });
+
+    const after = useAgentStore.getState();
+    expect(after.status).toBe('running');
+    expect(after.currentActivity).toBe('正在扩写故事…');
+  });
+
+  it('applyEvent agent_notice keeps recovery visible without pausing the agent', () => {
+    const s = useAgentStore.getState();
+    s.setTask('t-1', 'running');
+    s.applyEvent({
+      type: 'agent_notice',
+      payload: { level: 'warning', message: 'agent 将从最近检查点继续', source: 'auto-recovery' },
+      timestamp: 1,
+    });
+    const after = useAgentStore.getState();
+    expect(after.status).toBe('running');
+    expect(after.thoughts).toHaveLength(1);
+    expect(after.thoughts[0].payload.text).toContain('最近检查点');
   });
 });

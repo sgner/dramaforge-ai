@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from
 import { Sparkles, RefreshCw } from 'lucide-react';
 import { useAgentStore, type AgentStatus } from './use-agent-store';
 import { AskUserResponse } from './ask-user-response';
+import { ErrorRecoveryCard } from './error-recovery-card';
 import { retryNow } from './agent-stream-manager';
 
 export interface AgentPetPosition { x: number; y: number }
@@ -65,6 +66,7 @@ export const AgentPetController: React.FC<AgentPetControllerProps> = ({
 }) => {
   const status = useAgentStore((s) => s.status);
   const pendingQuestion = useAgentStore((s) => s.pendingQuestion);
+  const pendingErrorRecovery = useAgentStore((s) => s.pendingErrorRecovery);
   const taskId = useAgentStore((s) => s.taskId);
   const thoughts = useAgentStore((s) => s.thoughts);
   const actions = useAgentStore((s) => s.actions);
@@ -76,6 +78,11 @@ export const AgentPetController: React.FC<AgentPetControllerProps> = ({
   // SSE 连接状态：当 connectionStatus !== 'connected' 时显示提示横幅 + 重试按钮
   const connectionStatus = useAgentStore((s) => s.connectionStatus);
   const connectionDetail = useAgentStore((s) => s.connectionDetail);
+  // 实时活动状态：与 ActivityIndicator 共享同一个字段。把它从画布顶部 chip
+  // 移到这里，让用户在看桌宠的同时知道 agent 当前具体在做什么
+  // （"正在优化提示词"/"正在生成媒体…" 等）。状态文本优先取 activity，
+  // 没有 activity 时再回退到 status 枚举文本。
+  const currentActivity = useAgentStore((s) => s.currentActivity);
   const [position, setPosition] = useState<AgentPetPosition | null>(null);
   const [panelOpen, setPanelOpen] = useState(true);
   const [followUpMessage, setFollowUpMessage] = useState('');
@@ -100,6 +107,10 @@ export const AgentPetController: React.FC<AgentPetControllerProps> = ({
   }, [containerRef, projectId]);
 
   useLayoutEffect(() => { measure(); }, [measure]);
+
+  useEffect(() => {
+    if (pendingErrorRecovery) setPanelOpen(true);
+  }, [pendingErrorRecovery]);
 
   useEffect(() => {
     const onResize = () => measure();
@@ -142,6 +153,17 @@ export const AgentPetController: React.FC<AgentPetControllerProps> = ({
   const statusText: Record<AgentStatus, string> = {
     idle: '准备好了', running: '正在思考', paused: pendingQuestion ? '等你回复' : '已暂停', done: '任务完成', failed: '需要重试', cancelled: '已停止',
   };
+  // 实时 activity 优先于 status 文本：agent 思考时也可以显示具体动作
+  // （如"正在生成媒体…"），让桌宠状态栏同时承担"我正在做什么"的反馈。
+  // 已结束的 status（done/failed/cancelled/paused）保持原文本，避免覆盖终态提示。
+  const petStatusText = (() => {
+    if (currentActivity && status === 'running') return currentActivity;
+    return statusText[status];
+  })();
+  // 桌宠标签只有 ~96px 宽，活动文本（如"正在生成角色图：林尘"）
+  // 容易撑出。截断到 12 个字符，hover 时通过 title 显示完整文本。
+  const petLabelText = truncatePetText(petStatusText, 12);
+  const petLabelTitle = petStatusText && petStatusText.length > 12 ? petStatusText : undefined;
 
   const latestThought = thoughts[thoughts.length - 1]?.payload?.text;
   const latestMedia = Object.values(artifacts)
@@ -161,7 +183,7 @@ export const AgentPetController: React.FC<AgentPetControllerProps> = ({
       onMouseDown={(event) => event.stopPropagation()}
     >
       {panelOpen && <div data-testid="agent-pet-panel" className="agent-pet-panel" onMouseDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
-        <div className="agent-pet-panel-status"><span className={`agent-pet-status-dot ${status}`} />{statusText[status]}</div>
+        <div className="agent-pet-panel-status"><span className={`agent-pet-status-dot ${status}`} />{petStatusText}</div>
         {/* SSE 连接状态横幅：断线 / 重连时让用户知道 agent 的实时反馈可能丢失
             并提供"手动重连"出口（重连预算耗尽后由用户主动重置 retryCount）。 */}
         {connectionStatus !== 'connected' && taskId && (
@@ -212,6 +234,7 @@ export const AgentPetController: React.FC<AgentPetControllerProps> = ({
           </button>
         </div>}
         {error && <div data-testid="agent-pet-error" className="agent-pet-panel-error">{error}</div>}
+        {pendingErrorRecovery && <ErrorRecoveryCard />}
         {status === 'done' && taskId && (
           <div className="agent-pet-continue" data-testid="agent-pet-continue">
             <div className="agent-pet-continue-label">任务已完成 · 追加需求继续对话</div>
@@ -287,7 +310,7 @@ export const AgentPetController: React.FC<AgentPetControllerProps> = ({
       >
         <div className="agent-pet-glow" />
         <img data-testid="agent-pet-mascot" className="agent-pet-mascot" src="/agent/agent-pet-penguin.png" alt="" draggable={false} />
-        <div className="agent-pet-label"><Sparkles size={11} /> {statusText[status]}</div>
+        <div className="agent-pet-label" title={petLabelTitle}><Sparkles size={11} /> {petLabelText}</div>
         <div data-testid="agent-pet-handle" className="agent-pet-handle">拖动</div>
       </div>
     </div>

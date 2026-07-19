@@ -70,6 +70,7 @@ export const CanvasAssetPanel: React.FC<CanvasAssetPanelProps> = ({ open, onClos
   const taskAssets = useCanvasStore((s) => s.taskAssets);
   const retryFailedAsset = useCanvasStore((s) => s.retryFailedAsset);
   const setTaskAssets = useCanvasStore((s) => s.setTaskAssets);
+  const openTextReader = useCanvasStore((s) => s.openTextReader);
 
   const allItems = useMemo<AssetItem[]>(() => {
     const taskItems: AssetItem[] = taskAssets.map((a) => ({
@@ -138,9 +139,13 @@ export const CanvasAssetPanel: React.FC<CanvasAssetPanelProps> = ({ open, onClos
     onAddToCanvas?.(item);
   }, [onAddToCanvas]);
 
-  const renderTextCard = (item: AssetItem) => {
+  const renderTextCard = (item: AssetItem, textBody?: string) => {
     const Icon = item.assetKind === 'novel' ? BookOpen : FileText;
-    const charCount = item.prompt?.length || 0;
+    // 优先用调用方传入的 textBody（已经是 latestAsset.body 提取结果），
+    // 没有时不再回退到 item.prompt（避免把输入文本误显示为正文）。
+    const body = textBody ?? '';
+    const charCount = body.length;
+    const empty = !item.generating && !body;
     return (
       <div className="canvas-asset-text-card">
         <div className="canvas-asset-text-head">
@@ -149,10 +154,14 @@ export const CanvasAssetPanel: React.FC<CanvasAssetPanelProps> = ({ open, onClos
           {item.generating && <Loader2 size={12} className="animate-spin" />}
         </div>
         <div className="canvas-asset-text-preview">
-          {item.generating ? t('canvasPanelAssetGenerating') : (item.prompt || '').slice(0, 200) + ((item.prompt?.length || 0) > 200 ? '...' : '')}
+          {item.generating
+            ? t('canvasPanelAssetGenerating')
+            : empty
+              ? t('canvasPanelAssetTextEmpty') || '（正文未加载，点击打开阅读器重试）'
+              : body.slice(0, 200) + (body.length > 200 ? '...' : '')}
         </div>
         <div className="canvas-asset-text-meta">
-          {item.prompt && <span>{t('canvasPanelAssetChars').replace('{0}', String(charCount))}</span>}
+          {body && <span>{t('canvasPanelAssetChars').replace('{0}', String(charCount))}</span>}
         </div>
       </div>
     );
@@ -288,16 +297,29 @@ export const CanvasAssetPanel: React.FC<CanvasAssetPanelProps> = ({ open, onClos
           }
 
           if (item.kind === 'text') {
+            const latestAsset = taskAssets.find(a => a.id === item.id);
+            // 文本资产正文优先取 latestAsset.body；不要回退到 item.prompt（那是输入文本，不是正文）
+            const textBody = latestAsset?.body || '';
             return (
               <div
                 key={item.id}
                 className={`canvas-asset-item canvas-asset-item-text${item.generating ? ' is-generating' : ''}`}
                 draggable
                 onDragStart={(e) => handleDragStart(item, e)}
-                onDoubleClick={() => handleAddToCanvas(item)}
-                title={item.name}
+                onDoubleClick={(e) => {
+                  e.stopPropagation();
+                  if (latestAsset) {
+                    openTextReader(latestAsset);
+                  }
+                }}
+                onClick={() => {
+                  if (latestAsset) {
+                    openTextReader(latestAsset);
+                  }
+                }}
+                title={`${item.name}（点击打开阅读器）`}
               >
-                {renderTextCard(item)}
+                {renderTextCard(item, textBody)}
               </div>
             );
           }

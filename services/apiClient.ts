@@ -2,6 +2,8 @@
  * DramaForge AI 后端 API 客户端
  * 所有方法返回 Promise。后端地址通过 Vite proxy 转发到 localhost:8000。
  */
+import type { Language } from '../types';
+
 const BASE = '/api';
 
 async function request<T = any>(
@@ -79,6 +81,12 @@ export interface AssetOut {
   visual_identity?: Record<string, any>;
   reference_capabilities?: Record<string, any>;
   usage_count?: number;
+  // 文本资产正文（小说/脚本）— 后端从 extra.body 提升
+  body?: string | null;
+  text_stats?: Record<string, any>;
+  // 原始 extra（含 body/text_stats）
+  extra_raw?: Record<string, any>;
+  updated_at?: string;
 }
 
 export interface AgentTaskOut { /* moved up — kept for compat in case imported elsewhere */
@@ -240,6 +248,7 @@ export const api = {
       max_steps?: number;
       providerId?: string;
       modelId?: string;
+      language?: Language;
     } = {}
   ) =>
     request<AgentTaskOut>('/agent/tasks', {
@@ -252,6 +261,7 @@ export const api = {
         // 仅传 provider_id / model_id；API key 走后端 env
         llm_provider_id: opts.providerId ?? null,
         llm_model_id: opts.modelId ?? null,
+        language: opts.language ?? 'en',
       }),
     }),
 

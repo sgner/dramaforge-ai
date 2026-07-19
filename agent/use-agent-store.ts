@@ -9,6 +9,7 @@
  */
 import { create } from 'zustand';
 import { api, type AgentStepOut } from '@/services/apiClient';
+import { toast } from '@/utils/toast';
 
 export type AgentStatus =
   | 'idle'
@@ -67,6 +68,14 @@ export interface PendingErrorRecovery {
   availableModels: { id: string; label: string }[];
 }
 
+/** Parse failures are an internal Agent self-recovery signal, not a user task failure. */
+function isJsonParseNoise(payload: Record<string, any> | undefined): boolean {
+  if (!payload) return false;
+  if (payload.internal === true) return true;
+  const error = typeof payload.error === 'string' ? payload.error : '';
+  return error.startsWith('Invalid decision JSON:');
+}
+
 export interface AgentState {
   // 任务标识
   taskId: string | null;
@@ -114,7 +123,26 @@ export interface AgentState {
 
   // 错误
   error: string | null;
+  /**
+   * LLM 调用错误（网络断 / SSL / 鉴权 / 限流 等）。
+   * 与 `error`（任务整体失败）不同：LLM 错误时任务只是 PAUSED，
+   * 用户仍可修复 LLM provider 然后重试。
+   * 触发场景：runtime.step() 收到 LLMError 时 _add_failed_step 写了一条
+   * status=failed 的 observation，tool 字段为 '_llm_call'。
+   * UI 应展示一个明显 banner + "Open API Settings" 按钮。
+   */
+  llmError: string | null;
+  llmErrorAt: number | null;  // 用于判断 stale（>60s 提示刷新）
   streamingText: string;
+
+  /**
+   * 实时活动状态：人类可读的"agent 当前在做什么"描述。
+   * 来源：SSE 的 action / prompt_optimization_* / artifact_created / thought 事件。
+   * 在 UI 顶部以浮动 chip 形式展示，让用户清楚 agent 当前阶段
+   * （如"正在优化提示词"/"正在生成角色图"/"正在准备标准化资产"）。
+   * status === 'paused' 时为 null（用户被问问题），status === 'done' 时为 null。
+   */
+  currentActivity: string | null;
 
   // 资产完成度（TASK_DONE 时由后端校验后填入，用于展示真实生成情况）
   assetsSummary: Record<string, number> | null;
@@ -144,6 +172,15 @@ export interface AgentState {
     total_tokens?: number;
     llm_provider_id?: string | null;
     llm_model_id?: string | null;
+    // 可选：DB 中的步骤历史，用于在 pending_question 缺失时从最近 ask_user step
+    // 提取 question 文本，确保 UI 恢复的提问卡不出现空白。
+    steps?: Array<{
+      step_number?: number;
+      thought?: string;
+      action?: { tool?: string; params?: Record<string, any> };
+      observation?: Record<string, any>;
+      status?: string;
+    }>;
   }) => void;
   /**
    * 从后端 AgentStep 表加载历史步骤，转换成 thoughts/actions/observations
@@ -163,6 +200,8 @@ export interface AgentState {
    * pendingQuestion 清空时由 reducer 自动重置为 false。
    */
   markPendingQuestionAnswered: () => void;
+  /** 清除任务级错误 banner（task_failed / 提交看门狗超时写入的 error）。 */
+  clearError: () => void;
   /**
    * 显式更新 SSE 连接状态，由 agent-stream-manager 调用。
    * 详见 connectionStatus 字段注释。
@@ -205,6 +244,7 @@ const INITIAL: Pick<
   | 'missingDeliverables'
   | 'conversationTurns'
   | 'memoryCompressed'
+  | 'currentActivity'
 > = {
   taskId: null,
   projectId: null,
@@ -227,11 +267,14 @@ const INITIAL: Pick<
   totalCostUsd: 0,
   totalTokens: 0,
   error: null,
+  llmError: null,
+  llmErrorAt: null,
   streamingText: '',
   assetsSummary: null,
   missingDeliverables: [],
   conversationTurns: [],
   memoryCompressed: false,
+  currentActivity: null,
 };
 
 function bucketOf(assetKind: string | undefined): string {
@@ -320,15 +363,103 @@ function normalizeQuestion(payload: Record<string, any>): PendingQuestion {
   };
 }
 
-export const useAgentStore = create<AgentState>((set, get) => ({
+/**
+ * 把 tool 名字翻译成人类可读的中文活动描述。
+ * 用于 currentActivity 状态字段，让用户清楚知道 agent 当前在做什么
+ * （避免只能看思考流才知道进度）。
+ *
+ * 命名风格：正在进行 + 资产类型/动作，让用户感知"在做什么"，而不是"在调用什么函数"。
+ */
+const TOOL_ACTIVITY_LABELS: Record<string, (p: Record<string, any>) => string> = {
+  parse_user_goal: () => '正在解析你的目标…',
+  create_plan: () => '正在规划步骤…',
+  expand_story: () => '正在扩写故事…',
+  generate_script: (p) => `正在编写${p?.format === 'screenplay' ? '文学剧本' : '脚本'}…`,
+  optimize_prompt: () => '正在优化提示词…',
+  generate_character_portrait: (p) => {
+    const name = p?.character?.name || p?.name;
+    return name ? `正在生成角色图：${name}…` : '正在生成角色图…';
+  },
+  generate_scene_image: (p) => {
+    const name = p?.scene?.name || p?.name;
+    return name ? `正在生成场景图：${name}…` : '正在生成场景图…';
+  },
+  generate_prop_image: (p) => {
+    const name = p?.prop?.name || p?.name;
+    return name ? `正在生成道具图：${name}…` : '正在生成道具图…';
+  },
+  generate_storyboard_image: (p) => {
+    const name = p?.shot?.name || p?.name;
+    return name ? `正在生成分镜图：${name}…` : '正在生成分镜图…';
+  },
+  generate_video: () => '正在生成视频…',
+  generate_media_batch: () => '正在批量生成媒体…',
+  save_asset: () => '正在保存资产…',
+  inspect_asset: () => '正在检查上传资产…',
+  prepare_character_asset: () => '正在准备标准化角色资产…',
+  ask_user: () => '正在等你回复',
+};
+
+function toolActivityLabel(tool: string | undefined, params: Record<string, any> = {}): string {
+  if (!tool) return '正在执行…';
+  const fn = TOOL_ACTIVITY_LABELS[tool];
+  if (fn) return fn(params);
+  // 兜底：把 snake_case 转成中文"正在操作…"
+  return `正在执行：${tool.replace(/_/g, ' ')}…`;
+}
+
+/**
+ * 提交看门狗：用户提交回复后（pendingQuestionAnswered=true，UI 显示
+ * "已提交，等待 agent 处理…"），如果 N 秒内没有任何 SSE 推进事件
+ * （thought/action/observation/task_* 等），认为 agent 无响应——
+ * 解锁"已提交"卡让用户可以重试，并用 toast + error banner 提示。
+ * 任何推进事件都会重置计时；任务进入终态 / 新提问到达 / 任务切换时清除。
+ */
+export const SUBMIT_WATCHDOG_TIMEOUT_MS = 90_000;
+
+export const useAgentStore = create<AgentState>((set, get) => {
+  let submitWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const clearSubmitWatchdog = () => {
+    if (submitWatchdogTimer) {
+      clearTimeout(submitWatchdogTimer);
+      submitWatchdogTimer = null;
+    }
+  };
+
+  const armSubmitWatchdog = () => {
+    clearSubmitWatchdog();
+    submitWatchdogTimer = setTimeout(() => {
+      submitWatchdogTimer = null;
+      const s = get();
+      if (!s.pendingQuestionAnswered) return;
+      if (['done', 'failed', 'cancelled'].includes(s.status)) return;
+      // 资产生成等长耗时工具可能在 heartbeat 之外很久没有业务事件。
+      // 只要 store 仍有明确的当前活动，就说明 agent 正在执行，不应回退成“无响应”。
+      if (s.currentActivity) {
+        armSubmitWatchdog();
+        return;
+      }
+      const message =
+        '你的回复已提交，但 agent 长时间没有任何进展，似乎无响应。请重新发送你的回复重试。';
+      // 解锁"已提交，等待 agent 处理…"卡，让用户可以重新发送；
+      // error 字段驱动 agent-mode 顶部的错误 banner，toast 给即时反馈。
+      set({ pendingQuestionAnswered: false, error: message });
+      toast.error(message);
+    }, SUBMIT_WATCHDOG_TIMEOUT_MS);
+  };
+
+  return {
   ...INITIAL,
 
-  setTask: (taskId, status, projectId = null) =>
+  setTask: (taskId, status, projectId = null) => {
+    clearSubmitWatchdog();
     // 切任务时必须先 reset 到 INITIAL，否则上一个任务的 events/thoughts/actions
     // 还会留在 store 里，SSE 重放的新事件会附加到旧数据后面，导致
     // "重开历史任务显示 0 想法 0 动作"（events 被清空后被新 task 的 replay 覆盖），
     // 或者更糟：两个 task 的数据混在一起。
-    set({ ...INITIAL, taskId, status, projectId }),
+    set({ ...INITIAL, taskId, status, projectId });
+  },
 
   setStatus: (status) => set({ status }),
 
@@ -351,7 +482,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     total_tokens?: number;
     llm_provider_id?: string | null;
     llm_model_id?: string | null;
-  }) =>
+  }) => {
     set((state) => {
       // 推断 llmMode：当前后端已无 stub 路径，task 一旦有 llm_provider_id 就是 real。
       // 旧任务可能是 LLMFactory 重构前的"stub"残留，但前端不再使用 stub 文案，
@@ -384,6 +515,72 @@ export const useAgentStore = create<AgentState>((set, get) => ({
           !('response' in snapshot.pending_response) &&
           typeof (snapshot.pending_response as any).question === 'string')
       );
+      // 关键：用户在 resume 失败后被回滚到 paused，pending_question 已被 consume
+      // （ask_user step status 改成 success），但 pending_response 仍保留。
+      // 此时 UI 必须把"已提交但 backend 处理失败"的灰色卡保持可见，让用户能看到
+      // 自己刚才的回答并能再次点击"重试发送"。否则 UI 出现空白卡，用户无法继续。
+      const hasSubmittedPendingResponse = nextStatus === 'paused' && (
+        snapshot.pending_response &&
+        typeof snapshot.pending_response === 'object' &&
+        'response' in snapshot.pending_response
+      );
+      // 当 pending_response 已有 response 但 pending_question 缺失（resume 失败回滚场景），
+      // 从 task_profile.user_confirmed_deliverables 或最近一个 ask_user step 重建 question。
+      // 优先用 task_profile 里的 question 缓存（如果后端保存了），
+      // 否则用 user_confirmed_deliverables 作为简短提示。
+      let reconstructedQuestion: PendingQuestion | null = null;
+      if (hasSubmittedPendingResponse && !hasPendingQFromSnapshot) {
+        const cachedQ = (snapshot.pending_response as any)?.question;
+        if (typeof cachedQ === 'string' && cachedQ.trim()) {
+          reconstructedQuestion = {
+            question: cachedQ,
+            selection_mode: 'text',
+            allow_custom: false,
+          };
+        } else if (nextProfile?.user_confirmed_deliverables?.length) {
+          // fallback：用确认的 deliverables 描述作为"已回答"的提示
+          reconstructedQuestion = {
+            question: `你已确认交付物：${nextProfile.user_confirmed_deliverables.join('、')}`,
+            selection_mode: 'text',
+            allow_custom: false,
+          };
+        } else if (Array.isArray(snapshot.steps) && snapshot.steps.length > 0) {
+          // 兜底：从最近一个 ask_user step 的 action.params.question 提取真实问题文本。
+          // 这是最后一道防线——保证提问卡永远显示"问题是什么"，而不是空白。
+          for (let i = snapshot.steps.length - 1; i >= 0; i--) {
+            const s = snapshot.steps[i];
+            const tool = s?.action?.tool;
+            if (tool === 'ask_user') {
+              const q = (s?.action?.params || {}).question;
+              if (typeof q === 'string' && q.trim()) {
+                reconstructedQuestion = {
+                  question: q,
+                  selection_mode: 'text',
+                  allow_custom: false,
+                };
+                break;
+              }
+            }
+          }
+          if (!reconstructedQuestion) {
+            reconstructedQuestion = {
+              question: '你已提交回复，agent 正在处理…',
+              selection_mode: 'text',
+              allow_custom: false,
+            };
+          }
+        } else {
+          // 兜底：用户已提交但后端没存 question 文本、task_profile 也无
+          // confirmed 信息——给一个通用"已提交"提示，避免 UI 出现空白卡。
+          // 后端会在 user_respond 时存 question，但若是旧版数据或异常路径
+          // 走到这里，UI 至少能告诉用户"agent 正在处理你的回复"。
+          reconstructedQuestion = {
+            question: '你已提交回复，agent 正在处理…',
+            selection_mode: 'text',
+            allow_custom: false,
+          };
+        }
+      }
       return {
         status: nextStatus,
         plan: Array.isArray(snapshot.plan) ? snapshot.plan : state.plan,
@@ -420,13 +617,24 @@ export const useAgentStore = create<AgentState>((set, get) => ({
           typeof snapshot.pending_response === 'object' &&
           !('response' in snapshot.pending_response) &&
           typeof (snapshot.pending_response as any).question === 'string'
-            ? normalizeQuestion(snapshot.pending_response as Record<string, any>)
-            : state.pendingQuestion,
-        // 已回答状态：仅在"恢复后的 pendingQuestion 仍然非空"时保留（重开历史 paused 任务），
-        // 否则强制清零（task 已 running / done / failed / 不再有 pending question）。
-        pendingQuestionAnswered: hasPendingQFromSnapshot ? state.pendingQuestionAnswered : false,
+              ? normalizeQuestion(snapshot.pending_response as Record<string, any>)
+              : reconstructedQuestion ?? state.pendingQuestion,
+        // 已回答状态：
+        // 1. 有 pending question → 保留已有 answered（重开历史 paused 任务）
+        // 2. 用户已提交（pending_response.response 存在）但 question 被 consume → 标为已答，
+        //    让 UI 显示灰色"已提交"卡
+        // 3. 其他情况 → 重置
+        pendingQuestionAnswered: hasPendingQFromSnapshot
+          ? state.pendingQuestionAnswered
+          : hasSubmittedPendingResponse
+            ? true
+            : false,
       };
-    }),
+    });
+    // hydrate 也可能重建灰色"已提交"卡（resume 失败回滚场景），
+    // 同样需要看门狗兜底，避免"已提交"状态无限悬挂。
+    if (get().pendingQuestionAnswered) armSubmitWatchdog();
+  },
 
   hydrateSteps: (steps) =>
     set((state) => {
@@ -449,7 +657,12 @@ export const useAgentStore = create<AgentState>((set, get) => ({
           });
         }
         // observation: { success, result/error } — 非空才灌入
-        if (s.observation && (s.observation.success !== undefined || s.observation.result !== undefined || s.observation.error)) {
+        if (s.observation && !isJsonParseNoise(s.observation) && (
+          s.observation.success !== undefined ||
+          (typeof s.observation.error === 'string' && s.observation.error.trim()) ||
+          (s.observation.result !== undefined && s.observation.result !== null) ||
+          Object.keys(s.observation).some((key) => !['result', 'error'].includes(key))
+        )) {
           observations.push({
             type: 'observation',
             payload: { ...s.observation, step: s.step_number },
@@ -463,6 +676,10 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     set((state) => {
       const t = event.type;
       const p = event.payload || {};
+      // 提交看门狗：任何推进事件（heartbeat 保活帧除外）都重置计时。
+      // 在 switch 之前统一处理；task_done / task_failed / request_user_input
+      // 等终态/解锁 case 内部会再 clear，最终状态以 case 为准。
+      if (submitWatchdogTimer && t !== 'heartbeat') armSubmitWatchdog();
       switch (t) {
         case 'task_started': {
           // 后端在 runtime 启动时上报 LLM 模式 + fallback 原因
@@ -506,9 +723,22 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         case 'text_delta':
           return { streamingText: `${state.streamingText}${String(p.text || '')}` };
         case 'prompt_optimization_started':
-          return hasEvent(state.thoughts, event) ? {} : { thoughts: [...state.thoughts, { ...event, payload: { ...p, message: `正在优化${p.target === 'video' ? '视频' : '图像'}提示词` } }] };
+          return hasEvent(state.thoughts, event)
+            ? {}
+            : {
+                thoughts: [...state.thoughts, { ...event, payload: { ...p, message: `正在优化${p.target === 'video' ? '视频' : '图像'}提示词` } }],
+                // 关键：让活动指示器在 LLM 优化提示词期间切换成"正在优化提示词"，
+                // 而不是停留在"正在生成XXX"的旧描述。
+                currentActivity: `正在优化${p.target === 'video' ? '视频' : '图像'}提示词…`,
+              };
         case 'prompt_optimization_finished':
-          return hasEvent(state.thoughts, event) ? {} : { thoughts: [...state.thoughts, { ...event, payload: { ...p, message: '提示词优化完成，开始生成媒体' } }] };
+          return hasEvent(state.thoughts, event)
+            ? {}
+            : {
+                thoughts: [...state.thoughts, { ...event, payload: { ...p, message: '提示词优化完成，开始生成媒体' } }],
+                // 完成后切到"正在生成XX"，给用户清晰进度反馈
+                currentActivity: '正在生成媒体…',
+              };
         case 'action':
           return hasEvent(state.actions, event)
             ? {}
@@ -518,9 +748,62 @@ export const useAgentStore = create<AgentState>((set, get) => ({
                 ...((state.status === 'paused' && state.pendingQuestion) || state.pendingQuestionAnswered
                   ? {}
                   : { pendingQuestion: null, pendingQuestionAnswered: false }),
+                // 关键：实时活动状态——告诉用户 agent 当前在执行什么工具。
+                // ask_user 不需要更新 activity（status 会被切到 paused，活动指示器会隐藏）。
+                ...(p.tool === 'ask_user'
+                  ? {}
+                  : {
+                      currentActivity: toolActivityLabel(p.tool, p.params || {}),
+                      // action is stronger evidence than a stale paused snapshot:
+                      // the backend has already started executing a real tool.
+                      status: ['done', 'failed', 'cancelled'].includes(state.status)
+                        ? state.status
+                        : 'running',
+                    }),
               };
         case 'observation':
-          return hasEvent(state.observations, event) ? {} : { observations: [...state.observations, event], streamingText: '' };
+          // 非法决策 JSON 是 Agent 内部自动纠错信号，不应显示为用户任务失败。
+          // 同时兼容历史事件（旧后端没有 internal 标记）。
+          if (isJsonParseNoise(p)) return {};
+          // 关键：_llm_call 失败的 observation 必须在 store 里有专属 slice 存，
+          // 不能只塞 observations 数组（数组里的内容很难被 UI 优先发现，
+          // 用户会以为 agent 还在跑）。触发场景：runtime.step() 收到 LLMError
+          // → _add_failed_step → 写 observation {success:false, error:..., action:{tool:'_llm_call'}},
+          // action.tool 标记为 '_llm_call'。
+          const obs = (event as any).payload || {};
+          // 忽略仅包含 result=null / error=null 的占位事件，避免 ThoughtStream
+          // 在任务刚开始时显示“最新观察 null”。有 success 字段的事件仍保留，
+          // 因为它可能表达“成功但没有详细返回值”。
+          const hasObservationContent =
+            obs.success !== undefined ||
+            (typeof obs.error === 'string' && obs.error.trim().length > 0) ||
+            (obs.result !== undefined && obs.result !== null) ||
+            Object.keys(obs).some((key) => !['result', 'error'].includes(key));
+          if (!hasObservationContent) return {};
+          const obsAction = (obs as any).action || {};
+          const obsTool = obsAction.tool;
+          const obsError = obs.error;
+          const baseObsUpdate = hasEvent(state.observations, event)
+            ? {}
+            : { observations: [...state.observations, event], streamingText: '' };
+          if (obsTool === '_llm_call' && obsError) {
+            return {
+              ...baseObsUpdate,
+              llmError: String(obsError),
+              llmErrorAt: Date.now(),
+              // LLM 失败时一定要清掉 activity：之前条件是"paused 才保留"，但用户
+              // 视觉上看到"正在生成XX"会觉得 agent 还在跑。
+              // 后端在 LLM 失败时也会发 TASK_PAUSED 把 status 切到 paused，但
+              // 兜底这里也强制清，避免 TASK_PAUSED 晚到 / 漏发时 UI 仍误导。
+              currentActivity: null,
+              // 兜底同步 status='paused'：与后端 DB + TASK_PAUSED 事件保持一致。
+              // 若用户处于终态（done/failed/cancelled），保留原状态。
+              status: ['done', 'failed', 'cancelled'].includes(state.status)
+                ? state.status
+                : 'paused',
+            };
+          }
+          return baseObsUpdate;
         case 'goal_parsed':
           return { plan: Array.isArray(p.plan) ? p.plan : state.plan };
         case 'plan_ready':
@@ -555,14 +838,51 @@ export const useAgentStore = create<AgentState>((set, get) => ({
             artifacts: { ...state.artifacts, [cat]: [...existing, item] },
           };
         }
-        case 'request_user_input':
+        case 'asset_updated': {
+          // Agent 通过 update_text_asset 工具更新了小说/脚本正文
+          // 把最新 body / text_stats 同步到 artifacts 中相应条目
+          const cat = bucketOf(p.asset_kind);
+          const existing = state.artifacts[cat] || [];
+          const updatedItem: ArtifactItem = {
+            id: p.id,
+            kind: p.kind,
+            asset_kind: p.asset_kind,
+            name: p.name,
+            url: p.url,
+            body: p.body,
+            text_stats: p.text_stats,
+            version: p.version,
+            ...p,
+          };
+          if (p.id && existing.some((candidate) => candidate.id === p.id)) {
+            return {
+              artifacts: {
+                ...state.artifacts,
+                [cat]: existing.map((candidate) =>
+                  candidate.id === p.id ? { ...candidate, ...updatedItem } : candidate,
+                ),
+              },
+            };
+          }
+          return {
+            artifacts: { ...state.artifacts, [cat]: [...existing, updatedItem] },
+          };
+        }
+        case 'request_user_input': {
+          // 新提问到达 → 看门狗使命结束（UI 已解锁等用户输入）
+          clearSubmitWatchdog();
           // 收到新的提问 → 重置 answered 状态（旧 answered 必然属于上一个问题）
-          return { pendingQuestion: normalizeQuestion(p), status: 'paused', pendingQuestionAnswered: false };
-        case 'user_input_received':
-          // Keep the question visible until the resumed runtime emits its
-          // first thought/action. If resume fails after this event, the user
-          // must still be able to see and retry the submitted question.
-          return { status: 'running' };
+          // 关键兜底：若 SSE payload 缺 question 字段（之前 _pause_for_script_requirement
+          // 这类内置问题有时不带 question），从最近一次 ask_user step 的 action.params
+          // 提取。这样提问卡一定能显示问题文本，不会出现"agent 正在等待你的回复"
+          // 下面一片空白的 bug。
+          return {
+            pendingQuestion: normalizeQuestion(p),
+            status: 'paused',
+            pendingQuestionAnswered: false,
+            currentActivity: null,
+          };
+        }
         case 'tool_retrying':
           return hasEvent(state.thoughts, event) ? {} : { thoughts: [...state.thoughts, event] };
         case 'tool_fallback_model':
@@ -597,30 +917,71 @@ export const useAgentStore = create<AgentState>((set, get) => ({
             }],
             status: 'running',
           };
+        case 'agent_notice':
+          // 自动恢复、服务重连等系统异常也必须进入 ThoughtStream，
+          // 让用户知道 agent 没有静默停住。
+          return {
+            thoughts: hasEvent(state.thoughts, event)
+              ? state.thoughts
+              : [...state.thoughts, { ...event, payload: { ...p, text: p.message || 'agent 正在处理异常' } }],
+          };
         case 'asset_inspection_started':
+          return {
+            thoughts: [...state.thoughts, {
+              ...event,
+              payload: {
+                ...p,
+                text: p.text || '正在检查上传资产',
+              },
+            }],
+            currentActivity: '正在检查上传资产…',
+          };
         case 'asset_inspection_finished':
+          return {
+            thoughts: [...state.thoughts, {
+              ...event,
+              payload: {
+                ...p,
+                text: p.text || '上传资产检查完成',
+              },
+            }],
+          };
         case 'asset_normalization_started':
+          return {
+            thoughts: [...state.thoughts, {
+              ...event,
+              payload: {
+                ...p,
+                text: p.text || '正在生成标准化资产',
+              },
+            }],
+            currentActivity: '正在生成标准化资产…',
+          };
         case 'asset_normalization_finished':
           return {
             thoughts: [...state.thoughts, {
               ...event,
               payload: {
                 ...p,
-                text: p.text || (
-                  t === 'asset_inspection_started' ? '正在检查上传资产' :
-                  t === 'asset_inspection_finished' ? '上传资产检查完成' :
-                  t === 'asset_normalization_started' ? '正在生成标准化资产' : '标准化资产已准备完成'
-                ),
+                text: p.text || '标准化资产已准备完成',
               },
             }],
           };
         case 'task_paused':
-          return { status: 'paused' };
+          // 暂停等待用户输入：清空 activity（避免"正在生成XX"误导）
+          return { status: 'paused', currentActivity: null };
         case 'task_resumed':
-          return { status: 'running' };
-        case 'task_done':
+          // 任务重新开始（用户 /resume 或新轮次）：清掉 LLM 错误 banner。
+          // 旧 LLM 错误已不适用，banner 还挂着会误导用户以为任务仍在出错。
+          return { status: 'running', llmError: null, llmErrorAt: null };
+        case 'user_input_received':
+          // 用户点击了"重答"/"重试"，LLM 即将再次被调，清掉旧错误 banner。
+          return { status: 'running', llmError: null, llmErrorAt: null };
+        case 'task_done': {
+          clearSubmitWatchdog();
           return {
             status: 'done',
+            currentActivity: null,
             assetsSummary:
               p.assets_summary && typeof p.assets_summary === 'object'
                 ? p.assets_summary as Record<string, number>
@@ -632,14 +993,37 @@ export const useAgentStore = create<AgentState>((set, get) => ({
             pendingQuestion: null,
             pendingQuestionAnswered: false,
           };
-        case 'task_failed':
+        }
+        case 'task_failed': {
+          clearSubmitWatchdog();
+          // resume 失败回滚：后端 continue_runtime 异常时会把任务回滚到 paused
+          // 并保留 pending_response（见 backend/app/routers/agent.py），任务本身
+          // 并没有失败。此时不能把 status 置为 failed——与 DB 矛盾，且 SSE manager
+          // 会把 failed 当终态关闭连接；而是回到 paused、解锁"已提交"提问卡
+          // 让用户可以重试，并通过 error banner + toast 明确告知"出错了，可以重试"。
+          if (p.recoverable) {
+            const message = `agent 处理你的回复时出错：${p.error || '未知错误'}。可以重新发送你的回复重试。`;
+            toast.error(message);
+            return {
+              status: ['done', 'cancelled'].includes(state.status) ? state.status : 'paused',
+              error: message,
+              currentActivity: null,
+              // 解锁"已提交，等待 agent 处理…"卡：保留 pendingQuestion，
+              // 用户可以修改答案后重新发送。
+              pendingQuestionAnswered: false,
+            };
+          }
+          const message = p.error || 'task failed';
+          toast.error(`任务失败：${message}`);
           return {
             status: p.cancelled ? 'cancelled' : 'failed',
-            error: p.error || 'task failed',
+            error: message,
+            currentActivity: null,
             // 任务失败/取消：清空灰色 question（如果还有 pending_response 残留也要清）
             pendingQuestion: null,
             pendingQuestionAnswered: false,
           };
+        }
         case 'conversation_continued':
           // 继续对话：状态切回 running，记录轮次
           return {
@@ -670,11 +1054,27 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       }
     }),
 
-  clearPendingQuestion: () => set({ pendingQuestion: null, pendingQuestionAnswered: false }),
+  clearPendingQuestion: () => {
+    clearSubmitWatchdog();
+    set({ pendingQuestion: null, pendingQuestionAnswered: false });
+  },
 
   clearErrorRecovery: () => set({ pendingErrorRecovery: null }),
 
-  markPendingQuestionAnswered: () => set({ pendingQuestionAnswered: true }),
+  /**
+   * 清除 LLM 错误 banner。用户点"重试"/"关闭"或修复 LLM provider 重新调用时调用。
+   * 注意：不重置 status —— task 仍在 PAUSED，pendingQuestion 仍存在，
+   * 用户可以重答问题 /resume。
+   */
+  clearLlmError: () => set({ llmError: null, llmErrorAt: null }),
+
+  markPendingQuestionAnswered: () => {
+    set({ pendingQuestionAnswered: true });
+    // 进入"已提交，等待 agent 处理…"状态 → 启动看门狗兜底
+    armSubmitWatchdog();
+  },
+
+  clearError: () => set({ error: null }),
 
   setConnectionStatus: (status, detail = null) => set({ connectionStatus: status, connectionDetail: detail }),
 
@@ -693,5 +1093,9 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     // 避免与 SSE 事件竞争。
   },
 
-  reset: () => set({ ...INITIAL }),
-}));
+  reset: () => {
+    clearSubmitWatchdog();
+    set({ ...INITIAL });
+  },
+  };
+});

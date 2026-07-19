@@ -67,9 +67,12 @@ class GenerateMediaBatchTool(BaseTool):
                     extra={"asset_kind": job.get("asset_kind"), "name": job.get("name")},
                 )
                 result = await service.generate(request)
+                dev_fallback = bool((result.raw or {}).get("dev_fallback"))
                 return {
                     "job_index": index,
-                    "success": True,
+                    # dev fallback（上游无端点的占位 URL）不算真实成功交付
+                    "success": not dev_fallback,
+                    "dev_fallback": dev_fallback,
                     "kind": job["kind"],
                     "name": job.get("name") or "",
                     "asset_kind": job.get("asset_kind") or ("video" if job["kind"] == "video" else "image"),

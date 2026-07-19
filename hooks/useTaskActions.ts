@@ -3,7 +3,9 @@ import { DramaTask, TaskStatus, ArtStyle, BigShot, Character, Language, TaskMode
 import { continueStory, optimizeSoraPrompt, generateEpisodeSummary } from '../services/llmClient';
 import { generateCharacterDesign, generateStoryboardImage } from '../services/mediaService';
 import { storageService } from '../services/storageService';
+import { api } from '../services/apiClient';
 import { translations } from '../locales';
+import { toast } from '../utils/toast';
 
 export const useTaskActions = (
   tasks: DramaTask[],
@@ -48,7 +50,7 @@ export const useTaskActions = (
         }
     } catch (e) {
         console.error(e);
-        alert("Failed to expand story");
+        toast.error("Failed to expand story");
     } finally {
         setIsExpandingStory(false);
     }
@@ -102,10 +104,10 @@ export const useTaskActions = (
       }));
       
       setTasks(prev => [...prev, ...tasksWithNewIds]);
-      alert(`${tasksWithNewIds.length} ${t('projectsImported') || "projects imported successfully!"}`);
+      toast.success(`${tasksWithNewIds.length} ${t('projectsImported') || "projects imported successfully!"}`);
     } catch (error) {
       console.error("Import failed:", error);
-      alert(t('importFailed') || "Failed to import project");
+      toast.error(t('importFailed') || "Failed to import project");
     }
     
     if (event.target) {
@@ -169,17 +171,26 @@ export const useTaskActions = (
       charFileInputRef.current?.click();
   }, []);
 
-  const handleRefFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleRefFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (file && uploadingCharName && activeTask) {
-          const url = URL.createObjectURL(file);
-          updateTask(activeTask.id, { 
-              characters: activeTask.characters.map(c => c.name === uploadingCharName ? { ...c, referenceImage: url } : c)
-          });
-          setUploadingCharName(null);
-          if (charFileInputRef.current) charFileInputRef.current.value = '';
+          try {
+              // 上传到后端拿真实 URL（/files/xxx），不能用浏览器本地 blob: URL：
+              // 后端下载不到 blob URL（参考图静默失效），且刷新后 blob 死链。
+              const { url } = await api.uploadImage(file);
+              updateTask(activeTask.id, {
+                  characters: activeTask.characters.map(c => c.name === uploadingCharName ? { ...c, referenceImage: url } : c)
+              });
+          } catch (err) {
+              // 上传失败：不写入死链，保留原参考图
+              console.error('Failed to upload reference image:', err);
+              toast.error(t('uploadReferenceFailed') || 'Failed to upload reference image');
+          } finally {
+              setUploadingCharName(null);
+              if (charFileInputRef.current) charFileInputRef.current.value = '';
+          }
       }
-  }, [uploadingCharName, activeTask, updateTask]);
+  }, [uploadingCharName, activeTask, updateTask, t]);
 
   const handleAddShot = useCallback(() => {
       if (!activeTask) return;
@@ -223,7 +234,7 @@ export const useTaskActions = (
     } catch (e: any) {
         console.error(e);
         updateTask(taskId, { characters: task.characters.map(c => c.name === charName ? { ...c, generationStatus: undefined } : c) });
-        alert("Failed to regenerate character: " + e.message);
+        toast.error("Failed to regenerate character: " + e.message);
     }
   }, [tasks, apiConfig, updateTask]);
 

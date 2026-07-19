@@ -11,6 +11,7 @@ export const LightboxPanel: React.FC<LightboxProps> = React.memo(({ nodeId, onCl
   const { t } = useI18n();
   const nodes = useCanvasStore((s) => s.nodes);
   const connections = useCanvasStore((s) => s.connections);
+  const taskAssets = useCanvasStore((s) => s.taskAssets);
   const [compareMode, setCompareMode] = useState(false);
   const [compareIndex, setCompareIndex] = useState(0);
 
@@ -28,11 +29,20 @@ export const LightboxPanel: React.FC<LightboxProps> = React.memo(({ nodeId, onCl
   );
   const allImages = [node, ...compareImages.filter(n => n.id !== node.id)];
 
-  // Find connected prompt nodes
+  // Find connected prompt / script / novel nodes (它们的文本会作为生成 prompt 传入下一节点)
   const connectedPrompts = connections
     .filter(c => c.to === nodeId)
     .map(c => nodes.find(n => n.id === c.from))
-    .filter((n): n is NonNullable<typeof n> => !!n && (n.type === 'prompt' || n.type === 'promptGroup') && !!n.text);
+    .filter((n): n is NonNullable<typeof n> => {
+      if (!n) return false;
+      if (n.type === 'prompt' || n.type === 'promptGroup') return !!n.text;
+      if (n.type === 'script' || n.type === 'novel') {
+        const assetId = (n._assetId as string) || '';
+        const linkedAsset = assetId ? taskAssets.find(a => a.id === assetId) : undefined;
+        return !!(linkedAsset?.body ?? n.text);
+      }
+      return false;
+    });
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (e.key === 'Escape') onClose();

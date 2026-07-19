@@ -28,7 +28,17 @@ class _ParallelMediaService:
 class _PromptLLM:
     async def generate(self, messages, **kwargs):
         class Response:
-            content = "optimized: " + messages[-1]["content"]
+            # 从用户消息里提取 "【原始 prompt】" 之后的实际 prompt 文本，
+            # 模拟一个最小化的 LLM：返回 "optimized: <原 prompt>"。
+            # 不透传整个 messages[-1] 是因为 _sanitize_optimized_prompt 会把
+            # "原始 prompt" / "上下文" 这种 token 当成元描述并错误剥离。
+            user_msg = messages[-1]["content"] if messages else ""
+            prompt_text = user_msg
+            if "【原始 prompt】" in user_msg:
+                prompt_text = user_msg.split("【原始 prompt】", 1)[1]
+                if "【上下文】" in prompt_text:
+                    prompt_text = prompt_text.split("【上下文】", 1)[0]
+            content = "optimized: " + prompt_text.strip()
         return Response()
 
 

@@ -11,12 +11,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from enum import Enum
+
+logger = logging.getLogger(__name__)
 from typing import Any
 
 from .events import AgentEvent, EventType, event_bus
 from .llm import build_react_prompt
+from .llm import LLMError as _LLMError
 from .memory import AgentMemory
 from .tools.base import (
     BaseTool,
@@ -29,7 +33,13 @@ from .tools.base import (
 )
 from .media_assets import begin_media_asset, finish_media_asset
 from .tools.planning import _coerce_json
-from .task_profiles import TaskProfile, classify_task
+from .task_profiles import (
+    TaskProfile,
+    classify_task,
+    is_deliverables_question,
+    parse_user_deliverable_answer,
+)
+from .user_messages import missing_source_question
 from .rule_packs import get_rule_pack
 from .prompt_engineering import build_prompt_rule_context
 from .. import models
@@ -42,6 +52,27 @@ class AgentState(str, Enum):
     DONE = "done"
     FAILED = "failed"
     CANCELLED = "cancelled"
+
+
+# 鉴权类错误关键字：这类错误（401/403/invalid api key）重试无意义
+# （client 层对 4xx 也不重试），命中后跳过自动重试直接暂停。
+_AUTH_ERROR_MARKERS = (
+    "401", "403", "unauthorized", "forbidden",
+    "invalid api key", "invalid_api_key", "incorrect api key",
+    "authentication", "api key",
+)
+
+
+def _is_auth_llm_error(err: str) -> bool:
+    """判断 LLM 错误是否属于鉴权/配置类（自动重试无意义）。"""
+    text = (err or "").lower()
+    return any(marker in text for marker in _AUTH_ERROR_MARKERS)
+
+
+def _err_brief(err: str, limit: int = 120) -> str:
+    """截断错误摘要，保证事件 payload 紧凑。"""
+    text = (err or "").strip().replace("\n", " ")
+    return text[:limit]
 
 
 def parse_decision(raw: str) -> dict:
@@ -70,6 +101,11 @@ _DELIVERABLE_ASSET_KIND_MAP: dict[str, str] = {
     "research_summary": "research_summary",
     "campaign_brief": "campaign_brief",
     "agreed_deliverables": "agreed_deliverables",
+}
+
+_MEDIA_TOOL_NAMES = {
+    "generate_character_portrait", "generate_prop_image", "generate_scene_image",
+    "generate_storyboard_image", "generate_video", "generate_media_batch",
 }
 
 
@@ -118,6 +154,16 @@ class AgentRuntime:
     """ReAct 主循环。"""
 
     DEFAULT_MAX_STEPS = 30
+    # 连续 LLM 输出解析失败（空响应 / 非法 JSON）熔断阈值：
+    # 第一次达到时注入格式提示自我纠正并重置计数；同一任务第二次达到
+    # 才把任务置 PAUSED 等用户介入，而不是一路烧到 max_steps。
+    MAX_CONSECUTIVE_PARSE_FAILURES = 3
+    # LLM 调用失败自动重试退避（秒）：初次失败后依次等 2s/5s/10s 再试，
+    # 全部失败才暂停。测试里通过 monkeypatch asyncio.sleep 避免真实等待。
+    LLM_AUTO_RETRY_BACKOFF = (2, 5, 10)
+    # 非媒体工具同一工具连续失败达到该次数才暂停等用户决策；
+    # 未达到时失败作为 observation 返回，让 agent 自我纠正。
+    TOOL_FAILURE_PAUSE_THRESHOLD = 3
 
     def __init__(
         self,
@@ -148,6 +194,13 @@ class AgentRuntime:
         self.profile = profile
         self.state = AgentState.PENDING
         self._step_count = 0
+        self._consecutive_parse_failures = 0
+        # 解析熔断是否已触发过一次（第一次触发注入提示自动恢复，
+        # 第二次触发才暂停）。resume/重建后保守视为未触发。
+        self._parse_breaker_tripped = False
+        # 非媒体工具连续失败跟踪：同一工具连续失败达到阈值才暂停。
+        self._last_failed_tool: str | None = None
+        self._tool_failure_streak = 0
 
     # ---------------- 主循环 ----------------
 
@@ -162,13 +215,25 @@ class AgentRuntime:
         self._step_count += 1
 
         if self._step_count > self.max_steps:
-            await self._emit(EventType.TASK_FAILED, {"error": f"超过最大步数 {self.max_steps}"})
-            self.state = AgentState.FAILED
-            return True
+            # 最大步数是单轮保护，不是任务失败。扩展一个新的检查点窗口，
+            # 让 agent 可以根据已记录的失败观察继续自我纠正。
+            previous_limit = self.max_steps
+            self.max_steps += self.DEFAULT_MAX_STEPS
+            await self._emit_notice(
+                "warning",
+                f"本轮执行步数达到 {previous_limit}，已自动开启下一轮并保留当前进度",
+                source="runtime",
+            )
+            return False
 
-        # 1. think
+        # 1. think（LLM 调用失败时自动重试，重试耗尽才暂停，见 _call_llm_with_retry）
         messages = self._build_messages()
-        response = await self.llm.generate(messages)
+        response = await self._call_llm_with_retry(messages)
+        if self.state == AgentState.CANCELLED:
+            return True
+        if response is None:
+            # LLM 重试耗尽 / 鉴权错误：_call_llm_with_retry 已完成暂停流程
+            return False
 
         # stop_task may cancel while the LLM request is in flight. Never execute
         # the stale tool call that arrives after cancellation.
@@ -178,12 +243,12 @@ class AgentRuntime:
         if response.tool_name is None:
             # LLM 没调用工具，按 content 解析为决策
             if not response.content:
-                await self._add_failed_step("LLM returned empty response", {})
+                await self._handle_parse_failure("LLM returned empty response")
                 return False
             try:
                 decision = parse_decision(response.content)
             except ValueError as e:
-                await self._add_failed_step(str(e), {})
+                await self._handle_parse_failure(str(e))
                 return False
             thought = str(decision.get("thought") or "").strip()
             action = decision.get("action") or {}
@@ -193,6 +258,10 @@ class AgentRuntime:
         else:
             thought = "(structured tool call)"
             action = {"tool": response.tool_name, "params": response.tool_args or {}}
+
+        # 本步成功拿到可执行决策（文本解析成功或结构化 tool call），
+        # 重置连续解析失败计数（只统计"连续"失败，中间有成功即清零）。
+        self._consecutive_parse_failures = 0
 
         await self._emit(EventType.THOUGHT, {"text": thought, "step": self._step_count})
 
@@ -264,14 +333,17 @@ class AgentRuntime:
             await self._pause_for_script_requirement(thought, response, profile)
             return False
 
+        tool_params = action.get("params", {})
+        if tool_name == "generate_script":
+            tool_params = self._prepare_generate_script_params(tool_params)
+
         await self._emit(EventType.ACTION, {
             "tool": tool_name,
-            "params": action.get("params", {}),
+            "params": tool_params,
             "step": self._step_count,
             "requires_approval": self._requires_approval(tool_name),
         })
 
-        tool_params = action.get("params", {})
         media_asset = self._begin_media_asset(tool_name, tool_params)
         media_batch_assets = self._begin_media_batch_assets(tool_params) if tool_name == "generate_media_batch" else []
         if media_asset:
@@ -309,6 +381,7 @@ class AgentRuntime:
             url = result.get("url") if isinstance(result, dict) else None
             error = observation.get("error") if isinstance(observation, dict) and status != "success" else None
             result_prompt = result.get("prompt") if isinstance(result, dict) else None
+            dev_fallback = bool(result.get("dev_fallback")) if isinstance(result, dict) else False
             updated_asset = finish_media_asset(
                 self.db,
                 media_asset["id"],
@@ -318,8 +391,13 @@ class AgentRuntime:
                 prompt_source=result.get("source_prompt") if isinstance(result, dict) else None,
                 prompt_optimized=result_prompt,
                 extra={"continuity": result.get("continuity")} if isinstance(result, dict) and result.get("continuity") is not None else None,
+                dev_fallback=dev_fallback,
             ) if self.db else {
-                **media_asset, "url": url, "failed": bool(error), "error": error, "generating": False,
+                **media_asset, "url": url,
+                "failed": bool(error) or dev_fallback,
+                "error": error or ("dev fallback: upstream provider returned a placeholder URL" if dev_fallback else None),
+                "dev_fallback": dev_fallback,
+                "generating": False,
             }
             bucket = self.memory.artifacts.get(media_asset["asset_kind"], [])
             self.memory.artifacts[media_asset["asset_kind"]] = [
@@ -344,6 +422,7 @@ class AgentRuntime:
                     prompt_source=str(item.get("source_prompt") or item.get("prompt") or ""),
                     prompt_optimized=str(item.get("prompt") or ""),
                     extra={"continuity": item.get("continuity")} if item.get("continuity") is not None else None,
+                    dev_fallback=bool(item.get("dev_fallback")),
                 )
                 asset_kind = pending["asset_kind"]
                 bucket = self.memory.artifacts.setdefault(asset_kind, [])
@@ -371,12 +450,11 @@ class AgentRuntime:
         )
 
         # 5. 通知
-        await self._emit(EventType.OBSERVATION, {
-            "step": self._step_count,
-            "success": status == "success",
-            "result": observation.get("result") if status == "success" else None,
-            "error": observation.get("error"),
-        })
+        await self._emit(EventType.OBSERVATION, self._observation_event_payload(
+            observation,
+            status,
+            self._step_count,
+        ))
 
         # bridge: create_plan → memory.plan
         if tool_name == "create_plan" and isinstance(observation, dict) and isinstance(observation.get("result"), list):
@@ -386,6 +464,83 @@ class AgentRuntime:
             await self._emit(EventType.PLAN_READY, {"plan": self.memory.plan})
 
         return False
+
+    async def _call_llm_with_retry(self, messages: list[dict]):
+        """调用 LLM，失败时按 LLM_AUTO_RETRY_BACKOFF 自动重试。
+
+        返回 LLMResponse；以下情况返回 None（调用方据此结束本步）：
+        - 重试全部耗尽：记 failed step + OBSERVATION + TASK_PAUSED，切 PAUSED
+          （保留原有暂停语义：任务不丢进度，修复配置后 /resume 接着跑）；
+        - 鉴权类错误（401/403/invalid api key）：重试无意义，直接走同一暂停流程；
+        - 退避期间任务被取消：不做任何暂停处理，由上层取消逻辑接管。
+
+        每次重试前发 agent_notice（warning），最终失败发 agent_notice（error），
+        让前端/agent 都能感知"系统在自动恢复"而不是无声卡住。
+        """
+        max_retries = len(self.LLM_AUTO_RETRY_BACKOFF)
+        last_err = ""
+        is_auth = False
+        for attempt in range(max_retries + 1):
+            try:
+                return await self.llm.generate(messages)
+            except _LLMError as e:
+                last_err = str(e) or "LLM call failed with empty message"
+                is_auth = _is_auth_llm_error(last_err)
+                if is_auth:
+                    logger.warning(
+                        "[agent] step %s LLM auth/config error, skip auto-retry: %s",
+                        self._step_count, last_err,
+                    )
+                    break
+                if attempt < max_retries:
+                    logger.warning(
+                        "[agent] step %s LLM call failed (auto-retry %s/%s): %s",
+                        self._step_count, attempt + 1, max_retries, last_err,
+                    )
+                    await self._emit_notice(
+                        "warning",
+                        f"LLM 调用失败（{_err_brief(last_err)}），正在自动重试"
+                        f"（第 {attempt + 1}/{max_retries} 次）…",
+                        source="llm",
+                    )
+                    await asyncio.sleep(self.LLM_AUTO_RETRY_BACKOFF[attempt])
+                    # stop_task 可能在退避期间取消任务，不再继续重试/暂停
+                    if self.state == AgentState.CANCELLED:
+                        return None
+
+        # 重试耗尽 / 鉴权错误：记 failed step 写进 memory + emit OBSERVATION
+        # 让用户看到根因；然后切到 PAUSED，loop 看到 PAUSED 自然退出，
+        # task 状态回滚 paused（保留 memory / steps），修复后 /resume 接着跑。
+        err = last_err
+        logger.warning(
+            "[agent] step %s LLM call failed after %s auto-retries: %s (provider=%s, model=%s)",
+            self._step_count, max_retries, err, getattr(self.llm, 'provider_id', '?'),
+            getattr(self.llm, 'model', '?'),
+        )
+        await self._add_failed_step(
+            error=f"LLM call failed: {err}",
+            action={"tool": "_llm_call", "params": {}},
+        )
+        if is_auth:
+            await self._emit_notice(
+                "error",
+                f"LLM 鉴权失败（{_err_brief(err)}），任务已暂停，请检查 API 配置后恢复",
+                source="llm",
+            )
+        else:
+            await self._emit_notice(
+                "error",
+                f"LLM 调用连续失败，已自动重试 {max_retries} 次仍不成功，任务已暂停，可稍后恢复",
+                source="llm",
+            )
+        # 关键：必须显式发 TASK_PAUSED，否则前端 useAgentStore.status 会一直
+        # 停留在 'running'。_run_runtime_loop 只更新 DB 状态，不发事件。
+        await self._emit(EventType.TASK_PAUSED, {
+            "reason": "llm_call_failed",
+            "error": err,
+        })
+        self.state = AgentState.PAUSED
+        return None
 
     @staticmethod
     def _is_media_tool(tool_name: str) -> bool:
@@ -428,16 +583,44 @@ class AgentRuntime:
 
     def _selected_task_profile(self) -> TaskProfile:
         profile = self.hydrate_profile()
+        # 关键修复：用户已经回答过"要哪些交付物"，必须投影到 profile。
+        # 之前的逻辑只投影"structured source"（脚本正文），对"deliverables selection"
+        # 这类问题完全没处理 → needs_clarification 一直为 True → agent 反复询问同一问题。
         source_context = self._answered_source_context(profile)
-        if profile.needs_clarification and source_context:
+        deliverables_context = self._answered_deliverables_context(profile)
+        # 关键：保留当前 profile 已有的 user_confirmed_deliverables。
+        # DB 持久化恢复后，profile 已经有确认值；如果 classify_task 重新跑（不带该字段），
+        # 会把确认值丢掉，再走老路 needs_clarification=True → 再次询问。
+        existing_confirmed = list(profile.user_confirmed_deliverables or [])
+        existing_excluded = list(profile.user_excluded_deliverables or [])
+        # 合并 source + deliverables：用户可能在两轮分别回答了不同类型的问题
+        if source_context or deliverables_context or existing_confirmed:
             parsed_goal = dict(self._latest_parsed_goal() or {})
             parsed_goal.update(source_context)
+            parsed_goal.update(deliverables_context)
+            # 显式把确认值塞给 classify_task（虽然它不读，但保持数据流一致）
+            if existing_confirmed:
+                parsed_goal["user_confirmed_deliverables"] = existing_confirmed
             refreshed = classify_task(
                 self.memory.user_goal,
                 parsed_goal,
                 self._project_asset_context(),
             )
-            if refreshed.task_type == profile.task_type:
+            # 关键：re-classify 会丢失 user_confirmed_deliverables，需要手动重建。
+            # 优先级：最新回答（deliverables_context）> 已有确认（existing_confirmed）
+            new_confirmed = (
+                deliverables_context.get("user_confirmed_deliverables")
+                or existing_confirmed
+            )
+            if new_confirmed:
+                self.profile = refreshed.with_user_confirmed(
+                    new_confirmed,
+                    existing_excluded,
+                )
+                profile = self.profile
+            elif refreshed.task_type == profile.task_type:
+                # 没有 confirmed 改动时，仅当 task_type 一致才采用 refreshed
+                # （避免莫名切换 task_type 后 missing_inputs 抖动）
                 self.profile = refreshed
                 profile = refreshed
         return profile
@@ -467,6 +650,54 @@ class AgentRuntime:
             return {"source": source}
         return {}
 
+    def _answered_deliverables_context(self, profile: TaskProfile) -> dict:
+        """检测用户是否已回答了"要哪些交付物"。
+
+        关键修复：原先依赖 is_deliverables_question(question) 过滤——但 LLM 经常
+        自由发挥提问（"你想基于'xxx'这个主题创作什么？请告诉我更多细节"），
+        问题文本不包含 deliverable 关键词，导致用户明明回答了
+        "我只要场景概念图和角色图"也被忽略，user_confirmed_deliverables
+        永远不写入 → agent 又问"要哪些交付物"。
+
+        新策略：优先用 parse_user_deliverable_answer(answer) 解析——
+        只要能解析出非空 deliverable 列表（说明用户回答中确实点名了某些资产），
+        就采用。这避免了"question 文本不标准 → 答案被丢弃"的误判。
+        但仍保留 is_deliverables_question 的过滤，避免把"2分钟"/"奇幻风格"
+        这类纯描述性回答误识别为 deliverable。
+        """
+        if profile.task_type not in {"custom", "drama_short", "documentary", "promotion", "commercial"}:
+            return {}
+        for step in reversed(self.memory.short_term):
+            if step.status != "success" or (step.action or {}).get("tool") != "ask_user":
+                continue
+            params = (step.action or {}).get("params") or {}
+            question = params.get("question", "")
+            observation = step.observation if isinstance(step.observation, dict) else {}
+            user_response = observation.get("user_response")
+            if isinstance(user_response, dict):
+                answer = user_response.get("response") or user_response.get("custom_text")
+            else:
+                answer = user_response
+            if not answer or not str(answer).strip():
+                continue
+            # 用 parse_user_deliverable_answer 解析——这是关键。
+            # 即使 question 文本不是标准"哪些交付物"格式，只要答案中
+            # 提到 character/scene/prop/storyboard/script/video/audio
+            # 等关键词，就当作已确认的 deliverable。
+            confirmed = parse_user_deliverable_answer(answer)
+            if not confirmed:
+                # 答案没有 deliverable 关键词 → 可能是其它类型回答
+                # （如时长/风格/角色数量）。如果 question 明确是 deliverable
+                # 问题但回答是"全部/所有"，parse_user_deliverable_answer
+                # 会返回空 list —— 这种情况下不需要再处理（让 agent 走全流程）。
+                continue
+            # 命中 deliverable 答案：
+            # - question 包含 deliverable 关键词 → 直接采用
+            # - question 不包含 deliverable 关键词但答案明确提到资产 →
+            #   也采用（解决 LLM 自由提问场景下的丢答案问题）
+            return {"source": str(answer or ""), "user_confirmed_deliverables": confirmed}
+        return {}
+
     def hydrate_profile(self) -> TaskProfile:
         """Return the persisted profile, deriving it once for legacy tasks."""
         if self.profile is None:
@@ -479,6 +710,10 @@ class AgentRuntime:
 
     def _has_source_for_profile(self, profile: TaskProfile) -> bool:
         """Return whether the profile's structured source gate is satisfied."""
+        # 关键：用户已确认 deliverables → gate 永远通过，不再弹澄清。
+        # 这是修复"agent 反复询问要哪些交付物"死循环的核心。
+        if profile.user_confirmed_deliverables:
+            return True
         if profile.task_type in {"drama_short", "documentary"}:
             return self._has_script_context()
         # custom 任务：如果 deliverables 只含媒体资产（character/scene/prop/storyboard）
@@ -496,20 +731,13 @@ class AgentRuntime:
 
     async def _pause_for_script_requirement(self, thought: str, response: Any, profile: TaskProfile | None = None) -> None:
         profile = profile or self._selected_task_profile()
-        source_label = {
-            "promotion": "promotion brief",
-            "commercial": "product brief or product information",
-            "custom": "structured source and agreed deliverables",
-        }.get(profile.task_type, "complete story script")
+        copy = missing_source_question(profile.task_type, profile.language)
         question = {
             "type": "ask_user",
             "step_id": "clarify_source",
             "missing_inputs": list(profile.missing_inputs),
-            "question": (
-                f"当前缺少可供拆解和生成提示词的{source_label}。"
-                f"请提供{source_label}，我会先完成来源确认再生成媒体资产。"
-            ),
-            "options": ["由 agent 编写脚本"],
+            "question": copy["question"],
+            "options": copy["options"],
             "selection_mode": "text",
             "allow_custom": True,
         }
@@ -747,7 +975,10 @@ class AgentRuntime:
             step_range=step_range,
         )
 
-        # 删除被压缩的早期 steps
+        # 删除被压缩的早期 steps。
+        # 不变量：保留的 StepRecord 必须保持原 step_number（不重排、不重置
+        # _step_count），否则 _persist_steps 按 step_number 对齐落库时会与
+        # DB 已有行错位/冲突。
         self.memory.short_term = self.memory.short_term[-keep_recent:]
 
         await self._emit(EventType.MEMORY_COMPRESSED, {
@@ -824,6 +1055,40 @@ class AgentRuntime:
                 return result
         return None
 
+    def _prepare_generate_script_params(self, params: dict) -> dict:
+        """在脚本工具边界恢复已扩写素材，避免梗概覆盖完整故事。"""
+        current = dict(params or {})
+        expanded = self._latest_expanded_story()
+        if expanded:
+            current["source_text"] = expanded
+            current["long_text"] = expanded
+            current["source_kind"] = "novel"
+            current["source_maturity"] = "long_form_source"
+            current.pop("novel_text", None)
+            return current
+        parsed_goal = self._latest_parsed_goal() or {}
+        source_text = str(parsed_goal.get("source_text") or "").strip()
+        if source_text:
+            current["source_text"] = source_text
+            current["long_text"] = source_text
+            current["source_maturity"] = parsed_goal.get("source_maturity") or "synopsis"
+            current.pop("novel_text", None)
+        return current
+
+    def _latest_expanded_story(self) -> str:
+        """Return the latest successful expand_story result from Agent memory."""
+        for step in reversed(self.memory.short_term):
+            action = step.action if isinstance(step.action, dict) else {}
+            if action.get("tool") != "expand_story" or step.status != "success":
+                continue
+            observation = step.observation if isinstance(step.observation, dict) else {}
+            result = observation.get("result") if isinstance(observation, dict) else None
+            if isinstance(result, dict):
+                text = str(result.get("long_text") or result.get("source_text") or "").strip()
+                if text:
+                    return text
+        return ""
+
     def _project_asset_context(self) -> list[dict]:
         """Expose only current-project asset identity/status to the planner."""
         if not self.db or not self.project_id:
@@ -882,33 +1147,64 @@ class AgentRuntime:
             emit=lambda t, p: self._emit_sync(t, p),
         )
         # 用 RetryableTool 包装 BaseTool（自动重试 + fallback）
-        media_tools = {
-            "generate_character_portrait", "generate_prop_image", "generate_scene_image",
-            "generate_storyboard_image", "generate_video", "generate_media_batch",
-        }
-        wrapped = RetryableTool(tool, max_retries=0) if isinstance(tool, BaseTool) and tool_name in media_tools else (RetryableTool(tool) if isinstance(tool, BaseTool) else tool)
+        media_tools = _MEDIA_TOOL_NAMES
+        wrapped = RetryableTool(tool) if isinstance(tool, BaseTool) else tool
         try:
             result = await wrapped.call(ctx, params)
+            if tool_name in media_tools:
+                media_error = self._media_result_error(tool_name, result)
+                if media_error:
+                    return await self._pause_for_media_failure(tool_name, params, media_error)
+            # 成功一次即清零连续失败计数（只统计"连续"失败）
+            self._last_failed_tool = None
+            self._tool_failure_streak = 0
             return {"success": True, "result": result}, "success"
         except ToolValidationError as e:
             return {"error": str(e)}, "failed"
         except RetryableError as e:
             if tool_name in media_tools:
-                recovery = {"success": False, "error": str(e), "worker": "media-recovery"}
                 await self._emit(EventType.MEDIA_RECOVERY_STARTED, {
                     "tool": tool_name, "params": params, "worker": "media-recovery",
+                    "retry_exhausted": True,
                 })
-                try:
-                    recovery_result = await RetryableTool(tool, max_retries=0).call(ctx, params)
-                    recovery = {"success": True, "result": recovery_result, "worker": "media-recovery"}
-                except Exception as recovery_error:
-                    recovery = {"success": False, "error": str(recovery_error), "worker": "media-recovery"}
                 await self._emit(EventType.MEDIA_RECOVERY_FINISHED, {
-                    "tool": tool_name, "success": recovery["success"],
-                    "error": recovery.get("error"), "worker": "media-recovery",
+                    "tool": tool_name, "success": False,
+                    "error": str(e), "worker": "media-recovery",
+                    "retry_exhausted": True,
                 })
-                return {"error": str(e), "recovery": recovery}, "failed"
-            # 挂起等待用户决策
+                return await self._pause_for_media_failure(tool_name, params, str(e))
+            # 非媒体工具：先让 agent 自我纠正——失败作为 observation 返回，
+            # agent 下一步 think 时可以换方案/换参数，而不是一次失败就暂停。
+            # 防死循环：同一工具连续失败达到 TOOL_FAILURE_PAUSE_THRESHOLD 才
+            # 挂起等用户决策（retry/change_model/skip）。
+            if self._last_failed_tool == tool_name:
+                self._tool_failure_streak += 1
+            else:
+                self._last_failed_tool = tool_name
+                self._tool_failure_streak = 1
+            if self._tool_failure_streak < self.TOOL_FAILURE_PAUSE_THRESHOLD:
+                logger.warning(
+                    "[agent] task %s tool %s failed (%s/%s consecutive), agent will self-correct: %s",
+                    self.task_id, tool_name, self._tool_failure_streak,
+                    self.TOOL_FAILURE_PAUSE_THRESHOLD, e,
+                )
+                await self._emit_notice(
+                    "warning",
+                    f"工具 {tool_name} 执行失败：{_err_brief(str(e))}，agent 将尝试其他方案",
+                    source="tool",
+                )
+                return {
+                    "success": False,
+                    "error": str(e),
+                    "retryable_exhausted": True,
+                    "consecutive_failures": self._tool_failure_streak,
+                }, "failed"
+            # 同一工具连续失败达到阈值：挂起等待用户决策
+            await self._emit_notice(
+                "error",
+                f"工具 {tool_name} 连续 {self._tool_failure_streak} 次执行失败，任务已暂停等待处理",
+                source="tool",
+            )
             self.pending_request = {
                 "type": "tool_error",
                 "step_id": str(self._step_count),
@@ -925,6 +1221,45 @@ class AgentRuntime:
             return {"error": str(e), "non_retryable": True}, "failed"
         except Exception as e:
             return {"error": str(e), "type": type(e).__name__}, "failed"
+
+    @staticmethod
+    def _media_result_error(tool_name: str, result: Any) -> str | None:
+        """Reject incomplete media results before the Agent can plan downstream work."""
+        if not isinstance(result, dict):
+            return "媒体工具没有返回有效结果"
+        if tool_name == "generate_media_batch":
+            failed = int(result.get("failed") or 0)
+            if failed:
+                return f"{failed} 个资产生成失败，不能继续后续操作"
+            return None
+        if result.get("dev_fallback"):
+            return "媒体服务只返回了占位结果，资产没有真实生成"
+        if not str(result.get("url") or "").strip():
+            return "媒体工具没有返回可用资产地址"
+        return None
+
+    async def _pause_for_media_failure(
+        self,
+        tool_name: str,
+        params: dict,
+        error: str,
+    ) -> tuple[dict, str]:
+        """Pause media failures so Agent cannot consume incomplete assets downstream."""
+        self.pending_request = {
+            "type": "tool_error",
+            "step_id": str(self._step_count),
+            "tool": tool_name,
+            "error": error,
+            "params": params,
+            "fallback_model_id": getattr(self.registry.get(tool_name), "fallback_model_id", None),
+            "available_models": self._list_available_models(self.registry.get(tool_name)),
+        }
+        await self._emit(EventType.TOOL_ERROR, self.pending_request)
+        self.state = AgentState.PAUSED
+        return {
+            "error": error,
+            "pending": "awaiting_user_recovery",
+        }, "paused"
 
     async def _resume_from_tool_error(self, user_response: Any) -> bool:
         """用户对 tool_error 的响应：retry / change_model / skip。
@@ -980,12 +1315,11 @@ class AgentRuntime:
             observation=observation,
             status=status,
         )
-        await self._emit(EventType.OBSERVATION, {
-            "step": self._step_count,
-            "success": status == "success",
-            "result": observation.get("result") if status == "success" else None,
-            "error": observation.get("error"),
-        })
+        await self._emit(EventType.OBSERVATION, self._observation_event_payload(
+            observation,
+            status,
+            self._step_count,
+        ))
         # 无论成功失败，都返回 False 让主循环继续 think 下一步
         return False
 
@@ -1006,23 +1340,137 @@ class AgentRuntime:
             for m in models
         ]
 
-    async def _add_failed_step(self, error: str, action: dict) -> None:
+    async def _handle_parse_failure(self, error: str) -> None:
+        """记录一次 LLM 输出解析失败（空响应 / 非法 JSON）。
+
+        两级熔断：
+        - 连续失败首次达到 MAX_CONSECUTIVE_PARSE_FAILURES：不暂停，向 memory
+          注入系统提示（要求严格输出单个 JSON 决策对象），重置计数，发
+          agent_notice(warning) 后继续跑，给模型一次自我纠正的机会；
+        - 同一任务第二次达到（自我纠正无效）：走与 llm_call_failed 相同的
+          PAUSED 路径（发 TASK_PAUSED + 置 pending_request），让用户看到根因
+          并通过 /resume 恢复，而不是用全量 prompt 空转到 max_steps。
+        暂停时计数清零，用户恢复后可再获得完整的一轮重试预算。
+        """
+        self._consecutive_parse_failures += 1
+        # 空响应通常是供应商瞬时没有返回内容，属于内部重试，不是用户操作
+        # 失败。不要写入 failed step / observation，避免前端显示误导性的
+        # “失败：LLM returned empty response”。真正的格式错误仍保留失败记录。
+        if error == "LLM returned empty response":
+            await self._emit_notice(
+                "warning",
+                "模型暂未返回内容，正在自动重试",
+                source="llm",
+            )
+        else:
+            # 解析失败属于 Agent 自我纠错过程，不是用户任务失败；保留在
+            # memory 供 Agent 诊断，但标记为 internal，前端不展示原始模型输出。
+            await self._add_failed_step(error, {}, internal=True)
+        if self._consecutive_parse_failures < self.MAX_CONSECUTIVE_PARSE_FAILURES:
+            return
+        failures = self._consecutive_parse_failures
+        if not self._parse_breaker_tripped:
+            # 第一次熔断：注入格式提示 + 重置计数 + 继续（自动恢复）
+            self._parse_breaker_tripped = True
+            hint = (
+                "系统提示：你连续多次输出无法解析的内容。请严格输出单个 JSON 对象："
+                '{"thought": "...", "action": {"tool": "...", "params": {...}}}，'
+                "不要输出其他文字。"
+            )
+            # 提示写进刚记录的 failed step 的 observation，下次 think 时
+            # agent 能在 recent_steps 里看到，满足"agent 自知发生过异常"。
+            if self.memory.short_term:
+                last = self.memory.short_term[-1]
+                if isinstance(last.observation, dict):
+                    last.observation["system_hint"] = hint
+            self._consecutive_parse_failures = 0
+            logger.warning(
+                "[agent] task %s: parse breaker tripped (%s consecutive failures); "
+                "injected format hint and continuing (last error: %s)",
+                self.task_id, failures, error,
+            )
+            await self._emit_notice(
+                "warning",
+                f"LLM 连续 {failures} 次输出无法解析的内容，已自动注入格式提示并继续执行",
+                source="llm",
+            )
+            return
+        # 第二次熔断：自我纠正无效，暂停等人工
+        logger.warning(
+            "[agent] task %s: %s consecutive LLM output parse failures after auto-recovery, pausing task (last error: %s)",
+            self.task_id, failures, error,
+        )
+        self.pending_request = {
+            "type": "auto_recovery",
+            "question": (
+                f"LLM 连续 {failures} 次返回无法解析的内容（空响应或非法 JSON）。"
+                "为避免继续消耗 token，任务已暂停。"
+                "请检查模型配置或调整需求描述后回复任意内容重试。"
+            ),
+            "options": ["重试", "终止任务"],
+        }
+        await self._emit_notice(
+            "error",
+            "LLM 输出连续无法解析，自动纠正未生效，任务已暂停，请检查模型配置后恢复",
+            source="llm",
+        )
+        await self._emit(EventType.TASK_PAUSED, {
+            "reason": "llm_output_parse_failed",
+            "error": "LLM 输出格式无法解析，已暂停等待恢复",
+            "consecutive_failures": failures,
+        })
+        # 清零：resume 后若再次连续失败会重新累计到阈值再暂停。
+        self._consecutive_parse_failures = 0
+        self.state = AgentState.PAUSED
+
+    async def _add_failed_step(self, error: str, action: dict, *, internal: bool = False) -> None:
+        observation = {"error": error}
+        if internal:
+            observation["internal"] = True
         self.memory.add_step(
             step_number=self._step_count,
             thought="",
             action=action,
-            observation={"error": error},
+            observation=observation,
             status="failed",
         )
         # 发射 OBSERVATION 事件，让前端能看到 LLM 输出格式错误的反馈
         # （此前只记录到 memory 不发事件，前端在连续格式错误时看不到任何反馈，
         # agent 看似"卡住"，直到 max_steps 耗尽才收到 TASK_FAILED）
-        await self._emit(EventType.OBSERVATION, {
-            "step": self._step_count,
-            "success": False,
-            "result": None,
-            "error": error,
-        })
+        #
+        # 关键：必须把 action 字段也带进 payload。
+        # 前端 use-agent-store 的 observation 处理器靠
+        # `obs.action.tool === '_llm_call'` 来识别 LLM 错误并显示红色 banner。
+        # 之前漏发 action 字段时，banner 永远不出现，用户看到的就是"前端没提示 + 状态没回滚"。
+        await self._emit(EventType.OBSERVATION, self._observation_event_payload(
+            observation,
+            "failed",
+            self._step_count,
+            action=action,
+        ))
+
+    @staticmethod
+    def _observation_event_payload(
+        observation: dict | None,
+        status: str,
+        step: int,
+        *,
+        action: dict | None = None,
+    ) -> dict:
+        """构造前端观察事件，省略没有实际内容的 null 字段。"""
+        source = observation if isinstance(observation, dict) else {}
+        payload: dict = {"step": step, "success": status == "success"}
+        result = source.get("result")
+        error = source.get("error")
+        if result is not None:
+            payload["result"] = result
+        if error:
+            payload["error"] = error
+        if source.get("internal") is True:
+            payload["internal"] = True
+        if action is not None:
+            payload["action"] = action
+        return payload
 
     async def _emit(self, event_type: str, payload: dict) -> None:
         event = AgentEvent(
@@ -1032,6 +1480,16 @@ class AgentRuntime:
             payload=payload,
         )
         await event_bus.publish(event)
+
+    async def _emit_notice(self, level: str, message: str, source: str | None = None) -> None:
+        """发 agent_notice 事件：系统自动重试/恢复动作对用户可见。
+
+        payload 保持 JSON 可序列化：{level, message, source?}。
+        """
+        payload: dict = {"level": level, "message": message}
+        if source:
+            payload["source"] = source
+        await self._emit(EventType.AGENT_NOTICE, payload)
 
     def _emit_sync(self, event_type: str, payload: dict) -> None:
         """ToolContext.emit 的同步包装。"""

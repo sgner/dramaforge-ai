@@ -1,14 +1,14 @@
-"""工具模块：18 个原子能力。
+"""Agent 原子工具注册模块。
 
 分类：
 - planning (3): parse_user_goal, create_plan, ask_user
-- llm (6): generate_script, extract_characters, extract_props, extract_scenes, extract_shots, optimize_prompt
+- llm (7): expand_story, generate_script, extract_characters, extract_props, extract_scenes, extract_shots, optimize_prompt
 - image (4): generate_character_portrait, generate_prop_image, generate_scene_image, generate_storyboard_image
 - video (1): generate_video
 - audio (2): generate_voiceover, generate_bgm
-- asset (2): save_asset, get_artifacts
+- asset (4): save_asset, get_artifacts, read_text_asset, update_text_asset
 
-总计 18 个。
+总计 24 个。
 """
 from .base import (
     BaseTool,
@@ -30,6 +30,7 @@ from .llm_tools import (
     ExtractPropsTool,
     ExtractScenesTool,
     ExtractShotsTool,
+    ExpandStoryTool,
     GenerateScriptTool,
     OptimizePromptTool,
 )
@@ -42,17 +43,23 @@ from .image_tools import (
 from .video_tools import GenerateVideoTool
 from .media_batch import GenerateMediaBatchTool
 from .audio_tools import GenerateBgmTool, GenerateVoiceoverTool
-from .asset_tools import GetArtifactsTool, SaveAssetTool
+from .asset_tools import (
+    GetArtifactsTool,
+    ReadTextAssetTool,
+    SaveAssetTool,
+    UpdateTextAssetTool,
+)
 from .asset_intelligence_tools import InspectAssetTool, PrepareCharacterAssetTool
 
 
-# 18 个工具的元组，便于注册
+# 全部工具的元组，便于注册
 ALL_TOOLS: tuple[type[BaseTool], ...] = (
     # planning
     ParseUserGoalTool,
     CreatePlanTool,
     AskUserTool,
     # llm
+    ExpandStoryTool,
     GenerateScriptTool,
     ExtractCharactersTool,
     ExtractPropsTool,
@@ -73,6 +80,8 @@ ALL_TOOLS: tuple[type[BaseTool], ...] = (
     # asset
     SaveAssetTool,
     GetArtifactsTool,
+    ReadTextAssetTool,
+    UpdateTextAssetTool,
     InspectAssetTool,
     PrepareCharacterAssetTool,
 )
@@ -92,7 +101,7 @@ def build_default_registry(only: list[str] | None = None) -> ToolRegistry:
 
 
 def list_tool_metadata() -> list[dict]:
-    """导出 18 个工具的元数据给前端 ToolPalette。"""
+    """导出工具元数据给前端 ToolPalette。"""
     from .base import BaseTool
     out: list[dict] = []
     for cls in ALL_TOOLS:
@@ -122,6 +131,7 @@ __all__ = [
     "CreatePlanTool",
     "AskUserTool",
     # llm
+    "ExpandStoryTool",
     "GenerateScriptTool",
     "ExtractCharactersTool",
     "ExtractPropsTool",
@@ -142,6 +152,8 @@ __all__ = [
     # asset
     "SaveAssetTool",
     "GetArtifactsTool",
+    "ReadTextAssetTool",
+    "UpdateTextAssetTool",
     "InspectAssetTool",
     "PrepareCharacterAssetTool",
     "ALL_TOOLS",

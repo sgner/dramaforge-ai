@@ -41,7 +41,19 @@ def _pack(task_type: str, rules: list[str], steps: list[WorkflowStep]) -> RulePa
 
 _COMMON_STEPS = [WorkflowStep(id="clarify_source", description="Confirm structured source and missing inputs", tool="ask_user")]
 _PACKS = {
-    "drama_short.v1": _pack("drama_short", ["A script is required before media generation."], _COMMON_STEPS + [WorkflowStep(id="script", description="Create or validate the script", tool="generate_script", depends_on=["clarify_source"]), WorkflowStep(id="storyboard", description="Create storyboard", tool="generate_storyboard_image", depends_on=["script"]), WorkflowStep(id="video", description="Generate video", tool="generate_video", depends_on=["storyboard"])]),
+    "drama_short.v1": _pack(
+        "drama_short",
+        [
+            "A script is required before media generation.",
+            "An idea or short synopsis must be expanded into long-form story source before script generation.",
+        ],
+        _COMMON_STEPS + [
+            WorkflowStep(id="story_expansion", description="Expand an idea or short synopsis into complete story source", tool="expand_story", depends_on=["clarify_source"]),
+            WorkflowStep(id="script", description="Create or validate the script", tool="generate_script", depends_on=["story_expansion"]),
+            WorkflowStep(id="storyboard", description="Create storyboard", tool="generate_storyboard_image", depends_on=["script"]),
+            WorkflowStep(id="video", description="Generate video", tool="generate_video", depends_on=["storyboard"]),
+        ],
+    ),
     "documentary.v1": _pack("documentary", ["Claims must retain source provenance."], _COMMON_STEPS + [WorkflowStep(id="research", description="Validate facts and outline", tool="parse_user_goal", depends_on=["clarify_source"]), WorkflowStep(id="script", description="Draft documentary script", tool="generate_script", depends_on=["research"]), WorkflowStep(id="video", description="Generate documentary video", tool="generate_video", depends_on=["script"])]),
     "promotion.v1": _pack("promotion", ["Promotion claims must match the approved brief."], _COMMON_STEPS + [WorkflowStep(id="brief", description="Validate promotion brief", tool="parse_user_goal", depends_on=["clarify_source"]), WorkflowStep(id="video", description="Generate promotional video", tool="generate_video", depends_on=["brief"])]),
     "commercial.v1": _pack("commercial", ["Product claims and offers must match product information."], _COMMON_STEPS + [WorkflowStep(id="product", description="Validate product information", tool="parse_user_goal", depends_on=["clarify_source"]), WorkflowStep(id="video", description="Generate commercial video", tool="generate_video", depends_on=["product"])]),

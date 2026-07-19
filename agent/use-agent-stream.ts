@@ -1,4 +1,9 @@
 /**
+ * @deprecated 该 hook 已被 agent/agent-stream-manager.ts（全局 SSE 管理器）取代，
+ * 生产代码不再引用（仅 tests/agent/use-agent-stream.test.ts 仍在用）。
+ * 注意：本文件内的 TYPES 清单未与后端 EventType 全量同步（缺 tool_error 等
+ * Spec B 事件），如需复用请先对齐 agent-stream-manager.ts 的 EVENT_TYPES。
+ *
  * useAgentStream — SSE 客户端 hook。
  *
  * 用法：

@@ -23,6 +23,7 @@ import { CanvasAssetPanel } from './CanvasAssetPanel';
 import { ImageEditModal } from './ImageEditModal';
 import { ApiSettingsModal } from './ApiSettingsModal';
 import { ComposerPanel } from './ComposerPanel';
+import { TextReader } from './TextReader';
 import {
   screenToWorld,
   applyViewportTransform,
@@ -83,6 +84,11 @@ export const InfiniteCanvas: React.FC<{
   const apiConfig = useCanvasStore((s) => s.apiConfig);
   const setApiConfig = useCanvasStore((s) => s.setApiConfig);
   const loadProject = useCanvasStore((s) => s.loadProject);
+  const hydrateFromBackend = useCanvasStore((s) => s.hydrateFromBackend);
+  const textReaderAsset = useCanvasStore((s) => s.textReaderAsset);
+  const textReaderInitialMode = useCanvasStore((s) => s.textReaderInitialMode);
+  const closeTextReader = useCanvasStore((s) => s.closeTextReader);
+  const updateTextAssetBody = useCanvasStore((s) => s.updateTextAssetBody);
 
   // Load project data when projectId changes
   useEffect(() => {
@@ -106,6 +112,8 @@ export const InfiniteCanvas: React.FC<{
             r.failed,
           );
         }
+        // 迁移完成后从后端拉一次最新状态（防本地 store 与 DB 不一致）
+        await hydrateFromBackend();
       } catch (e) {
         // 静默：迁移失败不影响画布使用
         // eslint-disable-next-line no-console
@@ -115,7 +123,7 @@ export const InfiniteCanvas: React.FC<{
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [hydrateFromBackend]);
 
   // 调试钩子：window.__dramaforgeReRunMigration() 可在控制台手动触发迁移
   // （先清 localStorage 标志，再次刷新）
@@ -225,6 +233,26 @@ export const InfiniteCanvas: React.FC<{
 
   const handleWheel = useCallback(
     (e: WheelEvent) => {
+      // 关键修复：board 上的原生 wheel 监听器在 React 合成事件之前触发，
+      // 如果不检查 target 而直接 preventDefault，会吞掉所有 modal/弹窗内部的
+      // 滚轮滚动（TextReader、PromptTemplateModal、AssetManagerModal、
+      // ImageEditModal、CanvasLogModal、ApiSettingsModal 等）。
+      // 任何在画布上叠层展示、可滚动的 UI 容器都需要在这里被识别并跳过。
+      const target = e.target as Element | null;
+      if (target && target.closest && target.closest(
+        '.text-reader-backdrop,' +
+        '.prompt-template-modal,' +
+        '.asset-manager-modal,' +
+        '.image-edit-modal,' +
+        '.log-modal,' +
+        '.api-settings-modal,' +
+        '.api-rh-editor-overlay,' +
+        '.lightbox-overlay,' +
+        '.output-lightbox'
+      )) {
+        // 让浏览器走默认滚动路径，由 modal 内部的 overflow: auto 元素处理
+        return;
+      }
       e.preventDefault();
       const rect = getBoardRect();
       if (!rect) return;
@@ -1057,6 +1085,16 @@ export const InfiniteCanvas: React.FC<{
         config={apiConfig}
         onSave={setApiConfig}
       />
+
+      {/* 文本阅读器（小说/脚本） */}
+      {textReaderAsset && (
+        <TextReader
+          asset={textReaderAsset}
+          initialMode={textReaderInitialMode}
+          onSave={(body) => updateTextAssetBody(textReaderAsset.id, body)}
+          onClose={closeTextReader}
+        />
+      )}
 
       {selected.size > 1 && (
         <div className="multi-select-bar">

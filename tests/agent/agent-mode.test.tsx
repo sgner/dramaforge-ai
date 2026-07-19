@@ -7,6 +7,7 @@ import { AgentMode } from '@/agent/agent-mode';
 import { api } from '@/services/apiClient';
 import { useAgentStore } from '@/agent/use-agent-store';
 import { useCanvasStore } from '@/components/infinite-canvas/use-canvas-store';
+import { I18nProvider } from '@/i18n';
 
 describe('<AgentMode />', () => {
   beforeEach(() => {
@@ -64,6 +65,37 @@ describe('<AgentMode />', () => {
     fireEvent.click(screen.getByTestId('agent-mode-submit'));
     await waitFor(() => expect(api.startAgent).toHaveBeenCalled());
     expect(useAgentStore.getState().taskId).toBe('t-1');
+  });
+
+  it('sends the current UI language when creating an Agent task', async () => {
+    localStorage.setItem('dramaforge_language', 'ja');
+    vi.spyOn(api, 'startAgent').mockResolvedValue({ id: 't-ja' } as any);
+    vi.spyOn(api, 'listAgentTasks').mockResolvedValue([]);
+    vi.spyOn(api, 'getUserPreference').mockRejectedValue(new Error('offline'));
+    useCanvasStore.getState().setApiConfig({
+      providers: [{ id: 'custom-api', name: 'Custom API', baseUrl: 'https://example.test/v1', protocol: 'openai', enabled: true, apiKey: '', defaultModel: '', chatModels: ['chat-1'], imageModels: [], videoModels: [] } as any],
+      modelBindings: [
+        { kind: 'llm', providerId: 'custom-api', modelId: 'chat-1' },
+        { kind: 'image', providerId: '', modelId: '' },
+        { kind: 'video', providerId: '', modelId: '' },
+      ],
+    });
+
+    render(
+      <I18nProvider>
+        <AgentMode projectId="p1" />
+      </I18nProvider>,
+    );
+    fireEvent.change(screen.getByTestId('agent-mode-input'), { target: { value: '短編を作る' } });
+    fireEvent.click(screen.getByTestId('agent-mode-submit'));
+
+    await waitFor(() => expect(api.startAgent).toHaveBeenCalled());
+    expect(api.startAgent).toHaveBeenCalledWith(
+      'p1',
+      '短編を作る',
+      expect.objectContaining({ language: 'ja' }),
+    );
+    localStorage.removeItem('dramaforge_language');
   });
 
   it('blocks Agent startup when the LLM capability binding is absent', async () => {

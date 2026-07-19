@@ -16,7 +16,50 @@
 import React, { useEffect, useRef } from 'react';
 import { X, Sparkles, Wrench, Eye, ListTodo } from 'lucide-react';
 import { useAgentStore, AgentEventLike } from './use-agent-store';
+import { PlanList, type PlanStepInfo } from './plan-list';
 import './agent.css';
+
+const TOOL_PARAMETER_HELP: Record<string, { label: string; empty: string; params: Record<string, string> }> = {
+  parse_user_goal: { label: '解析创作目标', empty: '自动读取你输入的目标，提取题材、时长、风格和交付内容。', params: { user_text: '你对作品的原始描述' } },
+  create_plan: { label: '制定执行计划', empty: '根据已确认的目标和素材自动安排执行步骤。', params: { goal: '已经解析的创作目标', available_tools: '允许使用的工具范围' } },
+  ask_user: { label: '向你确认信息', empty: '当前没有额外参数；agent 正在等待你的回答。', params: { question: '要向你确认的问题', options: '可选答案（也可以直接输入）' } },
+  generate_script: { label: '编写脚本', empty: '使用当前已确认的故事来源生成分场脚本。', params: { long_text: '故事原文或宣传文案', source_kind: '素材类型：小说/短剧或宣传文案' } },
+  extract_characters: { label: '整理角色信息', empty: '从当前脚本中整理角色列表，不需要手动填写参数。', params: { script: '要分析的脚本内容' } },
+  extract_props: { label: '整理道具信息', empty: '从当前脚本中整理道具列表，不需要手动填写参数。', params: { script: '要分析的脚本内容' } },
+  extract_scenes: { label: '整理场景信息', empty: '从当前脚本中整理场景列表，不需要手动填写参数。', params: { script: '要分析的脚本内容' } },
+  extract_shots: { label: '整理分镜信息', empty: '从当前脚本中整理镜头列表，不需要手动填写参数。', params: { script: '要分析的脚本内容' } },
+  optimize_prompt: { label: '优化生成提示词', empty: '把画面描述转换成适合模型生成的专业提示词。', params: { prompt: '需要优化的画面描述', target: '生成目标：图片或视频', context: '角色、场景和风格等上下文' } },
+  generate_character_portrait: { label: '生成角色设计图', empty: '根据角色设定生成角色参考图/三视图。', params: { character: '角色设定', reference_asset_ids: '参考资产', model_id: '使用的图片模型' } },
+  generate_prop_image: { label: '生成道具图', empty: '根据道具设定生成可复用的道具参考图。', params: { prop: '道具设定', reference_asset_ids: '参考资产', model_id: '使用的图片模型' } },
+  generate_scene_image: { label: '生成场景图', empty: '根据场景设定生成环境参考图。', params: { scene: '场景设定', reference_asset_ids: '参考资产', model_id: '使用的图片模型' } },
+  generate_storyboard_image: { label: '生成分镜图', empty: '结合分镜、角色、场景和道具参考生成分镜画面。', params: { shot: '分镜描述', characters: '角色参考', props: '道具参考', scene_asset_id: '场景参考资产' } },
+  generate_media_batch: { label: '批量生成媒体资产', empty: '并行生成多个图片或视频资产，单项失败不会阻塞其他任务。', params: { jobs: '待生成的图片/视频任务列表' } },
+  generate_video: { label: '生成视频片段', empty: '根据分镜描述和参考图生成视频片段。', params: { shot: '分镜描述', reference_urls: '角色或场景参考图', model_id: '使用的视频模型' } },
+  generate_voiceover: { label: '生成配音', empty: '把旁白或台词转换成语音。', params: { text: '需要朗读的文字', voice: '音色选择' } },
+  generate_bgm: { label: '生成背景音乐', empty: '根据情绪和时长生成背景音乐。', params: { mood: '音乐情绪', duration_sec: '音乐时长（秒）', style: '音乐风格' } },
+  save_asset: { label: '保存资产', empty: '把生成结果保存到当前项目资产库。', params: { asset_kind: '资产类型', name: '资产名称', content: '要保存的内容' } },
+  get_artifacts: { label: '查询项目资产', empty: '查询当前项目已经生成或保存的资产。', params: { asset_kind: '要查询的资产类型' } },
+};
+
+function summarizeToolValue(value: any): string {
+  if (value === null || value === undefined || value === '') return '未提供';
+  if (Array.isArray(value)) return value.length ? `已提供 ${value.length} 项` : '空列表';
+  if (typeof value === 'object') {
+    const name = value.name || value.title || value.id;
+    return name ? `已提供「${String(name).slice(0, 50)}」` : '已提供结构化信息';
+  }
+  const text = String(value);
+  return text.length > 100 ? `${text.slice(0, 100)}…` : text;
+}
+
+export function formatToolCall(tool: string, params: Record<string, any> = {}): string {
+  const help = TOOL_PARAMETER_HELP[tool];
+  const label = help?.label || tool.replace(/_/g, ' ');
+  const entries = Object.entries(params).filter(([, value]) => value !== undefined && value !== null && value !== '');
+  if (!entries.length) return `${label}\n说明：${help?.empty || '正在执行这项操作。'}\n技术名称：${tool}`;
+  const lines = entries.map(([key, value]) => `${help?.params[key] || key}：${summarizeToolValue(value)}`);
+  return `${label}\n${lines.join('；')}\n技术名称：${tool}`;
+}
 
 function fmtPayload(ev: AgentEventLike): string {
   const p = ev.payload || {};
@@ -32,13 +75,24 @@ function fmtPayload(ev: AgentEventLike): string {
   if (ev.type === 'task_resumed') return `▶ 任务已恢复`;
   if (ev.type === 'cost_update') return `💰 累计消耗 $${Number(p.cost_usd || 0).toFixed(4)} (${p.tokens || 0} tokens)`;
   if (ev.type === 'goal_parsed') return `🎯 已解析目标: ${(p.plan?.[0]?.title) || '生成计划'}`;
+  if (typeof p.message === 'string' && p.message.trim()) return p.message;
   if (typeof p.text === 'string') return p.text;
-  if (typeof p.tool === 'string') {
-    const params = p.params ? JSON.stringify(p.params).slice(0, 80) : '';
-    return `${p.tool}${params ? ' ' + params : ''}`;
+  // 历史记录可能仍带有旧版的空响应错误；这类情况是内部自动恢复，
+  // 不应在用户界面显示为失败。
+  if (p.tool === '_llm_call' && typeof p.error === 'string' && /empty response/i.test(p.error)) {
+    return '模型暂未返回内容，正在自动重试';
   }
+  if (typeof p.tool === 'string') {
+    return formatToolCall(p.tool, p.params && typeof p.params === 'object' ? p.params : {});
+  }
+  // 后端在没有返回详细结果时可能携带 result=null。错误信息必须优先于
+  // 空结果展示，否则用户只会看到“null”，无法判断真正的失败原因。
+  if (typeof p.error === 'string' && p.error.trim()) return `失败：${p.error}`;
   if (p.result !== undefined) {
     const r = p.result;
+    if (r === null) {
+      return p.success === false ? '操作失败（未返回详细结果）' : '操作已完成（未返回详细结果）';
+    }
     if (r && typeof r === 'object' && 'ok' in r) {
       return r.ok ? 'ok' : `error: ${(r as any).error || 'unknown'}`;
     }
@@ -60,6 +114,7 @@ function eventBadge(ev: AgentEventLike): { icon: React.ReactNode; label: string 
     case 'request_user_input': return { icon: <ListTodo size={10} />, label: '提问' };
     case 'task_done': return { icon: <Sparkles size={10} />, label: '完成' };
     case 'task_failed': return { icon: <ListTodo size={10} />, label: '失败' };
+    case 'agent_notice': return { icon: <Wrench size={10} />, label: '系统恢复' };
     default: return { icon: <Sparkles size={10} />, label: ev.type };
   }
 }
@@ -79,6 +134,30 @@ const ThoughtStreamBody: React.FC = () => {
   const artifacts = useAgentStore((s) => s.artifacts);
   const pendingQuestion = useAgentStore((s) => s.pendingQuestion);
   const streamingText = useAgentStore((s) => s.streamingText);
+  const continueConversation = useAgentStore((s) => s.continueConversation);
+
+  // "重试此步" / "从这步开始" 按钮的回调：发 continueConversation 消息
+  // 由后端 runtime 把 user_goal 注入到对话，重新规划 / 重新执行。
+  // 注意：后端目前不会"精确重跑"某一步；agent 会基于消息上下文自行决定。
+  // 这种语义对用户来说已经够用：把"用户期望"明确告诉 agent。
+  const handleRetryStep = async (index: number, step: PlanStepInfo) => {
+    const errSuffix = step.errorMessage ? `（上一步错误：${step.errorMessage.slice(0, 120)}）` : '';
+    const msg = `请重新执行第 ${index + 1} 步：${step.title}（${step.tool || '该步骤'}）${errSuffix}。请只重做这一步。`;
+    try {
+      await continueConversation(msg);
+    } catch (e) {
+      // 错误由 store/SSE 处理；按钮 UI 不变
+      console.warn('[plan-list] retry failed:', e);
+    }
+  };
+  const handleResumeFromStep = async (index: number, step: PlanStepInfo) => {
+    const msg = `请从第 ${index + 1} 步「${step.title}」（${step.tool || '该步骤'}）开始重新执行该步骤及之后的所有步骤。`;
+    try {
+      await continueConversation(msg);
+    } catch (e) {
+      console.warn('[plan-list] resume failed:', e);
+    }
+  };
 
   const latestThought = thoughts[thoughts.length - 1];
   const isEmpty = thoughts.length === 0 && actions.length === 0 && observations.length === 0;
@@ -193,23 +272,18 @@ const ThoughtStreamBody: React.FC = () => {
         </div>
       )}
 
-      {/* 计划 */}
+      {/* 计划 — 完整渲染（不截断），每步含状态指示 + 错误摘要 + 重试/从这步开始按钮 */}
       {plan.length > 0 && (
-        <div className="thought-stream-section">
+        <div className="thought-stream-section" data-testid="thought-stream-plan-section">
           <div className="thought-stream-section-head">📋 执行计划 ({plan.length})</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {plan.slice(0, 5).map((step: any, i: number) => (
-              <div key={i} className="thought-stream-item plan-step">
-                <span className="plan-step-num">{i + 1}</span>
-                <span>{step.title || step.name || step.description || JSON.stringify(step).slice(0, 80)}</span>
-              </div>
-            ))}
-            {plan.length > 5 && (
-              <div className="thought-stream-item" style={{ color: 'var(--muted)' }}>
-                …还有 {plan.length - 5} 步
-              </div>
-            )}
-          </div>
+          <PlanList
+            plan={plan}
+            actions={actions}
+            observations={observations}
+            status={status}
+            onRetryStep={handleRetryStep}
+            onResumeFromStep={handleResumeFromStep}
+          />
         </div>
       )}
 

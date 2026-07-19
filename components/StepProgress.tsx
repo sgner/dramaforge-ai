@@ -1,17 +1,8 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-import { TaskStatus } from '../types';
+import { TaskStatus, LOGICAL_STEPS } from '../types';
 
-const LOGICAL_STEPS = [
-  TaskStatus.PREPROCESSING,
-  TaskStatus.SCRIPT_GENERATION,
-  TaskStatus.CHARACTER_DESIGN,
-  TaskStatus.PROP_DESIGN,
-  TaskStatus.SCENE_DESIGN,
-  TaskStatus.STORYBOARDING,
-  TaskStatus.PROMPT_OPTIMIZATION,
-  TaskStatus.COMPLETED
-];
+// LOGICAL_STEPS 从 types.ts 单一事实源导入（8 步，含 PROP_DESIGN/SCENE_DESIGN），不再本地重复定义。
 
 export const StepProgress = ({ status, stepStatus, progress, sourceType, t }: {
   status: TaskStatus;

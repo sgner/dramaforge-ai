@@ -12,6 +12,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from ..models import Asset
+from .token_limits import DEEPSEEK_V4_PRO_MAX_OUTPUT_TOKENS
 
 
 CHARACTER_STANDARD = {
@@ -153,7 +154,18 @@ def _vision_url(asset: Asset) -> str:
     if not asset.url or not asset.url.startswith("/files/"):
         return asset.url or ""
     filename = asset.url.removeprefix("/files/")
-    path = Path(__file__).resolve().parents[1] / "uploads" / filename
+    # 防路径遍历：asset.url 用户可控（create_asset 接受任意 url）。
+    # 任何目录分量（/、\、.、..）一律拒绝；再取 basename 拼接 resolve
+    # 并校验必须落在 uploads 目录内，避免 base64 泄露本地任意文件。
+    if not filename or "/" in filename or "\\" in filename or filename in (".", ".."):
+        return asset.url
+    safe_name = Path(filename).name
+    if not safe_name or safe_name != filename:
+        return asset.url
+    upload_dir = Path(__file__).resolve().parents[1] / "uploads"
+    path = (upload_dir / safe_name).resolve()
+    if not path.is_relative_to(upload_dir.resolve()):
+        return asset.url
     if not path.is_file():
         return asset.url
     mime = (asset.extra or {}).get("content_type") or mimetypes.guess_type(path.name)[0] or "application/octet-stream"
@@ -263,6 +275,14 @@ async def inspect_asset(*args, **kwargs) -> dict[str, Any]:
         raise ValueError(f"asset '{asset_id}' not found")
     if asset.project_id != project_id:
         raise ValueError(f"asset '{asset_id}' does not belong to project '{project_id}'")
+    # 入口守卫：文本资产（脚本/小说，kind=text）没有可视觉检查的图片，
+    # asset.url 里存的是 markdown 正文。若继续走视觉检查，会把整段 markdown
+    # 当 image_url 发给 vision LLM，得到垃圾分类结果并污染资产（线上真实事故）。
+    if _normalize_role(getattr(asset, "kind", None)) not in MEDIA_KINDS:
+        raise ValueError(
+            f"asset '{asset_id}' 是 {asset.kind} 类型资产，不是图片/视频，"
+            "inspect_asset 只支持视觉资产检查"
+        )
     if not asset.url:
         raise ValueError(f"asset '{asset_id}' has no visual URL")
     if llm_client is None:
@@ -292,12 +312,19 @@ async def inspect_asset(*args, **kwargs) -> dict[str, Any]:
         messages,
         json_schema={"type": "object"},
         temperature=0.1,
-        max_tokens=1200,
+        max_tokens=DEEPSEEK_V4_PRO_MAX_OUTPUT_TOKENS,
     )
     normalized = _normalize_inspection(_parse_json(response.content), asset)
 
     asset_type = normalized["asset_type"]
-    asset.asset_kind = asset_type or asset.asset_kind
+    # asset_kind 回写守卫：只有检测到的类型是有效的已知角色才回写。
+    # vision LLM 经常返回 "missing"/"unknown"/空串 等无效值（_normalize_inspection
+    # 里 asset_type 直接取自 LLM 原始输出），旧实现无条件回写会把资产原有的
+    # asset_kind（如 "script"）覆盖成 "missing"，导致 read_text_asset 拒绝读取、
+    # 资产就此损坏（线上真实事故）。无效值一律保留原 asset_kind。
+    detected_kind = _normalize_role(asset_type)
+    if detected_kind and detected_kind not in {"missing", "unknown"}:
+        asset.asset_kind = detected_kind
     asset.reference_role = normalized["reference_role"] or asset.reference_role
     asset.inspection = normalized
     asset.visual_identity = normalized["visual_identity"] or {}

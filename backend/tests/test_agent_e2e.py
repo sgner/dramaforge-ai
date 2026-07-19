@@ -5,6 +5,7 @@
 跑通一次完整流程，验证 5 个阶段都生成正确资产。
 """
 import asyncio
+import json
 from typing import Any
 
 import pytest
@@ -22,16 +23,42 @@ from app.agent.media_service import StubMediaService
 # ========================
 
 class ScriptedLLM:
-    """按调用次数顺序返回预设的 (tool_name, tool_args) 决策。
+    """按调用来源分发的脚本化 LLM。
 
-    第一个调用返回 sequence[0]，第二个返回 sequence[1]，以此类推。
-    每个 entry 是 (tool_name, tool_args) 或 (None, dict) 用 content 走 parse_decision。
+    两类调用走完全不同的路径（靠 system prompt 区分）：
+
+    1. **决策调用**（runtime ReAct 循环，system 含 "Director Agent"）：
+       维持原行为 —— 按调用顺序 pop sequence，返回 (tool_name, tool_args)。
+    2. **工具内部调用**（create_plan / generate_script / extract_* 在 execute 内
+       经 ctx.generate_llm 发起的专家调用，各用自己的 system prompt）：
+       不碰决策队列，按 system prompt 中的专家角色关键字返回对应的
+       canned JSON，让工具内 _coerce_json 能解析出非空结果。
+
+    计数：decision_calls / internal_calls 分别累计；calls 记录全部 messages。
     """
 
     def __init__(self, sequence: list[tuple[str | None, dict]]):
         self.sequence = sequence
         self.calls: list[list[dict]] = []
+        self.decision_calls = 0
+        self.internal_calls = 0
         self.model = "scripted-stub"
+
+    @staticmethod
+    def _system_prompt(messages: list[dict]) -> str:
+        for m in messages:
+            if isinstance(m, dict) and m.get("role") == "system":
+                return str(m.get("content") or "")
+        return ""
+
+    def _canned_for(self, system: str) -> dict:
+        """按专家 system prompt 角色关键字选择 canned JSON。"""
+        # 顺序敏感：先匹配更具体的角色。关键字取自各工具 system prompt 首行
+        # （"你是 DramaForge 制作经理/编剧/角色分析师/道具师/美术指导/摄影指导"）。
+        for keyword, payload in _INTERNAL_CANNED_RESPONSES:
+            if keyword in system:
+                return payload
+        return {}
 
     async def generate(
         self,
@@ -41,6 +68,20 @@ class ScriptedLLM:
         max_tokens: int = 4000,
     ) -> LLMResponse:
         self.calls.append(messages)
+        system = self._system_prompt(messages)
+
+        # 工具内部调用：返回 canned JSON content，不吃决策队列
+        if "Director Agent" not in system:
+            self.internal_calls += 1
+            return LLMResponse(
+                content=json.dumps(self._canned_for(system), ensure_ascii=False),
+                prompt_tokens=50,
+                completion_tokens=100,
+                cost_usd=0.0,
+            )
+
+        # 决策调用：pop 决策队列
+        self.decision_calls += 1
         if not self.sequence:
             # 默认结束
             return LLMResponse(tool_name="finish_task", tool_args={"summary": "done"})
@@ -129,6 +170,81 @@ SHOTS_PAYLOAD = {
     ],
 }
 
+# 结构化目标（parse_user_goal 输出形状），新版 create_plan 要求 goal 必须是 dict
+GOAL_PAYLOAD = {
+    "title": "雨夜",
+    "genre": "悬疑",
+    "duration_sec": 30,
+    "num_characters": 2,
+    "summary": "少年林尘在雨夜遇到神秘女孩",
+}
+
+# ========================
+# 工具内部 LLM 调用的 canned 响应（非决策调用）
+# ========================
+# 每个工具的 execute() 会经 ctx.generate_llm 再调一次 LLM（各自的专家
+# system prompt），并用 _coerce_json 解析 resp.content。这里按各工具的
+# 解析路径给出最小但合法的 JSON：
+# - create_plan        → data["steps"]            (list[dict])
+# - generate_script    → data["scenes"] 必填 list，其余 characters/props/bigShots/visualSignature 可选
+# - extract_characters → data["characters"]       (list)
+# - extract_props      → data["props"]            (list)
+# - extract_scenes     → data["scenes"]           (list)
+# - extract_shots      → data["shots"]            (list)
+
+CANNED_PLAN_JSON = {"steps": PLAN_STEPS}
+
+CANNED_SCRIPT_JSON = {
+    "scenes": [
+        {
+            "index": 1,
+            "title": "雨夜街道",
+            "location": "城市街道",
+            "time": "夜晚",
+            "characters": ["林尘", "神秘女孩"],
+            "dialogue": "林尘：你是谁？",
+            "description": "雨夜的城市霓虹闪烁，林尘独自走在街上",
+            "duration_sec": 30,
+        },
+    ],
+    "characters": CHARACTERS_PAYLOAD["characters"],
+    "props": [],
+    "bigShots": [
+        {
+            "sceneIndex": 1,
+            "index": 1,
+            "shotType": "中景",
+            "cameraMove": "跟拍",
+            "action": "林尘走在街上",
+            "dialogue": "",
+            "durationSec": 5,
+        },
+    ],
+    "visualSignature": {
+        "medium": "实拍",
+        "aspectRatio": "16:9",
+        "colorIds": ["冷蓝霓虹"],
+        "coreTheme": "雨夜",
+    },
+}
+
+CANNED_CHARACTERS_JSON = {"characters": CHARACTERS_PAYLOAD["characters"]}
+CANNED_PROPS_JSON = {"props": []}
+CANNED_SCENES_JSON = SCENES_PAYLOAD
+CANNED_SHOTS_JSON = SHOTS_PAYLOAD
+
+# system prompt 角色关键字 → canned JSON。
+# 关键字取自各工具 system prompt 首行（planning.py / llm_tools.py），
+# 顺序敏感：都是"你是 DramaForge <角色>"格式，互不包含。
+_INTERNAL_CANNED_RESPONSES: tuple[tuple[str, dict], ...] = (
+    ("制作经理", CANNED_PLAN_JSON),          # CreatePlanTool
+    ("编剧", CANNED_SCRIPT_JSON),            # GenerateScriptTool
+    ("角色分析师", CANNED_CHARACTERS_JSON),  # ExtractCharactersTool
+    ("道具师", CANNED_PROPS_JSON),           # ExtractPropsTool
+    ("美术指导", CANNED_SCENES_JSON),        # ExtractScenesTool
+    ("摄影指导", CANNED_SHOTS_JSON),         # ExtractShotsTool
+)
+
 
 # ========================
 # 公共 fixture
@@ -152,8 +268,8 @@ def task_id():
 async def test_e2e_runs_through_all_5_stages(task_id, media_service):
     """完整跑通 5 阶段：create_plan → generate_script → extract_characters → extract_scenes → extract_shots → finish_task"""
     sequence = [
-        ("create_plan", {"plan": PLAN_STEPS}),
-        ("generate_script", {"topic": "雨夜短片"}),
+        ("create_plan", {"goal": GOAL_PAYLOAD}),
+        ("generate_script", {"novel_text": SCRIPT_PAYLOAD["script"]}),
         ("extract_characters", {"script": SCRIPT_PAYLOAD["script"]}),
         ("extract_scenes", {"script": SCRIPT_PAYLOAD["script"]}),
         ("extract_shots", {"script": SCRIPT_PAYLOAD["script"]}),
@@ -185,8 +301,13 @@ async def test_e2e_runs_through_all_5_stages(task_id, media_service):
             if done:
                 break
 
-        # 验证：LLM 被调用了 6 次（5 阶段 + finish）
-        assert len(llm.calls) == 6, f"expected 6 LLM calls, got {len(llm.calls)}"
+        # 验证：决策调用 6 次（5 阶段 + finish_task）。
+        # 每个阶段工具的 execute() 内部还会经 ctx.generate_llm 各调 1 次
+        # （专家 system prompt，ScriptedLLM 返回 canned JSON，不吃决策队列），
+        # 即内部调用 5 次 → 总调用 11 次。
+        assert llm.decision_calls == 6, f"expected 6 decision calls, got {llm.decision_calls}"
+        assert llm.internal_calls == 5, f"expected 5 internal tool calls, got {llm.internal_calls}"
+        assert len(llm.calls) == 11, f"expected 11 total LLM calls, got {len(llm.calls)}"
 
         # 验证：5 个阶段对应的事件都触发过
         for t in (
@@ -200,10 +321,36 @@ async def test_e2e_runs_through_all_5_stages(task_id, media_service):
         # 验证：任务状态 = DONE
         assert runtime.state.value == "done"
 
-        # 验证：memory 里有 6 条 step 记录（5 阶段 + finish_task）
-        # 之前设计：finish_task 不入 step。现在改为 finish_task 也入 step，
-        # 与其他工具步骤保持一致，便于在 ThoughtStream / 数据库中可观察。
+        # 验证：memory 里有 6 条 step 记录（5 阶段 + finish_task），全部成功
         assert len(memory.short_term) == 6
+        for s in memory.short_term:
+            assert s.status == "success", (
+                f"step {s.action.get('tool')} failed: {s.observation}"
+            )
+
+        # 验证：5 个阶段的产物都非空
+        results = {
+            s.action.get("tool"): s.observation.get("result")
+            for s in memory.short_term
+        }
+        # 1) create_plan → list[dict]，且 bridge 到 memory.plan
+        assert isinstance(results["create_plan"], list) and results["create_plan"], (
+            f"create_plan result empty: {results['create_plan']}"
+        )
+        assert memory.plan, "memory.plan should be populated from create_plan result"
+        # 2) generate_script → scenes + body（ctx.db=None 时跳过 save_asset，不报错）
+        script_result = results["generate_script"]
+        assert script_result["scenes"], "generate_script scenes empty"
+        assert script_result["body"], "generate_script body empty"
+        # 3) extract_characters →  canned 角色列表
+        characters = results["extract_characters"]["characters"]
+        assert characters and characters[0]["name"] == "林尘"
+        # 4) extract_scenes → canned 场景列表
+        scenes = results["extract_scenes"]["scenes"]
+        assert scenes and scenes[0]["name"] == "雨夜街道"
+        # 5) extract_shots → canned 分镜列表
+        shots = results["extract_shots"]["shots"]
+        assert shots and shots[0]["scene"] == "雨夜街道"
     finally:
         collector.close()
 

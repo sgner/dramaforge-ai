@@ -46,6 +46,33 @@ def test_task_creation_persists_profile_before_runtime_is_spawned(client):
         assert task.task_profile["rule_pack_id"] == "drama_short.v1"
 
 
+def test_task_creation_persists_requested_language(client):
+    response = client.post(
+        "/api/agent/tasks",
+        json={"user_goal": "make a custom video", "language": "ja"},
+    )
+    assert response.status_code == 200, response.text
+    task_id = response.json()["id"]
+
+    with SessionLocal() as db:
+        task = db.query(AgentTask).filter_by(id=task_id).first()
+        assert task.task_profile["language"] == "ja"
+
+
+def test_legacy_task_profile_defaults_to_english_language():
+    profile = TaskProfile.model_validate({
+        "task_type": "custom",
+        "input_mode": "single_asset",
+        "source_kind": "topic",
+        "script_required": False,
+        "needs_clarification": False,
+        "deliverables": [],
+        "asset_strategy": "request or create required assets",
+        "rule_pack_id": "custom.v1",
+    })
+    assert profile.language == "en"
+
+
 def test_legacy_task_without_profile_derives_profile_once():
     runtime = AgentRuntime(
         task_id="legacy-1",
@@ -81,6 +108,28 @@ async def test_missing_source_question_has_durable_metadata():
     assert question["missing_inputs"] == ["script"]
     assert question["selection_mode"] == "text"
     assert question["allow_custom"] is True
+
+
+@pytest.mark.asyncio
+async def test_custom_missing_source_question_uses_user_friendly_chinese():
+    profile = classify_task("make a custom video", None, []).model_copy(update={"language": "zh"})
+    runtime = AgentRuntime(
+        task_id="question-custom-copy",
+        llm=object(),
+        memory=AgentMemory(user_goal="make a custom video"),
+        profile=profile,
+    )
+
+    await runtime._pause_for_script_requirement(
+        "need source",
+        LLMResponse(tool_name="ask_user", tool_args={}, cost_usd=0, prompt_tokens=0, completion_tokens=0),
+    )
+
+    question = runtime.pending_request["question"]
+    assert "创作素材" in question
+    assert "希望生成的内容" in question
+    assert "structured source" not in question
+    assert "agreed deliverables" not in question
 
 
 def test_legacy_task_payload_remains_readable():

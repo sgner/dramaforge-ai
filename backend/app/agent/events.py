@@ -47,6 +47,10 @@ class EventType(str, Enum):
     # 多轮对话记忆
     CONVERSATION_CONTINUED = "conversation_continued"
     MEMORY_COMPRESSED = "memory_compressed"
+    # 系统自动恢复 / 异常提示：payload = {level: "info"|"warning"|"error",
+    # message: str, source?: str}。agent 内部任何自动重试/恢复动作都通过
+    # 该事件告知前端，避免"后台默默重试、用户看不到发生了什么"。
+    AGENT_NOTICE = "agent_notice"
 
 
 class AgentEvent:

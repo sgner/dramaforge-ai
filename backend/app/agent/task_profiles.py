@@ -8,9 +8,11 @@ from pydantic import BaseModel, Field
 
 
 TaskType = Literal["drama_short", "documentary", "promotion", "commercial", "custom"]
+AgentLanguage = Literal["zh", "en", "ja", "ko"]
 
 
 class TaskProfile(BaseModel):
+    language: AgentLanguage = "en"
     task_type: TaskType
     input_mode: str
     source_kind: str
@@ -21,6 +23,40 @@ class TaskProfile(BaseModel):
     confidence: float = 0.0
     missing_inputs: list[str] = Field(default_factory=list)
     rule_pack_id: str
+    # 用户在 ask_user 步骤中已确认的 deliverables 列表。
+    # 一旦设置，runtime 不再弹"要哪些交付物"的澄清问题（避免无限循环），
+    # _has_source_for_profile 也以此为门禁 short-circuit。
+    user_confirmed_deliverables: list[str] = Field(default_factory=list)
+    # 用户是否已明确确认"不需要某些默认交付物"（如"只要图，不要视频"）。
+    # 影响 missing_deliverables 的过滤与 finish_task 时的 incomplete 判定。
+    user_excluded_deliverables: list[str] = Field(default_factory=list)
+
+    def with_user_confirmed(
+        self,
+        deliverables: list[str],
+        excluded: list[str] | None = None,
+    ) -> "TaskProfile":
+        """返回新的 profile：把用户确认的 deliverables 写入。
+
+        重要：replaces 而非 merges，避免用户在第一轮说"只要图"，第二轮改口
+        "还要剧本"时残留"视频"——以最新一次回答为准。
+        """
+        cleaned = [str(d).strip() for d in (deliverables or []) if d]
+        excluded_clean = [str(d).strip() for d in (excluded or []) if d]
+        return self.model_copy(update={
+            "user_confirmed_deliverables": cleaned,
+            "user_excluded_deliverables": excluded_clean,
+            # 用户已明确选择 deliverables → 不再 needs_clarification，
+            # 否则会触发"再次询问"循环。
+            "needs_clarification": False,
+            # 用确认的 deliverables 覆盖默认 deliverables，agent 会按此清单生成。
+            "deliverables": cleaned if cleaned else self.deliverables,
+            # missing_inputs 标记对应项已解决
+            "missing_inputs": [
+                m for m in self.missing_inputs
+                if not (m == "structured_source" and cleaned)
+            ],
+        })
 
 
 def _text(user_goal: str, parsed_goal: dict | None) -> str:
@@ -102,6 +138,82 @@ def _detect_single_asset_intent(text: str) -> list[str]:
         if any(kw.lower() in normalized for kw in keywords):
             matched.append(deliverable)
     return matched
+
+
+# 解析用户对"你希望我为你生成哪些交付物"类型问题的回答。
+# 答案通常是 LLM 生成的 option label（中文/英文混排），
+# 需从中识别出 [character, scene, prop, storyboard, script, video, audio] 中的若干。
+_DELIVERABLE_PARSE_RULES: list[tuple[str, tuple[str, ...]]] = [
+    ("script", ("剧本", "脚本", "脚本", "script", "screenplay", "文学脚本")),
+    ("video", ("视频", "短片", "短剧", "video", "短剧", "完整短剧", "广告", "commercial")),
+    ("storyboard", ("分镜", "storyboard", "镜头")),
+    ("character", ("角色", "人物", "character", "肖像", "立绘")),
+    ("scene", ("场景", "环境", "背景", "scene", "地点")),
+    ("prop", ("道具", "物品", "prop")),
+    ("audio", ("音频", "音乐", "音效", "audio", "narration", "配音", "旁白")),
+]
+
+
+def parse_user_deliverable_answer(answer: str | list[str] | None) -> list[str]:
+    """从用户的 ask_user 回答中提取确认的 deliverable 列表。
+
+    输入：用户选项 label 字符串或字符串列表（来自 ask_user_response 的 response 字段）。
+    输出：归一化后的 deliverable 列表（如 ["script", "character", "scene"]）。
+
+    解析规则：
+    1. 对每个 label 文本，扫描 _DELIVERABLE_PARSE_RULES 中所有关键词
+    2. 同一 deliverable 多次出现只记一次
+    3. 包含"全部"/"所有"/"everything" 等词 → 返回空列表（表示无限制，由 agent 全流程）
+
+    这个函数专门解决"用户已回答但 runtime 仍反复询问"的死循环问题：
+    之前的 _answered_source_context 只处理"structured source"（用户上传脚本内容），
+    对于"用户选择哪些交付物"这种语义完全不同的回答不做处理，
+    导致 _selected_task_profile → classify_task 反复把 needs_clarification=True 推回。
+    """
+    if answer is None:
+        return []
+    if isinstance(answer, list):
+        combined = " ".join(str(item) for item in answer)
+    else:
+        combined = str(answer)
+    if not combined.strip():
+        return []
+    lowered = combined.lower()
+    if any(token in combined for token in ("全部", "所有", "everything", "all")):
+        return []  # "全部"=不限制，保留默认 deliverables
+    matched: list[str] = []
+    # 按优先级排序：先匹配 "video"（含"完整短剧"），再匹配更细类
+    ordered_rules = sorted(
+        _DELIVERABLE_PARSE_RULES,
+        key=lambda item: 0 if item[0] in {"video", "script"} else 1,
+    )
+    for deliverable, keywords in ordered_rules:
+        for kw in keywords:
+            if kw.lower() in lowered and deliverable not in matched:
+                matched.append(deliverable)
+                break
+    return matched
+
+
+def is_deliverables_question(question: str | None) -> bool:
+    """判断 ask_user 的问题是否是"询问需要哪些交付物"类型。
+
+    用于在 _answered_source_context 中分流：
+    - 是 → 用 parse_user_deliverable_answer 解析 → user_confirmed_deliverables
+    - 否 → 走原来的 structured source 解析
+    """
+    if not question:
+        return False
+    text = str(question)
+    return any(
+        token in text
+        for token in (
+            "哪些交付物", "哪些资产", "想要哪些", "需要哪些",
+            "希望我为你生成", "希望我生成", "你想要哪些",
+            "需要生成什么", "要哪些", "需要哪些", "你希望",
+            "deliverables", "deliverable",
+        )
+    )
 
 
 def classify_task(user_goal: str, parsed_goal: dict | None, project_assets: list[dict]) -> TaskProfile:

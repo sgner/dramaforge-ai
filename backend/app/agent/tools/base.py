@@ -75,7 +75,12 @@ class ToolContext:
         self.media_service = media_service
         self.api_config = api_config
         self.global_refs = global_refs or []
-        self.artifacts = artifacts or {}
+        # 关键修复：用 `is None` 而不是 `or {}`。`AgentMemory.artifacts` 初始是空 dict，
+        # `{} or {}` 会短路为新空 dict，runtime 后续从 self.memory.artifacts 读看不到
+        # 工具内对 ctx.artifacts 的写入 → 工具生成的脚本/文本资产对 agent 不可见 →
+        # LLM 反复重试同一工具 → max_steps 耗尽 → TASK_FAILED → SSE 关闭。
+        # 用 `is None` 保留同一个对象引用，工具写 ctx.artifacts 就是写 memory.artifacts。
+        self.artifacts = artifacts if artifacts is not None else {}
         self.emit = emit
         self.skip_confirm = skip_confirm
 

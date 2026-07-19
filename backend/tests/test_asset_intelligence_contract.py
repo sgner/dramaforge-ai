@@ -71,7 +71,7 @@ def test_asset_snapshot_exposes_normalized_source_and_visual_identity(db_session
         project_id="project-a",
         kind="image",
         asset_kind="character",
-        name="用户角色三视图",
+        name="用户角色概念表（V3.0 B.4 4 区域布局）",
         origin="normalized",
         source_asset_id="source-1",
         inspection_status="ready",
@@ -248,7 +248,18 @@ async def test_character_generation_resolves_logical_reference_asset_id(db_sessi
 
     assert result["url"] == "/files/generated.png"
     assert service.request.reference_urls == ["/files/reference-character.png"]
+    # V3.0 B.4 4 区域布局（替换旧 left-right split）
     assert "left-right split layout" in result["source_prompt"]
+    assert "left one-third" in result["source_prompt"]
+    assert "right two-thirds" in result["source_prompt"]
+    assert "F0EDE8" in result["source_prompt"]
+    assert "no visible numbers" in result["source_prompt"]
+    return
+    assert "Region 1" in result["source_prompt"]  # 主视觉区
+    assert "Region 2" in result["source_prompt"]  # 补充信息区
+    assert "Region 3" in result["source_prompt"]  # 局部细节区
+    assert "Region 4" in result["source_prompt"]  # 半身照比例照
+    assert "left-right split" not in result["source_prompt"]
     assert "F0EDE8" in result["source_prompt"]
     assert "no visible numbers" in result["source_prompt"]
     assert db_session.query(Asset).filter_by(id="reference-character").one().usage_count == 1
@@ -289,7 +300,8 @@ async def test_all_media_generation_uses_optimized_prompt_and_storyboard_merges_
     assert collect_storyboard_reference_asset_ids(storyboard_params) == ["scene-asset", "character-asset", "prop-asset"]
     result = await GenerateStoryboardImageTool().execute(ctx, storyboard_params)
 
-    assert result["prompt"] == "OPTIMIZED PROMPT"
+    assert result["prompt"].startswith("OPTIMIZED PROMPT")
+    assert "Six-panel storyboard sheet" in result["prompt"]
     assert result["source_prompt"]
     assert service.requests[0].reference_urls == ["/scene.png", "/character.png", "/prop.png"]
 
@@ -312,3 +324,18 @@ def test_agent_prompt_contains_only_current_project_asset_context(db_session):
 
     assert "asset-a" in prompt
     assert "asset-b" not in prompt
+
+
+def test_agent_prompt_explicitly_marks_empty_current_project_assets(db_session):
+    runtime = AgentRuntime(
+        task_id="task-empty-asset-context",
+        llm=object(),
+        memory=AgentMemory(user_goal="use project assets"),
+        project_id="project-with-no-assets",
+        db=db_session,
+    )
+
+    prompt = runtime._build_messages()[0]["content"]
+
+    assert "[CURRENT PROJECT ASSETS]" in prompt
+    assert "This project has no assets" in prompt

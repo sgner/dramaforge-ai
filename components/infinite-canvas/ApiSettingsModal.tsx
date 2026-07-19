@@ -1,4 +1,9 @@
 import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+// 该组件的样式（.api-settings-modal 等 class）定义在 canvas.css 中。
+// 必须显式 import，因为 canvas.css 是按需加载（只在引入 InfiniteCanvas 时才注入）；
+// 改为 eager import 后 modal 单独触发，必须主动把 CSS 拉进来，
+// 否则 modal 渲染为 position:static 的常规块元素，撑开页面造成横向滚动。
+import './canvas.css';
 import {
   Key,
   KeyRound,
@@ -34,6 +39,7 @@ import {
 } from '../../types';
 import { useI18n } from '../../i18n';
 import { api } from '../../services/apiClient';
+import { toast } from '../../utils/toast';
 
 /* ====== Constants ====== */
 const FIXED_IDS = new Set<string>([]);
@@ -265,6 +271,17 @@ interface Props {
 
 export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSave }) => {
   const { t } = useI18n();
+  // 模态刚挂载时短暂忽略 backdrop 点击 — 防止懒加载场景下，
+  // 用户在按钮上的"原始 click 事件"在 chunk 加载完、modal 挂载后，
+  // 被 React 重新派发并冒泡到 backdrop，立即关闭刚打开的 modal。
+  const justOpenedRef = React.useRef(false);
+  React.useEffect(() => {
+    if (open) {
+      justOpenedRef.current = true;
+      const t = setTimeout(() => { justOpenedRef.current = false; }, 300);
+      return () => clearTimeout(t);
+    }
+  }, [open]);
   const [cfg, setCfg] = useState<ApiConfig>(() => normalizeModelBindings(JSON.parse(JSON.stringify(config))));
   const [selectedId, setSelectedId] = useState<string>('');
   const [showRecommend, setShowRecommend] = useState(false);
@@ -431,7 +448,7 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
   const deleteProvider = useCallback(async () => {
     const item = provider();
     if (!item) return;
-    if (isFixedProvider(item.id)) { alert(t('canvasApiSettingsAlertDefaultNoDelete')); return; }
+    if (isFixedProvider(item.id)) { toast.warning(t('canvasApiSettingsAlertDefaultNoDelete')); return; }
     setCfg(prev => ({
       ...prev,
       providers: prev.providers.filter(p => p.id !== item.id),
@@ -520,7 +537,7 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
   const openModelPicker = useCallback(() => {
     const item = provider();
     if (!item) return;
-    if (fetchedModels.length === 0) { alert(t('canvasApiSettingsAlertFetchFirst')); return; }
+    if (fetchedModels.length === 0) { toast.warning(t('canvasApiSettingsAlertFetchFirst')); return; }
     const existing = {
       image: new Set(item.imageModels || []),
       chat: new Set(item.chatModels || []),
@@ -572,7 +589,7 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
   const handleFetchModels = useCallback(async () => {
     const item = provider();
     if (!item) return;
-    if (item.protocol !== 'jimeng' && !item.baseUrl.trim()) { alert(t('canvasApiSettingsAlertFillBaseUrl')); return; }
+    if (item.protocol !== 'jimeng' && !item.baseUrl.trim()) { toast.warning(t('canvasApiSettingsAlertFillBaseUrl')); return; }
     setFetching(true);
     setVerifyResult({ kind: 'info', text: t('canvasApiSettingsVerifyFetchingModels') });
     try {
@@ -633,7 +650,7 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
       setVerifyResult({ kind: 'info', text: t('canvasApiSettingsVerifyJimengHint') });
       return;
     }
-    if (!item.baseUrl.trim()) { alert(t('canvasApiSettingsAlertFillBaseUrl')); return; }
+    if (!item.baseUrl.trim()) { toast.warning(t('canvasApiSettingsAlertFillBaseUrl')); return; }
     setFetching(true);
     setVerifyResult({ kind: 'info', text: t('canvasApiSettingsVerifyVerifyingUrl') });
     try {
@@ -663,7 +680,7 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
     const item = provider();
     if (!item) return;
     if (item.protocol === 'gemini') { setVerifyResult({ kind: 'info', text: t('canvasApiSettingsVerifyGeminiManual') }); return; }
-    if (!item.baseUrl.trim()) { alert(t('canvasApiSettingsAlertFillBaseUrl')); return; }
+    if (!item.baseUrl.trim()) { toast.warning(t('canvasApiSettingsAlertFillBaseUrl')); return; }
     setFetching(true);
     setVerifyResult({ kind: 'info', text: t('canvasApiSettingsVerifyDetectingProtocol') });
     try {
@@ -750,7 +767,7 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
     if (!api) return;
     const input = document.querySelector(`[data-recommend-key="${index}"]`) as HTMLInputElement;
     const key = input?.value?.trim() || '';
-    if (api.protocol !== 'jimeng' && !key) { alert(t('canvasApiSettingsAlertEnterApiKey')); return; }
+    if (api.protocol !== 'jimeng' && !key) { toast.warning(t('canvasApiSettingsAlertEnterApiKey')); return; }
 
     let item = cfg.providers.find(p => p.name.toLowerCase() === api.name.toLowerCase());
     if (!item) {
@@ -2206,12 +2223,26 @@ export const ApiSettingsModal: React.FC<Props> = ({ open, onClose, config, onSav
     );
   };
 
+  // 挂载时刻记录：用于过滤掉"按钮刚点击 → modal lazy chunk 加载完 → 挂载 →
+  // 同一 click 事件被 modal 背景 onClick 立即消费"导致的"开了又关"竞态。
+  // 150ms 阈值足以让原始 click 序列（mousedown→mouseup→click→bubble）走完。
+  const mountedAtRef = useRef<number>(0);
+  useEffect(() => {
+    if (open) {
+      mountedAtRef.current = Date.now();
+    }
+  }, [open]);
+
   if (!open) return null;
 
   return (
     <div
       className="api-settings-modal"
-      onClick={e => { if (e.target === e.currentTarget) onClose(); }}
+      onClick={e => {
+        // 保护：刚挂载 150ms 内的背景点击忽略（属于触发打开的 click 事件尾段）
+        if (Date.now() - mountedAtRef.current < 150) return;
+        if (e.target === e.currentTarget && !justOpenedRef.current) onClose();
+      }}
       onWheel={(e) => e.stopPropagation()}
       onTouchMove={(e) => e.stopPropagation()}
     >

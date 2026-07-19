@@ -1,5 +1,5 @@
 import React, { Suspense, lazy, useState, useEffect, useCallback, useRef } from 'react';
-import { Film, Globe, Settings, ArrowLeft, RotateCw, Loader2, AlertTriangle, PlayCircle, SkipForward, XOctagon, Sparkles, BookOpen, XCircle, CheckCircle, AlertCircle, Info, Shield, ChevronDown, PanelLeftClose, PanelLeftOpen, ChevronRight, Users, Clapperboard, Terminal, ChevronUp, UserPlus, User } from 'lucide-react';
+import { Film, Globe, Settings, ArrowLeft, RotateCw, RefreshCw, Loader2, AlertTriangle, PlayCircle, SkipForward, XOctagon, Sparkles, BookOpen, XCircle, CheckCircle, AlertCircle, Info, Shield, ChevronDown, PanelLeftClose, PanelLeftOpen, ChevronRight, Users, Clapperboard, Terminal, ChevronUp, UserPlus, User } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { NewTaskModal } from './components/NewTaskModal';
 import { EditCharacterModal } from './components/EditCharacterModal';
@@ -11,18 +11,23 @@ import { BigShotDetailModal } from './components/BigShotDetailModal';
 // 用 React.lazy 拆出，首屏只渲染占位，缩短首屏 transform 瀑布。
 const InfiniteCanvas = lazy(() => import('./components/infinite-canvas').then((m) => ({ default: m.InfiniteCanvas })));
 // ApiSettingsModal 同属 infinite-canvas/，但被 App 层 settings 按钮触发；也按需加载避免拉全套画布代码。
-const ApiSettingsModal = lazy(() => import('./components/infinite-canvas/ApiSettingsModal').then((m) => ({ default: m.ApiSettingsModal })));
-import { useCanvasStore } from './components/infinite-canvas/use-canvas-store';
+// 关键：必须 eager import — 懒加载会导致首页点击"设置"按钮时 chunk 还在下载，
+// <Suspense fallback={null}> 渲染 null，React 后续派发原始 click 事件到 backdrop 时
+// 模态被立即关闭，用户体验是"按钮没反应"。
+import { ApiSettingsModal } from './components/infinite-canvas/ApiSettingsModal';
+import { useCanvasStore, migrateLocalProvidersToBackendForce, getLocalProvidersSnapshot } from './components/infinite-canvas/use-canvas-store';
 import { TaskAssetRef } from './components/infinite-canvas/types';
+import { syncProvidersToBackend } from './services/providerSync';
 import { AssetCheckReport } from './components/AssetCheckReport';
 import { TitleEndCardEditor } from './components/TitleEndCardEditor';
 import { runAssetCheck, AssetCheckResult } from './utils/assetChecker';
 import { ProjectList } from './components/ProjectList';
-import { DramaTask, TaskStatus, ArtStyle, BigShot, Character, Language, TaskMode, ApiConfig, ProcessedSegment, createDefaultApiConfig, normalizeModelBindings } from './types';
+import { DramaTask, TaskStatus, ArtStyle, BigShot, Character, Language, TaskMode, ApiConfig, ProcessedSegment, createDefaultApiConfig, normalizeModelBindings, LOGICAL_STEPS } from './types';
 import { storageService } from './services/storageService';
 import { useTaskExecutor } from './hooks/useTaskExecutor';
 import { useTaskActions } from './hooks/useTaskActions';
 import { I18nProvider, useI18n } from './i18n';
+import { subscribeToast, ToastType } from './utils/toast';
 // 懒加载：AgentMode 引入 ThoughtStream / TaskList / ToolPalette / AgentPetController / PromptLibraryPanel
 // 等十几个子模块，agent-stream-manager 也会立即在模块层订阅 store 并启动 SSE manager。
 // 这些都是"按需"功能（用户点击进入 agent 模式才需要），首屏不应当加载。
@@ -42,15 +47,10 @@ const STORAGE_KEY_LANG = 'dramaforge_language';
 // localStorage 只作为后端不可用时的兜底。
 const STORAGE_KEY_MODEL_BINDINGS = 'dramaforge_model_bindings';
 const STORAGE_KEY_API_CONFIG_LEGACY = 'dramaforge_apiconfig';
+// canvas 主 apiConfig localStorage key — 兜底恢复用（与 use-canvas-store 一致）。
+const STORAGE_KEY_API_CONFIG_CANVAS = 'dramaforge-canvas-api-config';
 
-const LOGICAL_STEPS = [
-  TaskStatus.PREPROCESSING,
-  TaskStatus.SCRIPT_GENERATION,
-  TaskStatus.CHARACTER_DESIGN,
-  TaskStatus.STORYBOARDING,
-  TaskStatus.PROMPT_OPTIMIZATION,
-  TaskStatus.COMPLETED
-];
+// LOGICAL_STEPS 已收敛到 types.ts 单一事实源（见 import），此处不再重复定义。
 
 const genId = () => {
   try { return crypto.randomUUID(); } catch { return 'id-' + Math.random().toString(36).slice(2) + Date.now().toString(36); }
@@ -85,7 +85,7 @@ function AppContent() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [assetCheckResult, setAssetCheckResult] = useState<AssetCheckResult | null>(null);
   const [isTitleEndCardOpen, setIsTitleEndCardOpen] = useState(false);
-  const [toasts, setToasts] = useState<{ id: number; type: 'success' | 'error' | 'info'; message: string; exiting?: boolean }[]>([]);
+  const [toasts, setToasts] = useState<{ id: number; type: ToastType; message: string; exiting?: boolean }[]>([]);
   const [celebration, setCelebration] = useState<{ x: number; y: number; id: number } | null>(null);
   const [pageKey, setPageKey] = useState(0);
   const [newProjectName, setNewProjectName] = useState('');
@@ -98,7 +98,7 @@ function AppContent() {
   const prevTaskStatuses = useRef<Record<string, TaskStatus>>({});
   const canvasContainerRef = useRef<HTMLDivElement>(null);
 
-  const addToast = useCallback((type: 'success' | 'error' | 'info', message: string) => {
+  const addToast = useCallback((type: ToastType, message: string) => {
     const id = ++toastIdRef.current;
     setToasts(prev => [...prev, { id, type, message }]);
     setTimeout(() => {
@@ -108,6 +108,10 @@ function AppContent() {
       }, 300);
     }, 3000);
   }, []);
+
+  // 订阅全局 toast 事件总线（utils/toast.ts）：
+  // hooks / 画布组件 / services 纯模块拿不到 addToast，统一通过事件总线发提示。
+  useEffect(() => subscribeToast(addToast), [addToast]);
 
   // 点击 Canvas 工具栏的 Agent 按钮时：先确保有 activeTask，再进入 AgentMode。
   const handleEnterAgentMode = useCallback(() => {
@@ -175,9 +179,27 @@ function AppContent() {
       setAgentMode(false);
       // 不清 activeTask 和 taskId：用户应当可以重新进入 agent 模式查看进度
     };
+    // LLM 错误时一键跳到 API 设置：先退 agent 模式，再打开 API 设置弹窗
+    const onExitAndOpenSettings = () => {
+      setAgentMode(false);
+      setIsSettingsOpen(true);
+    };
     window.addEventListener('agent-mode-exit', onExit as EventListener);
-    return () => window.removeEventListener('agent-mode-exit', onExit as EventListener);
+    window.addEventListener(
+      'agent-mode-exit-and-open-settings',
+      onExitAndOpenSettings as EventListener,
+    );
+    return () => {
+      window.removeEventListener('agent-mode-exit', onExit as EventListener);
+      window.removeEventListener(
+        'agent-mode-exit-and-open-settings',
+        onExitAndOpenSettings as EventListener,
+      );
+    };
   }, []);
+
+  // ApiSettingsModal 已改为 eager import（见文件顶部），
+  // 不再需要预加载 useEffect — 那只是治标不治本。
 
   const activeTask = tasks.find(t => t.id === activeTaskId);
 
@@ -221,6 +243,64 @@ function AppContent() {
     const applyLoadedApiConfig = (config: ApiConfig) => {
       setApiConfig(config);
       useCanvasStore.getState().setApiConfig(config);
+    };
+
+    /**
+     * 把后端 ProviderOut[]（api_key 脱敏）转换成前端 Provider 形态。
+     * 与 bootstrap.py 的 mask_key=True 输出保持一致：has_key=true 时
+     * apiKey 字段清空（避免把脱敏值写回 DB）。
+     */
+    const mapBackendProvidersToFrontend = (rows: any[]): any[] => (rows || []).map((r) => ({
+      id: r.provider_id,
+      name: r.name || r.provider_id,
+      baseUrl: r.base_url || '',
+      protocol: r.protocol || 'openai',
+      enabled: r.enabled !== false,
+      apiKey: r.has_key ? '' : (r.api_key || ''),
+      hasKey: r.has_key || false,
+      keyPreview: r.key_preview || '',
+      defaultModel: r.default_model || '',
+      chatModels: r.chat_models || [],
+      imageModels: r.image_models || [],
+      videoModels: r.video_models || [],
+    }));
+
+    /**
+     * 把 localStorage 中的 Provider[] 转成前端形态（保留明文 apiKey，因为这就是真源）。
+     * 仅用于"后端空 + localStorage 有"的兜底场景。
+     */
+    const mapLocalProvidersToFrontend = (rows: any[]): any[] => (rows || [])
+      .filter((p) => p && p.id && p.baseUrl && p.apiKey)
+      .map((p) => ({
+        id: String(p.id),
+        name: p.name || String(p.id),
+        baseUrl: String(p.baseUrl),
+        protocol: p.protocol || 'openai',
+        enabled: p.enabled !== false,
+        apiKey: String(p.apiKey),
+        hasKey: true,
+        keyPreview: '',
+        defaultModel: p.defaultModel || '',
+        chatModels: p.chatModels || [],
+        imageModels: p.imageModels || [],
+        videoModels: p.videoModels || [],
+      }));
+
+    /**
+     * 把 localStorage 中的 provider（带 apiKey）按 id 合并进 backend providers 列表。
+     * - 后端已有同 id：用后端数据（has_key=true 时 apiKey 由后端保留原值）
+     * - 后端没有但 localStorage 有：补入（保留 localStorage 的明文 apiKey）
+     * 这样后端如果因任何原因丢了一两条 provider，localStorage 还能补回来。
+     */
+    const mergeProviders = (backendRows: any[], localRows: any[]): any[] => {
+      const out: any[] = [...backendRows];
+      const backendIds = new Set(out.map((p) => p.id));
+      for (const lp of localRows) {
+        if (!backendIds.has(lp.id)) {
+          out.push(lp);
+        }
+      }
+      return out;
     };
 
     api.bootstrap()
@@ -274,22 +354,46 @@ function AppContent() {
         }
 
         // ── 2) providers + model_bindings ────────────────────────
-        // rows 来自后端 ProviderOut（api_key 脱敏），转成前端 Provider
-        const providers: any[] = (boot.providers || []).map((r) => ({
-          id: r.provider_id,
-          name: r.name || r.provider_id,
-          baseUrl: r.base_url || '',
-          protocol: r.protocol || 'openai',
-          enabled: r.enabled !== false,
-          // 后端只返脱敏 key；不要把脱敏值塞进可编辑字段，否则保存会覆盖真 key。
-          apiKey: r.has_key ? '' : (r.api_key || ''),
-          hasKey: r.has_key || false,
-          keyPreview: r.key_preview || '',
-          defaultModel: r.default_model || '',
-          chatModels: r.chat_models || [],
-          imageModels: r.image_models || [],
-          videoModels: r.video_models || [],
-        }));
+        // 兜底链路：
+        //   1) 后端 bootstrap 拿 providers
+        //   2) 后端为空 + localStorage 有 key → 强制迁移 + 重新拉取
+        //   3) 重新拉取仍空 → 用 localStorage 数据补一份（保证用户至少看到）
+        // 这样即使 backend DB 因任何原因丢数据，localStorage 兜底 + 重推能恢复。
+        let backendProviders = mapBackendProvidersToFrontend(boot.providers || []);
+
+        if (backendProviders.length === 0) {
+          // 拿 localStorage 兜底数据
+          const localSnapshot = getLocalProvidersSnapshot();
+          const localWithKey = localSnapshot.filter(
+            (p: any) => p && p.id && p.baseUrl && p.apiKey,
+          );
+          if (localWithKey.length > 0) {
+            try {
+              // 强制推 localStorage → DB（忽略 hasMigrated 标志）
+              const mig = await migrateLocalProvidersToBackendForce();
+              if (mig.synced > 0) {
+                // eslint-disable-next-line no-console
+                console.info(
+                  `[App] force-migrated ${mig.synced} providers from localStorage → DB (failed=${mig.failed.length})`,
+                );
+                // 重新拉取 backend（拿 has_key=true 的真状态）
+                try {
+                  const fresh = await api.listProviders();
+                  backendProviders = mapBackendProvidersToFrontend(fresh);
+                } catch (e) {
+                  console.warn('[App] re-list providers after migration failed', e);
+                }
+              }
+            } catch (e) {
+              console.warn('[App] force-migrate failed', e);
+            }
+            // 不管推送成功与否，都把 localStorage 数据 merge 进列表
+            // （后端已存在的 id 用 backend 版本，缺失的用 localStorage 补）
+            const localMapped = mapLocalProvidersToFrontend(localSnapshot);
+            backendProviders = mergeProviders(backendProviders, localMapped);
+          }
+        }
+
         // model_bindings：后端是主存，localStorage 兜底
         let bindings: any[] | null = null;
         if (Array.isArray(boot.modelBindings)) {
@@ -300,7 +404,7 @@ function AppContent() {
             if (raw) bindings = JSON.parse(raw);
           } catch {}
         }
-        applyLoadedApiConfig(normalizeModelBindings({ providers, modelBindings: bindings || [] }));
+        applyLoadedApiConfig(normalizeModelBindings({ providers: backendProviders, modelBindings: bindings || [] }));
       })
       .catch((e) => {
         if (cancelled) return;
@@ -315,18 +419,28 @@ function AppContent() {
             setTasks(backupTasks);
           }
         }
-        // 后端不可用时回落到老 localStorage（含 geminiKey / 旧格式自动迁移）
-        const savedConfig = localStorage.getItem(STORAGE_KEY_API_CONFIG_LEGACY);
+        // 后端不可用时回落到 localStorage — 优先读新 key（canvas 主 apiConfig），
+        // 读不到再回落老 key（含 geminiKey / 旧格式自动迁移）。
+        const savedConfigCanvas = localStorage.getItem(STORAGE_KEY_API_CONFIG_CANVAS);
+        const savedConfigLegacy = localStorage.getItem(STORAGE_KEY_API_CONFIG_LEGACY);
         let localBindings: any[] = [];
         try {
           const rawBindings = localStorage.getItem(STORAGE_KEY_MODEL_BINDINGS);
           if (rawBindings) localBindings = JSON.parse(rawBindings);
         } catch {}
+        const savedConfig = savedConfigCanvas || savedConfigLegacy;
         if (savedConfig) {
           try {
             const parsed = JSON.parse(savedConfig);
             if (parsed.providers && (parsed.modelBindings || parsed.stepBindings)) {
-              applyLoadedApiConfig(normalizeModelBindings(parsed));
+              // 关键：dramaforge_model_bindings 是 handleSaveConfig 显式写入的最新值，
+              // dramaforge-canvas-api-config 是 store subscriber 自动写入的（可能滞后或被前一会话污染）。
+              // 后端不可用时，modelBindings 必须以 dramaforge_model_bindings 为准，
+              // 否则用户配置会在重启后丢失（或被陈旧数据覆盖）。
+              const mergedConfig = localBindings.length > 0
+                ? { ...parsed, modelBindings: localBindings }
+                : parsed;
+              applyLoadedApiConfig(normalizeModelBindings(mergedConfig));
             } else if (parsed.geminiKey !== undefined) {
               const migrated = createDefaultApiConfig();
               const geminiProvider = migrated.providers.find((p: any) => p.id === 'google-gemini');
@@ -467,51 +581,18 @@ function AppContent() {
       localStorage.setItem(STORAGE_KEY_MODEL_BINDINGS, JSON.stringify(newConfig.modelBindings || []));
     } catch {}
     await api.setUserPreference('model_bindings', newConfig.modelBindings || []);
-    // 2) providers 走后端（不再写整个 localStorage，避免 key 漂移）
-    //    对每个 provider 调 upsertProvider：apiKey 改动才覆盖（用 hasKey 检测）
-    //    后端在 ProviderIn 上有保留语义：apiKey 为空 → 保留原 key
+    // 2) providers 走后端（不再写整个 localStorage，避免 key 漂移）。
+    //    syncProvidersToBackend 只 upsert，不 delete —— 详见 services/providerSync.ts
+    //    头注：auto-delete 在 race condition 下会把后端 DB 的 provider 清空。
+    //    删除只能走 modal 顶部的 🗑 按钮（已显式调 api.deleteProvider）。
     const prev = apiConfig.providers;
     const next = newConfig.providers;
-    const byId = new Map(prev.map((p) => [p.id, p] as const));
     setApiConfig(newConfig);
     useCanvasStore.getState().setApiConfig(newConfig);
     setIsSettingsOpen(false);
-    // 异步批量同步：失败时打 warning，不阻塞 UI
-    const tasks: Promise<any>[] = [];
-    for (const p of next) {
-      const prevP = byId.get(p.id);
-      const apiKeyChanged = !prevP || (prevP.apiKey || '') !== (p.apiKey || '');
-      // baseUrl / 模型列表等总是同步；apiKey 只在变化或后端没存时传
-      const payload: any = {
-        name: p.name,
-        base_url: p.baseUrl,
-        default_model: p.defaultModel,
-        protocol: p.protocol,
-        enabled: p.enabled !== false,
-        chat_models: p.chatModels,
-        image_models: p.imageModels,
-        video_models: p.videoModels,
-        // 如果之前有 key 且这次没改 key（用户没在 UI 里改 key 字段），就传 None → 后端保留
-        api_key: apiKeyChanged ? (p.apiKey || '') : null,
-      };
-      tasks.push(
-        api.upsertProvider(p.id, payload).catch((e) => {
-          console.warn(`[App] upsertProvider ${p.id} failed`, e);
-        }),
-      );
-    }
-    // 处理删除（next 里没有但 prev 有的 provider）
-    for (const prevP of prev) {
-      if (!next.find((p) => p.id === prevP.id)) {
-        tasks.push(
-          api.deleteProvider(prevP.id).catch((e) => {
-            console.warn(`[App] deleteProvider ${prevP.id} failed`, e);
-          }),
-        );
-      }
-    }
-    // 不 await：UI 已经反映在 state 上；后端失败只打 warning
-    void Promise.allSettled(tasks);
+    // 异步 fire-and-forget；失败由 syncProvidersToBackend 内部 console.warn，
+    // UI 不阻塞。
+    void syncProvidersToBackend(prev, next);
   };
 
   const updateTask = useCallback((taskId: string, updates: Partial<DramaTask>) => {
@@ -605,8 +686,12 @@ function AppContent() {
   };
 
   useEffect(() => {
-    if (activeTask?.mode === 'auto' && activeTask.status !== TaskStatus.COMPLETED && activeTask.status !== TaskStatus.FAILED && activeTask.stepStatus === 'completed') {
-      const next = LOGICAL_STEPS[LOGICAL_STEPS.indexOf(activeTask.status) + 1];
+    if (activeTask?.mode === 'auto' && activeTask.stepStatus === 'completed') {
+      const idx = LOGICAL_STEPS.indexOf(activeTask.status);
+      // 守卫：COMPLETED/FAILED/CANCELLED/IDLE 等非流水线状态 indexOf 返回 -1，
+      // 此时不得回退到第一步重新执行（取消任务后 500ms 自动重启的根因）。
+      if (idx === -1) return;
+      const next = LOGICAL_STEPS[idx + 1];
       if (next) {
         setTimeout(() => executeTaskStep(activeTask.id, next), 500);
       }
@@ -839,7 +924,7 @@ function AppContent() {
                   </button>
               </div>
               <div className="flex-1 p-6 overflow-y-auto">
-                 <p className="whitespace-pre-wrap text-[#c7d2fe] text-sm leading-relaxed">
+                 <p className="whitespace-pre-wrap text-[#374151] text-sm leading-relaxed">
                     {viewingSegment.content}
                  </p>
               </div>
@@ -983,14 +1068,12 @@ function AppContent() {
         message={confirmModal.message}
       />
 
-      <Suspense fallback={null}>
       <ApiSettingsModal
         open={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         config={apiConfig}
         onSave={handleSaveConfig}
       />
-      </Suspense>
 
       {lightboxImage && <ImageLightbox src={lightboxImage} onClose={() => setLightboxImage(null)} />}
 
@@ -1000,11 +1083,12 @@ function AppContent() {
             <div
               key={toast.id}
               className={`glass rounded-xl px-4 py-3 flex items-center gap-3 min-w-[280px] max-w-[400px] ${toast.exiting ? 'toast-exit' : 'toast-enter'} ${
-                toast.type === 'success' ? 'border border-emerald-500/20' : toast.type === 'error' ? 'border border-red-500/20' : 'border border-brand-500/20'
+                toast.type === 'success' ? 'border border-emerald-500/20' : toast.type === 'error' ? 'border border-red-500/20' : toast.type === 'warning' ? 'border border-amber-500/20' : 'border border-brand-500/20'
               }`}
             >
               {toast.type === 'success' && <CheckCircle className="w-5 h-5 text-emerald-600 flex-shrink-0" />}
               {toast.type === 'error' && <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0" />}
+              {toast.type === 'warning' && <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0" />}
               {toast.type === 'info' && <Info className="w-5 h-5 text-brand-600 flex-shrink-0" />}
               <span className="text-sm text-[#111827]">{toast.message}</span>
             </div>

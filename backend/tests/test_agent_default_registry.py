@@ -6,14 +6,14 @@ from app.agent.tools.base import BaseTool, ToolRegistry
 
 
 def test_all_tools_count_is_18():
-    """ALL_TOOLS 必须正好 18 个。"""
-    assert len(ALL_TOOLS) == 21
+    """新增故事扩写能力后，ALL_TOOLS 必须正好 24 个。"""
+    assert len(ALL_TOOLS) == 24
 
 
 def test_all_tools_have_unique_names():
     """所有工具 name 唯一。"""
     names = [cls().name for cls in ALL_TOOLS]
-    assert len(set(names)) == 21, f"重复 name: {[n for n in names if names.count(n) > 1]}"
+    assert len(set(names)) == 24, f"重复 name: {[n for n in names if names.count(n) > 1]}"
 
 
 def test_all_tools_have_required_fields():
@@ -38,10 +38,10 @@ def test_tools_have_valid_categories():
 
 
 def test_build_default_registry_registers_18():
-    """build_default_registry 返回的 registry 应有 18 个工具。"""
+    """build_default_registry 返回的 registry 应有 24 个工具。"""
     registry = build_default_registry()
     assert isinstance(registry, ToolRegistry)
-    assert len(registry.list()) == 21
+    assert len(registry.list()) == 24
 
 
 def test_build_default_registry_categories():
@@ -61,10 +61,10 @@ def test_build_default_registry_only_filter():
 
 
 def test_registry_to_openai_schema_lists_all_18():
-    """to_openai_schema 应能为 18 个工具生成 function calling schema。"""
+    """to_openai_schema 应能为 24 个工具生成 function calling schema。"""
     registry = build_default_registry()
     schemas = registry.to_openai_schema()
-    assert len(schemas) == 21
+    assert len(schemas) == 24
     for s in schemas:
         assert s["type"] == "function"
         assert "name" in s["function"]
@@ -80,9 +80,9 @@ def test_planning_tools_count():
 
 
 def test_llm_tools_count():
-    """6 个 llm 工具。"""
+    """7 个 llm 工具。"""
     registry = build_default_registry()
-    assert len(registry.list(category="llm")) == 6
+    assert len(registry.list(category="llm")) == 7
 
 
 def test_image_tools_count():
@@ -104,13 +104,13 @@ def test_audio_tools_count():
 
 
 def test_asset_tools_count():
-    """2 个 asset 工具。"""
+    """6 个 asset 工具（SaveAsset + GetArtifacts + ReadTextAsset + UpdateTextAsset + InspectAsset + PrepareCharacterAsset）。"""
     registry = build_default_registry()
-    assert len(registry.list(category="asset")) == 4
+    assert len(registry.list(category="asset")) == 6
 
 
 def test_all_categories_sum_to_18():
-    """所有分类工具数加起来等于 18。"""
+    """所有分类工具数加起来等于 24。"""
     registry = build_default_registry()
     total = sum(len(registry.list(category=c)) for c in registry.categories())
-    assert total == 21
+    assert total == 24

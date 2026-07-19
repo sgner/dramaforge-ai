@@ -63,6 +63,16 @@ describe('AgentPetController', () => {
     expect(screen.queryByTestId('agent-pet-panel')).toBeNull();
   });
 
+  it.each(['idle', 'pending', 'running', 'paused', 'done', 'failed', 'cancelled'] as const)(
+    'maps %s task status to the pet state class',
+    (status) => {
+      useAgentStore.setState({ status });
+      const container = createContainer();
+      render(<AgentPetController projectId="p1" containerRef={{ current: container }} />);
+      expect(screen.getByTestId('agent-pet')).toHaveClass(status);
+    },
+  );
+
   it('renders the pending question in the pet bubble and submits free text', async () => {
     vi.spyOn(api, 'respondAgent').mockResolvedValue({ ok: true } as any);
     vi.spyOn(api, 'resumeAgent').mockResolvedValue({ ok: true } as any);
@@ -76,6 +86,23 @@ describe('AgentPetController', () => {
 
     await waitFor(() => expect(api.respondAgent).toHaveBeenCalledWith('t1', { response: '现代悬疑' }));
     expect(api.resumeAgent).toHaveBeenCalledWith('t1');
+  });
+
+  it('renders tool recovery inside the expanded pet panel', () => {
+    useAgentStore.setState({
+      taskId: 't1',
+      status: 'paused',
+      pendingErrorRecovery: {
+        stepId: '4', tool: 'generate_video', error: 'media generation failed', params: {},
+        fallbackModelId: null, availableModels: [],
+      },
+    });
+    const container = createContainer();
+    render(<AgentPetController projectId="p1" containerRef={{ current: container }} />);
+
+    const panel = screen.getByTestId('agent-pet-panel');
+    expect(panel).toContainElement(screen.getByTestId('error-recovery-card'));
+    expect(screen.getByTestId('erc-confirm')).toBeEnabled();
   });
 
   it('shows the latest media prompt and model in the expanded panel', () => {

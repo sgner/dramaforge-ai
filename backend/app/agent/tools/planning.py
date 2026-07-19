@@ -11,6 +11,30 @@ from typing import Any
 
 from .base import BaseTool, ToolContext, ToolParameter
 from ..task_profiles import classify_task
+from ..token_limits import DEEPSEEK_V4_PRO_MAX_OUTPUT_TOKENS
+
+
+def _looks_like_source_text(text: str) -> bool:
+    """识别用户是否提交了可供脚本解析的原始素材，而非一句主题。"""
+    value = str(text or "").strip()
+    if len(value) >= 80:
+        return True
+    if value.count("\n") >= 1:
+        return True
+    return sum(value.count(mark) for mark in ("。", "！", "？", ".", "!", "?")) >= 2 and len(value) >= 40
+
+
+LONG_FORM_SOURCE_MIN_CHARS = 1000
+
+
+def classify_source_maturity(text: str) -> str:
+    """区分想法、梗概和可直接制稿的长篇故事素材。"""
+    value = re.sub(r"\s+", "", str(text or ""))
+    if len(value) < 80:
+        return "idea"
+    if len(value) < LONG_FORM_SOURCE_MIN_CHARS:
+        return "synopsis"
+    return "long_form_source"
 
 
 # ========================
@@ -59,8 +83,15 @@ class ParseUserGoalTool(BaseTool):
             {"role": "system", "content": PARSE_GOAL_SYSTEM_PROMPT},
             {"role": "user", "content": str(text)},
         ]
-        resp = await ctx.llm_client.generate(messages, temperature=0.4, max_tokens=600)
+        resp = await ctx.llm_client.generate(messages, temperature=0.4, max_tokens=DEEPSEEK_V4_PRO_MAX_OUTPUT_TOKENS)
         result = _coerce_json(resp.content) or {}
+        # summary 只是规划信息，不能成为后续 generate_script 的素材来源。
+        # 保留原文供 runtime 在工具边界处强制回填，避免模型把摘要当小说。
+        if _looks_like_source_text(str(text)):
+            result.setdefault("source_text", str(text).strip())
+            result.setdefault("source_maturity", classify_source_maturity(str(text)))
+        else:
+            result.setdefault("source_maturity", "idea")
         profile = classify_task(str(text), result, [])
         result.setdefault("task_profile", profile.model_dump(mode="json"))
         result.setdefault("rule_pack_id", profile.rule_pack_id)
@@ -107,7 +138,7 @@ class CreatePlanTool(BaseTool):
         available_text = (
             "\n".join(f"- {name}" for name in available)
             if available
-            else "- generate_script\n- extract_characters\n- extract_props\n- extract_scenes\n- extract_shots\n- optimize_prompt\n- generate_character_portrait\n- generate_prop_image\n- generate_scene_image\n- generate_storyboard_image\n- generate_video\n- generate_voiceover\n- generate_bgm"
+            else "- expand_story\n- generate_script\n- extract_characters\n- extract_props\n- extract_scenes\n- extract_shots\n- optimize_prompt\n- generate_character_portrait\n- generate_prop_image\n- generate_scene_image\n- generate_storyboard_image\n- generate_video\n- generate_voiceover\n- generate_bgm"
         )
         prompt = CREATE_PLAN_USER_PROMPT.format(
             goal=json.dumps(params["goal"], ensure_ascii=False),
@@ -117,7 +148,7 @@ class CreatePlanTool(BaseTool):
             {"role": "system", "content": CREATE_PLAN_SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
         ]
-        resp = await ctx.llm_client.generate(messages, temperature=0.4, max_tokens=2000)
+        resp = await ctx.llm_client.generate(messages, temperature=0.4, max_tokens=DEEPSEEK_V4_PRO_MAX_OUTPUT_TOKENS)
         data = _coerce_json(resp.content) or {}
         return list(data.get("steps", []))
 
@@ -239,7 +270,23 @@ CREATE_PLAN_SYSTEM_PROMPT = """你是 DramaForge 制作经理，把目标拆成 
 }
 
 约束：
-- 根据用户目标选择流程：完整短剧走 generate_script → extract_* → generate_*；单一资产（如角色图）直接调 generate_*_image
+- drama_short 完整短剧（与 canvas "起始节点" / PipelineNode 流水线一致），按下面顺序：
+    1) parse_user_goal
+    2) expand_story —— 想法或简单梗概先扩写为至少 1000 字的完整故事正文
+    3) generate_script —— 用完整故事正文或用户提供的长篇原文拆成分场脚本
+    4) extract_characters —— 从脚本产物提取角色
+    5) generate_character_portrait —— 给每个角色生成肖像（depends_on=extract_characters）
+    6) extract_props —— 从脚本产物提取道具
+    7) generate_prop_image —— 给每个道具生成图（depends_on=extract_props）
+    8) extract_scenes —— 从脚本产物提取场景
+    9) generate_scene_image —— 给每个场景生成图（depends_on=extract_scenes）
+    10) extract_shots —— 从脚本产物提取分镜
+    11) generate_storyboard_image —— 给每个分镜生成图（depends_on=extract_shots）
+    12) generate_video —— 把分镜合成为视频
+  强约束：脚本 → 提取 → 生成图（generate_script 之后才能 extract_characters / extract_props / extract_scenes / extract_shots；每个 generate_*_image 必须 depends_on 对应的 extract_*）；禁止跳过中间步骤，禁止乱序。
+- drama_short 输入来源：起始节点 / PipelineNode 输入文本 / 之前对话里的 long_text 都算 source；user_goal 只有在明确包含故事想法时才可作为 expand_story 的 idea。
+  idea 或简单梗概必须先 expand_story；只有达到长篇正文标准的素材才能 generate_script。禁止把 summary 直接当脚本素材。
+  单一资产（如只要角色图）直接调 generate_*_image，不走脚本。
 - 资产生成（image/video/audio）放最后
 - 不需要 finish_task（runtime 会在所有步骤完成后自动结束）
 - 仅输出 JSON"""

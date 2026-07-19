@@ -1,4 +1,6 @@
 """DramaForge AI 后端 — FastAPI + SQLite"""
+import os
+
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,11 +21,45 @@ logging.basicConfig(level=logging.INFO)
 
 app = FastAPI(title="DramaForge AI Backend", version="1.0.0")
 
-# CORS — 允许任意来源（开发用）
+# CORS — 收紧到本地前端源，可通过环境变量覆盖。
+#
+# 前端开发场景：Vite dev server 跑在 5173 端口（vite.config.ts，host 0.0.0.0），
+# 浏览器经 vite proxy 访问 /api 时 Origin 是 vite dev server 的源
+# （http://localhost:5173 / http://127.0.0.1:5173 / http://[::1]:5173）。
+# 4173 是 vite preview 的默认端口，一并放行便于本地预览构建产物。
+# 生产/打包场景前后端同源（同一端口直接服务静态文件），浏览器不带跨域 Origin，
+# CORS 不生效，因此无需额外放行。
+#
+# 如需放开其它源（如局域网 IP 访问 dev server），设置环境变量：
+#   DRAMAFORGE_CORS_ORIGINS="http://localhost:5173,http://192.168.1.10:5173"
+_DEFAULT_CORS_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://[::1]:5173",
+    "http://localhost:4173",
+    "http://127.0.0.1:4173",
+]
+
+
+def _cors_origins() -> list[str]:
+    """从 DRAMAFORGE_CORS_ORIGINS（逗号分隔）读取允许的源，缺省用本地 dev 白名单。
+
+    显式设置为空字符串（如 DRAMAFORGE_CORS_ORIGINS=""）表示完全关闭跨域放行
+    （仅同源访问），此时 allow_credentials 也无意义，一并关掉。
+    """
+    raw = os.environ.get("DRAMAFORGE_CORS_ORIGINS")
+    if raw is None:
+        return list(_DEFAULT_CORS_ORIGINS)
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+
+_CORS_ORIGINS = _cors_origins()
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_CORS_ORIGINS,
+    # credentials 只在明确白名单下开启（"*" + credentials 是浏览器非法组合且全开放）
+    allow_credentials=bool(_CORS_ORIGINS),
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -49,6 +85,15 @@ def on_startup():
     from .agent.prompt_template_seed import seed_builtin_prompt_templates
     with SessionLocal() as db:
         seed_builtin_prompt_templates(db)
+
+
+# 启动时恢复僵尸 agent 任务：runtime 是纯内存态，进程重启后 DB 中
+# status=running 的任务必然已死，从 DB 全量重建继续执行。
+# 单个任务恢复失败不影响其他任务和应用启动（函数内部已逐个 try/except）。
+@app.on_event("startup")
+async def recover_agent_tasks_on_startup():
+    from .routers.agent import recover_zombie_agent_tasks
+    await recover_zombie_agent_tasks()
 
 # 路由
 app.include_router(projects.router, prefix="/api/projects", tags=["projects"])

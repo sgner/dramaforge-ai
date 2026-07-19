@@ -3,7 +3,7 @@
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
-import { ThoughtStream } from '@/agent/thought-stream';
+import { ThoughtStream, formatToolCall } from '@/agent/thought-stream';
 import { useAgentStore } from '@/agent/use-agent-store';
 
 describe('<ThoughtStream />', () => {
@@ -39,6 +39,13 @@ describe('<ThoughtStream />', () => {
     expect(within(list).getByText(/parse_user_goal/)).toBeInTheDocument();
   });
 
+  it('explains tool parameters in plain language instead of only showing raw JSON', () => {
+    const text = formatToolCall('extract_characters', {});
+    expect(text).toContain('整理角色信息');
+    expect(text).toContain('从当前脚本中整理角色列表');
+    expect(text).toContain('技术名称：extract_characters');
+  });
+
   it('renders an observation entry with ok result', () => {
     useAgentStore.getState().applyEvent({
       type: 'observation',
@@ -48,6 +55,39 @@ describe('<ThoughtStream />', () => {
     render(<ThoughtStream />);
     const list = screen.getByTestId('thought-stream-observations');
     expect(within(list).getByText(/ok/)).toBeInTheDocument();
+  });
+
+  it('does not render a null observation as the latest result', () => {
+    useAgentStore.getState().applyEvent({
+      type: 'observation',
+      payload: { result: null, error: null },
+      timestamp: 1,
+    });
+    render(<ThoughtStream />);
+    expect(screen.queryByText('null')).not.toBeInTheDocument();
+    expect(screen.getByTestId('thought-stream-empty')).toBeInTheDocument();
+  });
+
+  it('shows the observation error instead of hiding it behind a null result', () => {
+    useAgentStore.getState().applyEvent({
+      type: 'observation',
+      payload: { success: false, result: null, error: '模型调用失败' },
+      timestamp: 1,
+    });
+    render(<ThoughtStream />);
+    expect(screen.getAllByText('失败：模型调用失败').length).toBeGreaterThan(0);
+    expect(screen.queryByText('null')).not.toBeInTheDocument();
+  });
+
+  it('does not present an empty LLM response as a user-visible failure', () => {
+    useAgentStore.getState().applyEvent({
+      type: 'observation',
+      payload: { success: false, tool: '_llm_call', error: 'LLM returned empty response' },
+      timestamp: 1,
+    });
+    render(<ThoughtStream />);
+    expect(screen.queryByText('失败：LLM returned empty response')).not.toBeInTheDocument();
+    expect(screen.getAllByText(/模型暂未返回内容/).length).toBeGreaterThan(0);
   });
 
   it('shows the latest thought highlighted', () => {

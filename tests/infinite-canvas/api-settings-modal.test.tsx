@@ -73,4 +73,47 @@ describe('<ApiSettingsModal /> capability bindings', () => {
 
     expect(loaded.modelBindings[0].providerId).toBe('zz');
   });
+
+  // 回归测试：bug "首次进入首页点击设置按钮配置窗口没有出现"
+  // 根因 — lazy chunk 加载完挂载 modal 时，触发打开按钮的 click 事件
+  // 仍在事件循环里，modal 背景的 onClick（点击背景关闭）会立即消费它，
+  // 导致 modal 刚挂载就被关掉。
+  // 修复：modal 用 mountedAtRef 记录挂载时间，挂载后 150ms 内的背景点击被忽略。
+  it('ignores background clicks within 150ms of mount to avoid the open-then-close race', () => {
+    const onClose = vi.fn();
+    const { container } = render(
+      <ApiSettingsModal open config={createDefaultApiConfig()} onClose={onClose} onSave={vi.fn()} />,
+    );
+
+    const modalDiv = container.querySelector('.api-settings-modal') as HTMLElement;
+    expect(modalDiv).toBeInTheDocument();
+
+    // 模拟"刚挂载时，触发打开的 click 事件尾段落到 modal 背景上" — 应被忽略
+    fireEvent.click(modalDiv);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('still closes when the user clicks the background after the grace period', async () => {
+    vi.useFakeTimers();
+    try {
+      const onClose = vi.fn();
+      const { container } = render(
+        <ApiSettingsModal open config={createDefaultApiConfig()} onClose={onClose} onSave={vi.fn()} />,
+      );
+
+      const modalDiv = container.querySelector('.api-settings-modal') as HTMLElement;
+      expect(modalDiv).toBeInTheDocument();
+
+      // 推进 400ms（超过 300ms 保护窗口；之前是 150ms，code 在修复 mount race 时
+      // 把 grace period 提到 300ms 以适应更慢的 chunk 加载场景，测试要跟进）。
+      await act(async () => {
+        vi.advanceTimersByTime(400);
+      });
+
+      fireEvent.click(modalDiv);
+      expect(onClose).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

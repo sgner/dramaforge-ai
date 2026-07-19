@@ -22,13 +22,18 @@ def list_assets(
     q = db.query(models.Asset)
     if project_id is not None:
         q = q.filter(models.Asset.project_id == project_id)
-    return q.order_by(models.Asset.created_at.desc()).all()
+    return [schemas.AssetOut.from_asset_model(a) for a in q.order_by(models.Asset.created_at.desc()).all()]
 
 
 @router.post("", response_model=schemas.AssetOut)
 def create_asset(payload: schemas.AssetCreate, db: Session = Depends(get_db)):
     # 优先使用前端传入的 id（保持前后端 ID 一致），否则自动生成
     asset_id = payload.id or _gen_id()
+    # 文本资产（novel/script）把 body 放在 extra.body 持久化；url 保留兼容旧读取
+    extra = dict(payload.extra or {})
+    if payload.asset_kind in ("novel", "script"):
+        if payload.body and "body" not in extra:
+            extra["body"] = payload.body
     asset = models.Asset(
         id=asset_id,
         project_id=payload.project_id,
@@ -44,7 +49,7 @@ def create_asset(payload: schemas.AssetCreate, db: Session = Depends(get_db)):
         failed=payload.failed,
         error=payload.error,
         generating=payload.generating,
-        extra=payload.extra,
+        extra=extra,
         origin=payload.origin,
         source_asset_id=payload.source_asset_id,
         inspection_status=payload.inspection_status,
@@ -56,7 +61,7 @@ def create_asset(payload: schemas.AssetCreate, db: Session = Depends(get_db)):
     db.add(asset)
     db.commit()
     db.refresh(asset)
-    return asset
+    return schemas.AssetOut.from_asset_model(asset)
 
 
 @router.patch("/{asset_id}", response_model=schemas.AssetOut)
@@ -64,11 +69,26 @@ def update_asset(asset_id: str, payload: schemas.AssetUpdate, db: Session = Depe
     asset = db.query(models.Asset).filter(models.Asset.id == asset_id).first()
     if not asset:
         raise HTTPException(404, "Asset not found")
-    for k, v in payload.model_dump(exclude_unset=True).items():
+    updates = payload.model_dump(exclude_unset=True)
+    # 文本资产 body 写入 extra.body
+    if "body" in updates:
+        body_val = updates.pop("body")
+        if asset.asset_kind in ("novel", "script") and body_val is not None:
+            extra = dict(asset.extra or {})
+            extra["body"] = body_val
+            updates["extra"] = extra
+    # text_stats 同理
+    if "text_stats" in updates:
+        ts = updates.pop("text_stats")
+        if ts is not None:
+            extra = dict(asset.extra or {})
+            extra["text_stats"] = ts
+            updates["extra"] = extra
+    for k, v in updates.items():
         setattr(asset, k, v)
     db.commit()
     db.refresh(asset)
-    return asset
+    return schemas.AssetOut.from_asset_model(asset)
 
 
 @router.delete("/{asset_id}")

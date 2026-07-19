@@ -8,7 +8,7 @@ from app.agent.tools import list_tool_metadata
 
 def test_list_tool_metadata_returns_18():
     meta = list_tool_metadata()
-    assert len(meta) == 21
+    assert len(meta) == 24
 
 
 def test_list_tool_metadata_has_required_fields():
@@ -38,5 +38,5 @@ def test_get_agent_tools_route_returns_18(client):
     assert res.status_code == 200
     data = res.json()
     assert isinstance(data, list)
-    assert len(data) == 21
+    assert len(data) == 24
     assert all("name" in item and "category" in item for item in data)

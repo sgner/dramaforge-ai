@@ -24,7 +24,12 @@ export const AssetManagerModal: React.FC<AssetManagerModalProps> = ({
   if (!open) return null;
 
   return (
-    <div className="asset-manager-modal open" onClick={onClose}>
+    <div
+      className="asset-manager-modal open"
+      onClick={onClose}
+      onWheel={(e) => e.stopPropagation()}
+      onTouchMove={(e) => e.stopPropagation()}
+    >
       <div
         className="asset-manager-panel"
         onClick={(e) => e.stopPropagation()}

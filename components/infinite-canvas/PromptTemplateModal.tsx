@@ -129,7 +129,12 @@ export const PromptTemplateModal: React.FC<PromptTemplateModalProps> = ({
   if (!open) return null;
 
   return (
-    <div className="prompt-template-modal open" onClick={onClose}>
+    <div
+      className="prompt-template-modal open"
+      onClick={onClose}
+      onWheel={(e) => e.stopPropagation()}
+      onTouchMove={(e) => e.stopPropagation()}
+    >
       <div
         ref={panelRef}
         className="prompt-template-panel"

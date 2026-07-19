@@ -4,7 +4,8 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 
 from app.agent.runtime import AgentRuntime, AgentState, parse_decision
-from app.agent.events import EventType
+from app.agent.events import EventType, event_bus
+from app.agent.tools import base as tools_base
 from app.agent.tools.base import (
     BaseTool,
     ToolContext,
@@ -124,6 +125,45 @@ class _SaveAssetTool(BaseTool):
             "asset_kind": "script",
             "name": "郑明传奇剧本",
             "url": "/assets/script-1.txt",
+        }
+
+
+class _RetryingMediaTool(BaseTool):
+    name = "generate_scene_image"
+    description = "test media retry"
+    category = "image"
+    parameters = []
+
+    def __init__(self, failures=2):
+        self.calls = 0
+        self.failures = failures
+
+    async def execute(self, ctx, params):
+        self.calls += 1
+        if self.calls <= self.failures:
+            raise RetryableError(f"temporary media failure #{self.calls}")
+        return {"url": "https://cdn.test/scene.png"}
+
+
+class _AlwaysFailingMediaTool(_RetryingMediaTool):
+    def __init__(self):
+        super().__init__(failures=99)
+
+
+class _PartialBatchMediaTool(BaseTool):
+    name = "generate_media_batch"
+    description = "test partial batch"
+    category = "image"
+    parameters = []
+
+    async def execute(self, ctx, params):
+        return {
+            "results": [
+                {"job_index": 0, "success": True, "url": "https://cdn.test/ok.png"},
+                {"job_index": 1, "success": False, "error": "provider failed"},
+            ],
+            "succeeded": 1,
+            "failed": 1,
         }
 
 
@@ -558,8 +598,8 @@ async def test_add_failed_step_emits_observation_on_parse_error():
 
 
 @pytest.mark.asyncio
-async def test_add_failed_step_emits_observation_on_empty_response():
-    """LLM 返回空响应时，_add_failed_step 也应发射 OBSERVATION 事件。"""
+async def test_empty_response_is_retried_without_user_visible_failure():
+    """单次空响应属于内部恢复，不应写成用户可见失败。"""
     from app.agent.events import event_bus
 
     task_id = "t-empty-response"
@@ -576,9 +616,14 @@ async def test_add_failed_step_emits_observation_on_empty_response():
         event for event in event_bus.get_replay(task_id)
         if event.type == "observation"
     ]
-    assert observations, "空响应也应发射 OBSERVATION 事件"
-    assert observations[-1].payload["success"] is False
-    assert observations[-1].payload["error"]
+    assert observations == []
+    assert not any(step.status == "failed" for step in memory.short_term)
+    notices = [
+        event for event in event_bus.get_replay(task_id)
+        if event.type == "agent_notice"
+    ]
+    assert notices
+    assert notices[-1].payload["level"] == "warning"
 
 
 @pytest.mark.asyncio
@@ -957,3 +1002,41 @@ class TestRuntimeToolErrorRecovery:
         models = runtime._list_available_models(tool)
         assert len(models) == 2
         assert models[0] == {"id": "dall-e-3", "label": "DALL-E 3"}
+
+
+@pytest.mark.asyncio
+async def test_media_tool_retries_transient_failure_before_success(monkeypatch):
+    monkeypatch.setattr(tools_base.asyncio, "sleep", AsyncMock())
+    runtime = AgentRuntime(task_id="t-media-retry", llm=_StubLLM([]), memory=AgentMemory("x"))
+    tool = _RetryingMediaTool()
+    runtime.registry.register(tool)
+    observation, status = await runtime._execute_tool("generate_scene_image", {})
+    assert status == "success"
+    assert observation["result"]["url"] == "https://cdn.test/scene.png"
+    assert tool.calls == 3
+
+
+@pytest.mark.asyncio
+async def test_media_failure_pauses_agent_after_retries_and_blocks_followup(monkeypatch):
+    monkeypatch.setattr(tools_base.asyncio, "sleep", AsyncMock())
+    runtime = AgentRuntime(task_id="t-media-failed", llm=_StubLLM([]), memory=AgentMemory("x"))
+    tool = _AlwaysFailingMediaTool()
+    runtime.registry.register(tool)
+    observation, status = await runtime._execute_tool("generate_scene_image", {})
+    assert status == "paused"
+    assert runtime.state == AgentState.PAUSED
+    assert runtime.pending_request["type"] == "tool_error"
+    assert tool.calls == 3
+    assert observation["pending"] == "awaiting_user_recovery"
+
+
+@pytest.mark.asyncio
+async def test_partial_media_batch_pauses_before_agent_can_continue():
+    runtime = AgentRuntime(task_id="t-media-partial", llm=_StubLLM([]), memory=AgentMemory("x"))
+    runtime.registry.register(_PartialBatchMediaTool())
+    observation, status = await runtime._execute_tool("generate_media_batch", {})
+    assert status == "paused"
+    assert runtime.state == AgentState.PAUSED
+    assert runtime.pending_request["type"] == "tool_error"
+    assert "1 个资产生成失败" in runtime.pending_request["error"]
+    assert observation["pending"] == "awaiting_user_recovery"
