@@ -433,6 +433,13 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
+  // 导出选中镜头为 mp4（同步接口，调用方要给 loading 态）。
+  createStudioExport: (payload: StudioExportCreatePayload) =>
+    request<StudioExportOut>('/studio/export', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
   // ---------- Bootstrap (首屏合并端点) ----------
   // 合并 listDramaTasks + listProviders + getUserPreference('model_bindings')
   // 三个首屏请求为单个 /api/bootstrap，减少 RTT（3 → 1）。
@@ -665,5 +672,20 @@ export interface StudioShotRegenerateOut {
   url: string;
   prompt: string;
   rounds: number;
+  [k: string]: any;
+}
+
+/** POST /api/studio/export 请求体：把选中镜头资产合成 mp4。 */
+export interface StudioExportCreatePayload {
+  project_id: string;
+  asset_ids: string[];
+  sec_per_image?: number;
+  title?: string;
+}
+
+/** POST /api/studio/export 响应体。 */
+export interface StudioExportOut {
+  url: string;
+  asset_id?: string;
   [k: string]: any;
 }
