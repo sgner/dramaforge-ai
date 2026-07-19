@@ -1,11 +1,14 @@
 """Studio 路由 — 多 agent 协同（Track B）、成片导出（Track A）与角色卡（Track C）的 HTTP 入口。
 
-POST /api/studio/shots            跑"编剧→美术→质检"闭环，可带 character_card_ids 做一致性锁定。
-POST /api/studio/episodes         提交整集生成任务（202 + task_id，后台异步跑）。
-GET  /api/studio/episodes/{id}    轮询任务状态 / 进度 / 结果。
-POST /api/studio/character-cards  从参考图创建角色卡（vision LLM 提取身份指纹）。
-GET  /api/studio/character-cards  列出项目的角色卡。
-POST /api/studio/export           把一组镜头资产按顺序合成 mp4（ffmpeg 拼接）。
+POST /api/studio/shots                    跑"编剧→美术→质检"闭环，可带 character_card_ids 做一致性锁定。
+POST /api/studio/shots/regenerate         用镜头资产里存的 brief + 角色卡关联重跑闭环。
+POST /api/studio/episodes                 提交整集生成任务（202 + task_id，后台异步跑）。
+GET  /api/studio/episodes/{id}            轮询任务状态 / 进度 / 结果。
+POST /api/studio/character-cards          从参考图创建角色卡（vision LLM 提取身份指纹）。
+GET  /api/studio/character-cards          列出项目的角色卡。
+PUT  /api/studio/character-cards/{id}     更新身份指纹，返回受影响镜头（只读影响分析）。
+GET  /api/studio/character-cards/{id}/impact  该角色卡出现在哪些镜头里。
+POST /api/studio/export                   把一组镜头资产按顺序合成 mp4（ffmpeg 拼接）。
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -13,9 +16,14 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models import Asset
-from ..agent.character_cards import create_character_card, is_character_card
+from ..agent.character_cards import (
+    card_impact,
+    create_character_card,
+    is_character_card,
+    update_card_identity,
+)
 from ..agent.llm_factory import NoLLMConfigured, load_llm_configs, select_llm_for_task
-from ..agent.studio import run_studio_shot
+from ..agent.studio import regenerate_shot, run_studio_shot
 from ..agent.studio_export import export_sequence
 from ..agent.studio_tasks import get_episode_task, start_episode_task
 
@@ -107,6 +115,69 @@ async def list_cards(project_id: str = Query(...), db: Session = Depends(get_db)
         for row in rows
         if is_character_card(row)
     ]
+
+
+class CharacterCardUpdateIn(BaseModel):
+    project_id: str
+    identity: dict = Field(..., min_length=1)
+
+
+@router.put("/character-cards/{card_id}")
+async def update_card(card_id: str, body: CharacterCardUpdateIn, db: Session = Depends(get_db)):
+    """更新角色卡身份指纹，并返回受影响镜头（Story Bible 只读影响分析）。
+
+    是否重生成受影响镜头由用户决定（POST /api/studio/shots/regenerate 逐个触发）。
+    """
+    try:
+        card = update_card_identity(db, card_id, body.identity)
+        impact = card_impact(db, body.project_id, card_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {
+        "card_id": card.id,
+        "name": card.name,
+        "identity": card.visual_identity or {},
+        "impact": impact,
+        "impacted_shots": len(impact),
+    }
+
+
+@router.get("/character-cards/{card_id}/impact")
+async def get_card_impact(card_id: str, project_id: str = Query(...), db: Session = Depends(get_db)):
+    """只读影响分析：该角色卡出现在哪些镜头里。"""
+    impact = card_impact(db, project_id, card_id)
+    return {"card_id": card_id, "impact": impact, "impacted_shots": len(impact)}
+
+
+class ShotRegenerateIn(BaseModel):
+    project_id: str
+    asset_id: str
+    image_provider_id: str
+    image_model: str
+    llm_provider_id: str | None = None
+    llm_model_id: str | None = None
+    max_rounds: int = 3
+
+
+@router.post("/shots/regenerate")
+async def regenerate_shot_endpoint(body: ShotRegenerateIn, db: Session = Depends(get_db)):
+    """用镜头资产里存的 brief + 角色卡关联重跑闭环（影响分析后的手动同步）。"""
+    try:
+        result = await regenerate_shot(
+            db,
+            project_id=body.project_id,
+            asset_id=body.asset_id,
+            image_provider_id=body.image_provider_id,
+            image_model=body.image_model,
+            llm_provider_id=body.llm_provider_id,
+            llm_model_id=body.llm_model_id,
+            max_rounds=body.max_rounds,
+        )
+    except NoLLMConfigured as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return result.to_dict()
 
 
 class StudioEpisodeIn(BaseModel):

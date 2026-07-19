@@ -205,3 +205,58 @@ async def check_consistency(db: Session, card, shot_asset, llm) -> dict:
     issues = [str(i) for i in (data.get("issues") or [])]
     consistent = bool(data.get("consistent", score >= 0.6)) and score >= 0.6
     return {"consistent": consistent, "score": score, "issues": issues, "character": card.name}
+
+
+# ============ Story Bible：影响分析（只读） ============
+
+def update_card_identity(db: Session, card_id: str, identity_updates: dict):
+    """更新角色卡身份指纹（仅 IDENTITY_FIELDS 字段生效）。
+
+    返回更新后的角色卡。调用方（路由层）应随后用 card_impact 算出受影响镜头，
+    把"是否同步重生成"的决策交给用户——本函数只改卡，不触发任何重生成。
+    """
+    from ..models import Asset
+
+    card = db.query(Asset).filter(Asset.id == card_id).first()
+    if card is None:
+        raise ValueError(f"character card '{card_id}' not found")
+    if not is_character_card(card):
+        raise ValueError(f"asset '{card_id}' 不是角色卡（缺少 character_card 标记）")
+    if not isinstance(identity_updates, dict) or not identity_updates:
+        raise ValueError("identity_updates is empty")
+    identity = dict(card.visual_identity or {})
+    for key in IDENTITY_FIELDS:
+        if key in identity_updates:
+            identity[key] = str(identity_updates[key] or "")
+    # SQLAlchemy JSON 字段需要整体赋值才会标脏
+    card.visual_identity = identity
+    db.commit()
+    return card
+
+
+def card_impact(db: Session, project_id: str, card_id: str) -> list[dict]:
+    """只读影响分析：列出项目里引用了该角色卡的所有镜头资产。
+
+    依赖图来自镜头资产 extra.character_card_ids（生成时写入）。
+    """
+    from ..models import Asset
+
+    rows = (
+        db.query(Asset)
+        .filter(Asset.project_id == project_id, Asset.asset_kind == "shot", Asset.failed.is_(False))
+        .order_by(Asset.created_at.asc())
+        .all()
+    )
+    impacted = []
+    for row in rows:
+        card_ids = (row.extra or {}).get("character_card_ids") or []
+        if card_id in card_ids:
+            impacted.append({
+                "asset_id": row.id,
+                "title": row.title or row.name or "",
+                "brief": (row.extra or {}).get("brief") or "",
+                "url": row.url,
+                "status": row.status,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            })
+    return impacted

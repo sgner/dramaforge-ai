@@ -131,6 +131,7 @@ def _persist_shot_asset(
     provider_id: str,
     model: str,
     round_no: int,
+    character_card_ids: Optional[list[str]] = None,
 ):
     from ..models import Asset
 
@@ -149,7 +150,14 @@ def _persist_shot_asset(
         generating=False,
         status="ready",
         origin="studio",
-        extra={"shot_notes": shot_notes, "studio_round": round_no},
+        # Story Bible 依赖图：镜头 → 角色卡 的关联 + 原始 brief，
+        # 供影响分析（改角色身份时列出受影响镜头）和一键重生成使用。
+        extra={
+            "shot_notes": shot_notes,
+            "studio_round": round_no,
+            "brief": brief,
+            "character_card_ids": list(character_card_ids or []),
+        },
     )
     db.add(asset)
     db.commit()
@@ -233,6 +241,7 @@ async def run_studio_shot(
             db, project_id=project_id, brief=brief, shot_prompt=shot_prompt,
             shot_notes=shot_notes, url=out.url,
             provider_id=image_provider_id, model=image_model, round_no=round_no,
+            character_card_ids=[c.id for c in cards],
         )
         trace.append(StudioStep(
             round=round_no, role="artist", action="generate_shot_image",
@@ -266,4 +275,46 @@ async def run_studio_shot(
         status="max_rounds_exceeded", asset_id=asset.id if asset else "",
         url=asset.url if asset else "", prompt=shot_prompt,
         rounds=max_rounds, inspection=last_inspection, trace=trace,
+    )
+
+
+async def regenerate_shot(
+    db: Session,
+    *,
+    project_id: str,
+    asset_id: str,
+    image_provider_id: str,
+    image_model: str,
+    llm_provider_id: Optional[str] = None,
+    llm_model_id: Optional[str] = None,
+    max_rounds: int = 3,
+) -> StudioShotResult:
+    """一键重生成某个已有镜头：用资产里存的 brief + 角色卡关联重跑闭环。
+
+    配合 Story Bible 影响分析使用：用户改了角色身份后，对受影响镜头逐个
+    调本函数重生成（决策在人，系统自动传播只到这里为止）。
+    """
+    from ..models import Asset
+
+    row = db.query(Asset).filter(Asset.id == asset_id).first()
+    if row is None:
+        raise ValueError(f"shot asset '{asset_id}' not found")
+    if row.project_id != project_id:
+        raise ValueError(f"shot asset '{asset_id}' does not belong to project '{project_id}'")
+    if row.asset_kind != "shot":
+        raise ValueError(f"asset '{asset_id}' 不是镜头资产（asset_kind={row.asset_kind}）")
+    brief = (row.extra or {}).get("brief") or row.prompt or row.name or ""
+    if not brief.strip():
+        raise ValueError(f"shot asset '{asset_id}' 没有可复用的 brief")
+    card_ids = (row.extra or {}).get("character_card_ids") or []
+    return await run_studio_shot(
+        db,
+        project_id=project_id,
+        brief=brief,
+        image_provider_id=image_provider_id,
+        image_model=image_model,
+        llm_provider_id=llm_provider_id,
+        llm_model_id=llm_model_id,
+        max_rounds=max_rounds,
+        character_card_ids=card_ids,
     )
