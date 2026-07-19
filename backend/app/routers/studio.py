@@ -1,20 +1,23 @@
 """Studio 路由 — 多 agent 协同（Track B）、成片导出（Track A）与角色卡（Track C）的 HTTP 入口。
 
 POST /api/studio/shots            跑"编剧→美术→质检"闭环，可带 character_card_ids 做一致性锁定。
-POST /api/studio/episodes         导演 agent 拆镜头 → 逐镜头过审 → 整集 mp4（一段故事到成片）。
+POST /api/studio/episodes         提交整集生成任务（202 + task_id，后台异步跑）。
+GET  /api/studio/episodes/{id}    轮询任务状态 / 进度 / 结果。
 POST /api/studio/character-cards  从参考图创建角色卡（vision LLM 提取身份指纹）。
+GET  /api/studio/character-cards  列出项目的角色卡。
 POST /api/studio/export           把一组镜头资产按顺序合成 mp4（ffmpeg 拼接）。
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..agent.character_cards import create_character_card
-from ..agent.director import run_studio_episode
+from ..models import Asset
+from ..agent.character_cards import create_character_card, is_character_card
 from ..agent.llm_factory import NoLLMConfigured, load_llm_configs, select_llm_for_task
 from ..agent.studio import run_studio_shot
 from ..agent.studio_export import export_sequence
+from ..agent.studio_tasks import get_episode_task, start_episode_task
 
 router = APIRouter()
 
@@ -85,6 +88,27 @@ async def create_card(body: CharacterCardIn, db: Session = Depends(get_db)):
     }
 
 
+@router.get("/character-cards")
+async def list_cards(project_id: str = Query(...), db: Session = Depends(get_db)):
+    """列出项目的角色卡（asset_kind="character" 且 extra.character_card 为真）。"""
+    rows = (
+        db.query(Asset)
+        .filter(Asset.project_id == project_id, Asset.asset_kind == "character")
+        .all()
+    )
+    return [
+        {
+            "card_id": row.id,
+            "name": row.name,
+            "identity": row.visual_identity or {},
+            "reference_asset_ids": (row.extra or {}).get("reference_asset_ids") or [],
+            "url": row.url,
+        }
+        for row in rows
+        if is_character_card(row)
+    ]
+
+
 class StudioEpisodeIn(BaseModel):
     project_id: str
     story_text: str = Field(..., min_length=1)
@@ -98,27 +122,36 @@ class StudioEpisodeIn(BaseModel):
     title: str = ""
 
 
-@router.post("/episodes")
-async def create_studio_episode(body: StudioEpisodeIn, db: Session = Depends(get_db)):
-    """一段故事 → 导演拆镜头 → 逐镜头过审 → 整集 mp4。"""
-    try:
-        return await run_studio_episode(
-            db,
-            project_id=body.project_id,
-            story_text=body.story_text,
-            image_provider_id=body.image_provider_id,
-            image_model=body.image_model,
-            llm_provider_id=body.llm_provider_id,
-            llm_model_id=body.llm_model_id,
-            max_shots=body.max_shots,
-            sec_per_image=body.sec_per_image,
-            character_card_ids=body.character_card_ids,
-            title=body.title,
-        )
-    except NoLLMConfigured as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+@router.post("/episodes", status_code=202)
+async def create_studio_episode(body: StudioEpisodeIn):
+    """一段故事 → 导演拆镜头 → 逐镜头过审 → 整集 mp4（后台异步执行）。
+
+    立即返回 202 + task_id；前端轮询 GET /api/studio/episodes/{task_id}。
+    生成过程中的错误（含 NoLLMConfigured / 导演拆不出镜头）通过任务状态
+    status="error" + error 字符串暴露，不再同步返回 400。
+    """
+    task_id = start_episode_task(
+        project_id=body.project_id,
+        story_text=body.story_text,
+        image_provider_id=body.image_provider_id,
+        image_model=body.image_model,
+        llm_provider_id=body.llm_provider_id,
+        llm_model_id=body.llm_model_id,
+        max_shots=body.max_shots,
+        sec_per_image=body.sec_per_image,
+        character_card_ids=body.character_card_ids,
+        title=body.title,
+    )
+    return {"task_id": task_id}
+
+
+@router.get("/episodes/{task_id}")
+async def get_studio_episode(task_id: str):
+    """轮询整集生成任务状态 / 进度 / 结果。"""
+    entry = get_episode_task(task_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="episode task not found")
+    return entry
 
 
 class StudioExportIn(BaseModel):

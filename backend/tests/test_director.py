@@ -143,6 +143,56 @@ async def test_episode_failed_when_none_approved(db_session, mock_pipeline, monk
 
 
 @pytest.mark.asyncio
+async def test_episode_on_progress_reports_phases(db_session, mock_pipeline):
+    """on_progress 被调用且结构正确：planning → shooting（逐镜头）→ exporting → finished。"""
+    events: list[dict] = []
+    result = await run_studio_episode(
+        db_session, project_id="p1", story_text="一段故事",
+        image_provider_id="img-p", image_model="m",
+        on_progress=events.append,
+    )
+    assert result["status"] == "partial"
+
+    phases = [e["phase"] for e in events]
+    assert phases[0] == "planning"
+    assert phases[-1] == "finished"
+    assert "shooting" in phases and "exporting" in phases
+
+    # 拆完镜头后报告 total_shots 和每个镜头 title
+    planned = next(e for e in events if e["total_shots"] == 3)
+    assert planned["phase"] == "shooting"
+    assert [s["title"] for s in planned["shots"]] == ["s1", "s2", "s3"]
+    assert all(s["status"] == "pending" and s["rounds"] == 0 for s in planned["shots"])
+
+    # 镜头开始时标记 running、结束时写回 status/rounds
+    running = [e for e in events if any(s["status"] == "running" for s in e["shots"])]
+    assert [e["current_shot"] for e in running] == [1, 2, 3]
+    final = events[-1]
+    by_title = {s["title"]: s for s in final["shots"]}
+    assert by_title["s1"]["status"] == "approved"
+    assert by_title["s2"]["status"] == "max_rounds_exceeded" and by_title["s2"]["rounds"] == 3
+    assert by_title["s3"]["status"] == "approved"
+
+    # 每次回调收到的是独立拷贝（后续变更不回写已发出的事件）
+    assert len({id(e) for e in events}) == len(events)
+
+
+@pytest.mark.asyncio
+async def test_episode_on_progress_exception_ignored(db_session, mock_pipeline):
+    """回调抛异常不影响主流程。"""
+    def bad_callback(progress):
+        raise RuntimeError("boom")
+
+    result = await run_studio_episode(
+        db_session, project_id="p1", story_text="一段故事",
+        image_provider_id="img-p", image_model="m",
+        on_progress=bad_callback,
+    )
+    assert result["status"] == "partial"
+    assert result["planned_shots"] == 3
+
+
+@pytest.mark.asyncio
 async def test_episode_empty_story_rejected(db_session):
     with pytest.raises(ValueError):
         await run_studio_episode(

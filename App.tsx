@@ -22,6 +22,7 @@ import { AssetCheckReport } from './components/AssetCheckReport';
 import { TitleEndCardEditor } from './components/TitleEndCardEditor';
 import { runAssetCheck, AssetCheckResult } from './utils/assetChecker';
 import { ProjectList } from './components/ProjectList';
+import { StudioPanel } from './components/StudioPanel';
 import { DramaTask, TaskStatus, ArtStyle, BigShot, Character, Language, TaskMode, ApiConfig, ProcessedSegment, createDefaultApiConfig, normalizeModelBindings, LOGICAL_STEPS } from './types';
 import { storageService } from './services/storageService';
 import { useTaskExecutor } from './hooks/useTaskExecutor';
@@ -83,6 +84,7 @@ function AppContent() {
   const [viewingSegment, setViewingSegment] = useState<ProcessedSegment | null>(null);
   const [apiConfig, setApiConfig] = useState<ApiConfig>(createDefaultApiConfig());
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [studioOpen, setStudioOpen] = useState(false);
   const [assetCheckResult, setAssetCheckResult] = useState<AssetCheckResult | null>(null);
   const [isTitleEndCardOpen, setIsTitleEndCardOpen] = useState(false);
   const [toasts, setToasts] = useState<{ id: number; type: ToastType; message: string; exiting?: boolean }[]>([]);
@@ -771,6 +773,14 @@ function AppContent() {
             </h1>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setStudioOpen(true)}
+              data-testid="open-studio"
+              title={t('studioTitle')}
+              className="p-2 hover:bg-black/5 rounded-lg text-[#64748b] hover:text-[#111827] transition-all"
+            >
+              <Clapperboard className="w-5 h-5" />
+            </button>
             <button onClick={() => setIsSettingsOpen(true)} className="p-2 hover:bg-black/5 rounded-lg text-[#64748b] hover:text-[#111827] transition-all">
               <Settings className="w-5 h-5" />
             </button>
@@ -1075,6 +1085,15 @@ function AppContent() {
         config={apiConfig}
         onSave={handleSaveConfig}
       />
+
+      {/* 工作室（Studio）：整集生成全屏视图。projectId 取当前项目；无上下文时面板内可选/手输。 */}
+      {studioOpen && (
+        <StudioPanel
+          projectId={activeTaskId}
+          projects={tasks.map((task) => ({ id: task.id, name: task.name }))}
+          onClose={() => setStudioOpen(false)}
+        />
+      )}
 
       {lightboxImage && <ImageLightbox src={lightboxImage} onClose={() => setLightboxImage(null)} />}
 

@@ -400,6 +400,22 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
+  // ---------- Studio (短剧工作室：整集异步生成) ----------
+  // POST 立即返回 task_id（202），前端轮询 GET 直到 status !== 'running'。
+  createStudioEpisode: (payload: StudioEpisodeCreatePayload) =>
+    request<{ task_id: string }>('/studio/episodes', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  getStudioEpisode: (taskId: string) =>
+    request<StudioEpisodeTaskOut>(`/studio/episodes/${encodeURIComponent(taskId)}`),
+
+  listStudioCharacterCards: (projectId: string) =>
+    request<StudioCharacterCardOut[]>(
+      `/studio/character-cards?project_id=${encodeURIComponent(projectId)}`
+    ),
+
   // ---------- Bootstrap (首屏合并端点) ----------
   // 合并 listDramaTasks + listProviders + getUserPreference('model_bindings')
   // 三个首屏请求为单个 /api/bootstrap，减少 RTT（3 → 1）。
@@ -533,3 +549,53 @@ export const promptTemplates = {
       body: JSON.stringify({ ids }),
     }),
 };
+
+// ============ Studio (短剧工作室) ============
+/** POST /api/studio/episodes 请求体。llm_* / character_card_ids / title 可选。 */
+export interface StudioEpisodeCreatePayload {
+  project_id: string;
+  story_text: string;
+  image_provider_id: string;
+  image_model: string;
+  llm_provider_id?: string;
+  llm_model_id?: string;
+  max_shots?: number;
+  sec_per_image?: number;
+  character_card_ids?: string[];
+  title?: string;
+}
+
+/** 单个镜头的 agent 进度。 */
+export interface StudioShotProgress {
+  title: string;
+  status: 'pending' | 'running' | 'approved' | 'max_rounds_exceeded';
+  rounds: number;
+}
+
+/** GET /api/studio/episodes/{task_id} 响应体。 */
+export interface StudioEpisodeTaskOut {
+  task_id: string;
+  status: 'running' | 'done' | 'partial' | 'failed' | 'error';
+  progress: {
+    phase: 'planning' | 'shooting' | 'exporting' | 'finished';
+    current_shot: number;
+    total_shots: number;
+    shots: StudioShotProgress[];
+  };
+  result: null | {
+    episode_asset_id: string;
+    url: string;
+    shots: any[];
+    export: Record<string, any>;
+  };
+  error: null | string;
+}
+
+/** GET /api/studio/character-cards 响应项。 */
+export interface StudioCharacterCardOut {
+  card_id: string;
+  name: string;
+  identity: { face_anchor?: string; [k: string]: any };
+  reference_asset_ids: string[];
+  url?: string | null;
+}

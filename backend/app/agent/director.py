@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from sqlalchemy.orm import Session
 
@@ -88,8 +88,15 @@ async def run_studio_episode(
     sec_per_image: float = 3.0,
     character_card_ids: Optional[list[str]] = None,
     title: str = "",
+    on_progress: Optional[Callable[[dict], Any]] = None,
 ) -> dict:
     """一段故事 → 镜头列表 → 逐镜头过审 → 整集 mp4。
+
+    on_progress：可选进度回调，接收 dict：
+      {"phase": "planning"|"shooting"|"exporting"|"finished",
+       "current_shot": int, "total_shots": int,
+       "shots": [{"title", "status": "pending"|"running"|"approved"|"max_rounds_exceeded", "rounds"}]}
+    回调异常只记日志，不影响主流程。
 
     Returns: {
       status: "done" | "partial" | "failed",
@@ -100,6 +107,18 @@ async def run_studio_episode(
     if not story_text.strip():
         raise ValueError("story_text is empty")
     max_shots = max(1, min(int(max_shots), 8))
+
+    progress: dict = {"phase": "planning", "current_shot": 0, "total_shots": 0, "shots": []}
+
+    def _emit_progress() -> None:
+        if on_progress is None:
+            return
+        try:
+            on_progress({**progress, "shots": [dict(s) for s in progress["shots"]]})
+        except Exception:  # noqa: BLE001 — 回调是旁路，不能拖垮主流程
+            logger.warning("[episode] on_progress callback raised", exc_info=True)
+
+    _emit_progress()
 
     configs = load_llm_configs(db)
     llm = select_llm_for_task(llm_provider_id, configs, llm_model_id)
@@ -113,11 +132,21 @@ async def run_studio_episode(
     if not planned:
         raise ValueError("director agent 未能从故事拆出有效镜头")
 
+    progress["phase"] = "shooting"
+    progress["total_shots"] = len(planned)
+    progress["shots"] = [
+        {"title": s["title"], "status": "pending", "rounds": 0} for s in planned
+    ]
+    _emit_progress()
+
     # ---- 逐镜头跑三角闭环（串行：控制供应商速率/额度） ----
     shot_results: list[dict] = []
     approved_ids: list[str] = []
     for i, shot in enumerate(planned, 1):
         logger.info("[episode] shot %d/%d: %s", i, len(planned), shot["title"])
+        progress["current_shot"] = i
+        progress["shots"][i - 1]["status"] = "running"
+        _emit_progress()
         result = await run_studio_shot(
             db,
             project_id=project_id,
@@ -138,10 +167,15 @@ async def run_studio_episode(
         })
         if result.status == "approved" and result.asset_id:
             approved_ids.append(result.asset_id)
+        progress["shots"][i - 1]["status"] = result.status
+        progress["shots"][i - 1]["rounds"] = result.rounds
+        _emit_progress()
 
     # ---- 剪辑：过审镜头合成整集 ----
     export: dict | None = None
     if approved_ids:
+        progress["phase"] = "exporting"
+        _emit_progress()
         export = await export_sequence(
             db,
             project_id=project_id,
@@ -156,6 +190,9 @@ async def run_studio_episode(
         status = "partial"
     else:
         status = "done"
+
+    progress["phase"] = "finished"
+    _emit_progress()
 
     return {
         "status": status,
