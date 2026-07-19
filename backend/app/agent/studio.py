@@ -262,6 +262,7 @@ async def run_studio_shot(
             detail=last_inspection,
         ))
         if approved:
+            _mark_shot_review_pending(db, asset, "approved")
             return StudioShotResult(
                 status="approved", asset_id=asset.id, url=out.url,
                 prompt=shot_prompt, rounds=round_no,
@@ -271,6 +272,8 @@ async def run_studio_shot(
         if issues:
             feedback += "\ncharacter consistency: " + "; ".join(issues)
 
+    if asset is not None:
+        _mark_shot_review_pending(db, asset, "max_rounds_exceeded")
     return StudioShotResult(
         status="max_rounds_exceeded", asset_id=asset.id if asset else "",
         url=asset.url if asset else "", prompt=shot_prompt,
@@ -318,3 +321,81 @@ async def regenerate_shot(
         max_rounds=max_rounds,
         character_card_ids=card_ids,
     )
+
+
+# ============ 审片台（人审层） ============
+# critic 只是初筛，人审才是终审：镜头生成后 review_status=pending_review，
+# 由用户在审片台 approve/reject/lock。同 brief 的多个资产是同一镜头的版本。
+
+REVIEW_ACTION_TO_STATUS = {
+    "approve": "approved",
+    "reject": "rejected",
+    "lock": "locked",
+    "unlock": "pending_review",
+}
+
+
+def _mark_shot_review_pending(db: Session, asset, critic_status: str) -> None:
+    """闭环结束后给镜头资产写入初筛结论 + 待审标记（SQLAlchemy JSON 需整体赋值标脏）。"""
+    extra = dict(asset.extra or {})
+    extra["critic_status"] = critic_status
+    extra["review_status"] = "pending_review"
+    asset.extra = extra
+    db.commit()
+
+
+def list_shots(db: Session, project_id: str) -> list[dict]:
+    """审片台镜头列表：按 brief 分版本（同 brief 多资产 = 同镜头多版本）。"""
+    from ..models import Asset
+
+    rows = (
+        db.query(Asset)
+        .filter(Asset.project_id == project_id, Asset.asset_kind == "shot", Asset.failed.is_(False))
+        .order_by(Asset.created_at.asc())
+        .all()
+    )
+    groups: dict[str, int] = {}
+    totals: dict[str, int] = {}
+    for row in rows:
+        brief = (row.extra or {}).get("brief") or row.prompt or row.name or ""
+        totals[brief] = totals.get(brief, 0) + 1
+    out = []
+    for row in rows:
+        extra = row.extra or {}
+        brief = extra.get("brief") or row.prompt or row.name or ""
+        groups[brief] = groups.get(brief, 0) + 1
+        out.append({
+            "asset_id": row.id,
+            "brief": brief,
+            "title": row.title or row.name or "",
+            "url": row.url,
+            "prompt": row.prompt,
+            "critic_status": extra.get("critic_status"),
+            "review_status": extra.get("review_status") or "pending_review",
+            "review_note": extra.get("review_note"),
+            "version": groups[brief],
+            "versions": totals[brief],
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+        })
+    return out
+
+
+def review_shot(db: Session, asset_id: str, action: str, note: str = "") -> dict:
+    """人审操作：approve/reject/lock/unlock（可选备注）。"""
+    from ..models import Asset
+
+    status = REVIEW_ACTION_TO_STATUS.get(action)
+    if status is None:
+        raise ValueError(f"unknown review action '{action}'（支持 approve/reject/lock/unlock）")
+    row = db.query(Asset).filter(Asset.id == asset_id).first()
+    if row is None:
+        raise ValueError(f"shot asset '{asset_id}' not found")
+    if row.asset_kind != "shot":
+        raise ValueError(f"asset '{asset_id}' 不是镜头资产")
+    extra = dict(row.extra or {})
+    extra["review_status"] = status
+    if note:
+        extra["review_note"] = note
+    row.extra = extra
+    db.commit()
+    return {"asset_id": row.id, "review_status": status, "review_note": extra.get("review_note")}

@@ -23,7 +23,7 @@ from ..agent.character_cards import (
     update_card_identity,
 )
 from ..agent.llm_factory import NoLLMConfigured, load_llm_configs, select_llm_for_task
-from ..agent.studio import regenerate_shot, run_studio_shot
+from ..agent.studio import list_shots, regenerate_shot, review_shot, run_studio_shot
 from ..agent.studio_export import export_sequence
 from ..agent.studio_tasks import get_episode_task, start_episode_task
 
@@ -61,6 +61,26 @@ async def create_studio_shot(body: StudioShotIn, db: Session = Depends(get_db)):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return result.to_dict()
+
+
+@router.get("/shots")
+async def get_shots(project_id: str = Query(...), db: Session = Depends(get_db)):
+    """审片台镜头列表（含初筛结论、人审状态、版本分组）。"""
+    return list_shots(db, project_id)
+
+
+class ShotReviewIn(BaseModel):
+    action: str = Field(..., min_length=1)  # approve / reject / lock / unlock
+    note: str = ""
+
+
+@router.post("/shots/{asset_id}/review")
+async def review_shot_endpoint(asset_id: str, body: ShotReviewIn, db: Session = Depends(get_db)):
+    """人审操作：critic 只是初筛，人审才是终审。"""
+    try:
+        return review_shot(db, asset_id, body.action, body.note)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 class CharacterCardIn(BaseModel):
