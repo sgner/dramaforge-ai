@@ -181,3 +181,66 @@ async def test_openai_video_unresolvable_refs_fall_back_to_t2v(upload_dir, monke
     )
     assert out.url == "https://cdn.test/out.mp4"
     assert "image" not in calls[0]
+
+
+# ---------- t2i/i2i 变体自动切换（线上 400 事故回归） ----------
+
+def test_resolve_ref_model_switches_i2i_to_t2i_without_refs():
+    """无参考图 + i2i 模型 → 自动切到同族 t2i（否则上游 400 requires at least one input image）。"""
+    provider = {"image_models": ["seedream-v5-pro-i2i", "seedream-v5-pro-t2i"]}
+    assert media._resolve_ref_model(provider, "seedream-v5-pro-i2i", False, "image") == "seedream-v5-pro-t2i"
+
+
+def test_resolve_ref_model_switches_t2i_to_i2i_with_refs():
+    """有参考图 + t2i 模型 → 自动切到同族 i2i（否则参考图不会生效）。"""
+    provider = {"image_models": ["seedream-v5-pro-i2i", "seedream-v5-pro-t2i"]}
+    assert media._resolve_ref_model(provider, "seedream-v5-pro-t2i", True, "image") == "seedream-v5-pro-i2i"
+
+
+def test_resolve_ref_model_keeps_when_variant_missing():
+    """变体不在模型列表 → 保持原样（不乱猜）。"""
+    provider = {"image_models": ["seedream-v5-pro-i2i"]}
+    assert media._resolve_ref_model(provider, "seedream-v5-pro-i2i", False, "image") == "seedream-v5-pro-i2i"
+    # 非 t2i/i2i 后缀的模型不受影响
+    provider2 = {"video_models": ["kling-lip-sync-video"]}
+    assert media._resolve_ref_model(provider2, "kling-lip-sync-video", False, "video") == "kling-lip-sync-video"
+
+
+@pytest.mark.asyncio
+async def test_openai_image_uses_t2i_when_no_refs(monkeypatch):
+    """端到端：provider 绑定 i2i 模型但无参考图 → 实际发给上游的是 t2i。"""
+    calls = []
+
+    async def fake_post(self, url, headers=None, json=None):
+        calls.append(json)
+        return _Resp({"data": [{"url": "https://cdn.test/out.png"}]})
+
+    monkeypatch.setattr(media.httpx.AsyncClient, "post", fake_post)
+    provider = _provider()
+    provider["image_models"] = ["seedream-v5-pro-i2i", "seedream-v5-pro-t2i"]
+    out = await _openai_image(
+        provider,
+        ImageGenerateIn(provider_id="test-provider", model="seedream-v5-pro-i2i", prompt="a cat"),
+    )
+    assert calls[0]["model"] == "seedream-v5-pro-t2i"
+    assert out.model == "seedream-v5-pro-t2i"
+
+
+@pytest.mark.asyncio
+async def test_openai_video_uses_i2v_when_refs_present(monkeypatch, upload_dir):
+    """端到端：video 绑定 t2v 模型但有参考图 → 实际发给上游的是 i2v。"""
+    (upload_dir / "f.png").write_bytes(b"F")
+    calls = []
+
+    async def fake_post(self, url, headers=None, json=None):
+        calls.append(json)
+        return _Resp({"data": {"url": "https://cdn.test/out.mp4"}})
+
+    monkeypatch.setattr(media.httpx.AsyncClient, "post", fake_post)
+    provider = _provider()
+    provider["video_models"] = ["seedance-2.0-mini-t2v", "seedance-2.0-mini-i2v"]
+    await _openai_video(
+        provider,
+        VideoGenerateIn(provider_id="test-provider", model="seedance-2.0-mini-t2v", prompt="p", ref_urls=["/files/f.png"]),
+    )
+    assert calls[0]["model"] == "seedance-2.0-mini-i2v"

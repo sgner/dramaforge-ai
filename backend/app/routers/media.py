@@ -83,6 +83,27 @@ def _strip_v1_suffix(url: str) -> str:
 _UPLOAD_DIR = Path(__file__).resolve().parent.parent / "uploads"
 
 
+def _resolve_ref_model(provider: dict, model: str, has_refs: bool, kind: str) -> str:
+    """按有无参考图选择 t2x/i2x 变体模型。
+
+    线上事故：image 绑定的是 i2i 变体（seedream-v5-pro-i2i），纯文生图任务
+    （角色概念图，无参考图）被上游 400 "image-to-image requires at least one
+    input image"。反之，有参考图但绑了 t2i 变体时参考图不会生效。
+    只在同族变体存在于 provider 模型列表时切换，否则保持原样。
+    """
+    t2x, i2x = ("-t2i", "-i2i") if kind == "image" else ("-t2v", "-i2v")
+    models = provider.get(f"{kind}_models") or []
+    if has_refs and model.endswith(t2x):
+        cand = model[: -len(t2x)] + i2x
+        if cand in models:
+            return cand
+    if not has_refs and model.endswith(i2x):
+        cand = model[: -len(i2x)] + t2x
+        if cand in models:
+            return cand
+    return model
+
+
 def _ref_to_image_value(ref: str) -> Optional[str]:
     """把单个参考图引用转成上游可消费的 image 值。
 
@@ -213,8 +234,9 @@ async def _openai_image(provider: dict, body: ImageGenerateIn) -> GenerateOut:
     ov = _media_overrides(provider, "image")
     endpoint = ov.get("endpoint") or "/v1/images/generations"
     url = f"{base}{endpoint}"
+    model = _resolve_ref_model(provider, body.model, bool(body.ref_urls), "image")
     payload = {
-        "model": body.model,
+        "model": model,
         "prompt": body.prompt,
         "n": 1,
     }
@@ -241,7 +263,7 @@ async def _openai_image(provider: dict, body: ImageGenerateIn) -> GenerateOut:
             if r.status_code >= 400:
                 raise HTTPException(
                     status_code=502,
-                    detail=f"image provider '{provider['provider_id']}' model '{body.model}' HTTP {r.status_code} at {url}: {r.text[:300]}",
+                    detail=f"image provider '{provider['provider_id']}' model '{model}' HTTP {r.status_code} at {url}: {r.text[:300]}",
                 )
             try:
                 data = r.json()
@@ -249,13 +271,13 @@ async def _openai_image(provider: dict, body: ImageGenerateIn) -> GenerateOut:
                 raise HTTPException(status_code=502, detail=f"image API returned invalid JSON: {e}")
             if ov.get("async_task"):
                 url_out, raw = await _poll_async_task(
-                    cx, provider, base, endpoint, ov, data, "image", body.model,
+                    cx, provider, base, endpoint, ov, data, "image", model,
                 )
-                return GenerateOut(url=url_out, provider_id=provider["provider_id"], model=body.model, raw=raw)
+                return GenerateOut(url=url_out, provider_id=provider["provider_id"], model=model, raw=raw)
     except httpx.HTTPError as e:
         raise HTTPException(
             status_code=502,
-            detail=f"image provider '{provider['provider_id']}' model '{body.model}' network error: {e}",
+            detail=f"image provider '{provider['provider_id']}' model '{model}' network error: {e}",
         )
     custom_field = ov.get("result_url_field")
     url_out = (
@@ -266,7 +288,7 @@ async def _openai_image(provider: dict, body: ImageGenerateIn) -> GenerateOut:
     )
     if not url_out:
         raise HTTPException(status_code=502, detail=f"image API returned no url: {data}")
-    return GenerateOut(url=url_out, provider_id=provider["provider_id"], model=body.model, raw=data)
+    return GenerateOut(url=url_out, provider_id=provider["provider_id"], model=model, raw=data)
 
 
 # OpenAI 兼容视频生成（placeholder：很多供应商还没标准 /videos/generations，先用 /chat/completions 走通链路）
@@ -275,8 +297,9 @@ async def _openai_video(provider: dict, body: VideoGenerateIn) -> GenerateOut:
     ov = _media_overrides(provider, "video")
     endpoint = ov.get("endpoint") or "/v1/videos/generations"
     url = f"{base}{endpoint}"
+    model = _resolve_ref_model(provider, body.model, bool(body.ref_urls), "video")
     payload = {
-        "model": body.model,
+        "model": model,
         "prompt": body.prompt,
         "duration": body.duration_sec,
         "aspect_ratio": body.aspect_ratio,
@@ -308,19 +331,19 @@ async def _openai_video(provider: dict, body: VideoGenerateIn) -> GenerateOut:
             # 避免"假成功"资产通过 finish_task 的交付物校验。
             logger.warning(
                 "video provider '%s' model '%s' endpoint not found (%s); using dev fallback",
-                provider["provider_id"], body.model, url,
+                provider["provider_id"], model, url,
             )
             return GenerateOut(
                 url="/files/dev-fallback.mp4",
                 provider_id=provider["provider_id"],
-                model=body.model,
+                model=model,
                 raw={"fallback": True, "dev_fallback": True, "reason": "upstream_404", "endpoint": url},
                 dev_fallback=True,
             )
         if r.status_code >= 400:
             raise HTTPException(
                 status_code=502,
-                detail=f"video provider '{provider['provider_id']}' model '{body.model}' HTTP {r.status_code} at {url}: {r.text[:300]}",
+                detail=f"video provider '{provider['provider_id']}' model '{model}' HTTP {r.status_code} at {url}: {r.text[:300]}",
             )
         try:
             data = r.json()
@@ -328,9 +351,9 @@ async def _openai_video(provider: dict, body: VideoGenerateIn) -> GenerateOut:
             raise HTTPException(status_code=502, detail=f"video API returned invalid JSON: {e}")
         if ov.get("async_task"):
             url_out, raw = await _poll_async_task(
-                cx, provider, base, endpoint, ov, data, "video", body.model,
+                cx, provider, base, endpoint, ov, data, "video", model,
             )
-            return GenerateOut(url=url_out, provider_id=provider["provider_id"], model=body.model, raw=raw)
+            return GenerateOut(url=url_out, provider_id=provider["provider_id"], model=model, raw=raw)
     custom_field = ov.get("result_url_field")
     url_out = (
         (_dig(data, custom_field) if custom_field else None)
@@ -340,7 +363,7 @@ async def _openai_video(provider: dict, body: VideoGenerateIn) -> GenerateOut:
     )
     if not url_out:
         raise HTTPException(status_code=502, detail=f"video API returned no url: {data}")
-    return GenerateOut(url=url_out, provider_id=provider["provider_id"], model=body.model, raw=data)
+    return GenerateOut(url=url_out, provider_id=provider["provider_id"], model=model, raw=data)
 
 
 def _aspect_to_size(ar: str) -> str:
