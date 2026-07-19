@@ -1,6 +1,7 @@
 """Studio 路由 — 多 agent 协同（Track B）、成片导出（Track A）与角色卡（Track C）的 HTTP 入口。
 
 POST /api/studio/shots            跑"编剧→美术→质检"闭环，可带 character_card_ids 做一致性锁定。
+POST /api/studio/episodes         导演 agent 拆镜头 → 逐镜头过审 → 整集 mp4（一段故事到成片）。
 POST /api/studio/character-cards  从参考图创建角色卡（vision LLM 提取身份指纹）。
 POST /api/studio/export           把一组镜头资产按顺序合成 mp4（ffmpeg 拼接）。
 """
@@ -10,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..agent.character_cards import create_character_card
+from ..agent.director import run_studio_episode
 from ..agent.llm_factory import NoLLMConfigured, load_llm_configs, select_llm_for_task
 from ..agent.studio import run_studio_shot
 from ..agent.studio_export import export_sequence
@@ -81,6 +83,42 @@ async def create_card(body: CharacterCardIn, db: Session = Depends(get_db)):
         "identity": card.visual_identity or {},
         "reference_asset_ids": (card.extra or {}).get("reference_asset_ids") or [],
     }
+
+
+class StudioEpisodeIn(BaseModel):
+    project_id: str
+    story_text: str = Field(..., min_length=1)
+    image_provider_id: str
+    image_model: str
+    llm_provider_id: str | None = None
+    llm_model_id: str | None = None
+    max_shots: int = 5
+    sec_per_image: float = Field(3.0, gt=0, le=30)
+    character_card_ids: list[str] = Field(default_factory=list)
+    title: str = ""
+
+
+@router.post("/episodes")
+async def create_studio_episode(body: StudioEpisodeIn, db: Session = Depends(get_db)):
+    """一段故事 → 导演拆镜头 → 逐镜头过审 → 整集 mp4。"""
+    try:
+        return await run_studio_episode(
+            db,
+            project_id=body.project_id,
+            story_text=body.story_text,
+            image_provider_id=body.image_provider_id,
+            image_model=body.image_model,
+            llm_provider_id=body.llm_provider_id,
+            llm_model_id=body.llm_model_id,
+            max_shots=body.max_shots,
+            sec_per_image=body.sec_per_image,
+            character_card_ids=body.character_card_ids,
+            title=body.title,
+        )
+    except NoLLMConfigured as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 class StudioExportIn(BaseModel):
