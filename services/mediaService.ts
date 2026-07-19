@@ -137,6 +137,29 @@ function buildVideoPrompt(optimizedPrompt: string, style: string, language: stri
 
 // ============ 公开 API ============
 
+/**
+ * 单节点直接生成：prompt 原样发给供应商，不套任何模板。
+ * generateStoryboardImage / generatePropImage / generateCharacterDesign 里的
+ * 六宫格故事板、静物摄影、角色设定集等包装是标准流程/pipeline 的专用格式，
+ * 画布单节点（上传节点图生图、空节点直接生成）应尊重用户输入的原始 prompt。
+ */
+export const generateImageDirect = async (
+  prompt: string,
+  provider: Provider,
+  model: ModelConfig,
+  referenceImages: string[] = [],
+  aspectRatio?: string
+): Promise<string> => {
+  const result = await api.generateImage({
+    provider_id: provider.id,
+    model: model.modelName,
+    prompt,
+    ref_urls: referenceImages,
+    aspect_ratio: aspectRatio || '1:1',
+  });
+  return result.url;
+};
+
 export const generateCharacterDesign = async (
   character: Character, 
   style: string,

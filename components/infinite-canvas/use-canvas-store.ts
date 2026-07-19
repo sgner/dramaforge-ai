@@ -23,7 +23,7 @@ import {
   getModelForStep,
   normalizeModelBindings,
 } from '../../types';
-import { generateSoraVideo, generateCharacterDesign, generateStoryboardImage, generatePropImage } from '../../services/mediaService';
+import { generateCharacterDesign, generateStoryboardImage, generatePropImage, generateImageDirect } from '../../services/mediaService';
 import { estimatedNodeRect } from './engine';
 import { expandIdeaToStory, generateScriptFromNovel, optimizeSoraPromptViaBackend } from '../../services/llmClient';
 import { getT } from '../../i18n';
@@ -917,35 +917,20 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
       return;
     }
 
-    const model: ModelConfig = {
-      id: modelName,
-      providerId: provider.id,
-      modelName,
-      displayName: modelName,
-      apiPath: '/video/generations',
-      apiFormat: 'openai-video',
-      customHeaders: '',
-      customBodyTemplate: '',
-      customResponsePath: '',
-      pollApiPath: '',
-      enabled: true,
-    };
-
     try {
       // 单节点直接运行：尊重用户输入的 prompt，不做隐式 LLM 优化
       // （优化是 pipeline 模式的显式步骤，见 runPipeline Step 7）。
+      // prompt 原样发给供应商，不套 buildVideoPrompt 的风格/文化前缀包装。
       get().updateNode(nodeId, { _assetSourcePrompt: prompt, _assetPrompt: prompt });
-      const videoUrl = await generateSoraVideo(
+      const result = await api.generateVideo({
+        provider_id: provider.id,
+        model: modelName,
         prompt,
-        'cinematic',
-        'zh',
-        provider,
-        model,
-        inputImageUrls,
-        (status) => {
-          get().updateNode(nodeId, { runError: status });
-        }
-      );
+        ref_urls: inputImageUrls,
+        aspect_ratio: aspectRatio || '16:9',
+        duration_sec: Number(duration) || 15,
+      });
+      const videoUrl = result.url;
 
       get().updateNode(nodeId, {
         url: videoUrl,
@@ -1665,7 +1650,10 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
       const referenceImages = canvasNode
         ? connectedImageUrls(get().nodes, get().connections, canvasNode.id)
         : [];
-      if (asset.kind === 'character') {
+      if (customPrompt) {
+        // 用户在浮窗直接输入 prompt 的单节点生成：原样使用，不套六宫格/静物等流程模板
+        url = await generateImageDirect(prompt, provider, model, referenceImages);
+      } else if (asset.kind === 'character') {
         url = await generatePropImage(prompt, provider, model, undefined, referenceImages);
       } else if (asset.kind === 'prop' || asset.kind === 'scene') {
         url = await generatePropImage(prompt, provider, model, undefined, referenceImages);
@@ -1804,7 +1792,8 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
         ...connectedImageUrls(get().nodes, get().connections, sourceNodeId),
         sourceUrl,
       ].filter((u, i, arr) => !!u && arr.indexOf(u) === i);
-      const url = await generateStoryboardImage(prompt, '', 'zh', '', referenceImages, provider, model, undefined, undefined, params.aspectRatio);
+      // 单节点图生图：prompt 原样使用，不套六宫格故事板等标准流程模板
+      const url = await generateImageDirect(prompt, provider, model, referenceImages, params.aspectRatio);
 
       // 4) 成功：结果写到新节点，不覆盖源节点
       const successAssets = get().taskAssets.map(a =>

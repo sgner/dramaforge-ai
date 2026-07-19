@@ -6159,15 +6159,103 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity: 0 !imp
   overflow: auto;
 }
 
+/* ===== 节点右键菜单（ImageNodeMenu / GeneratorNodeMenu / LinkCreateMenu） ===== */
+.menu-section-title {
+  padding: 4px 10px 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+  user-select: none;
+}
+
+.menu-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  background: transparent;
+  border-radius: 9px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.menu-btn svg {
+  flex-shrink: 0;
+  opacity: 0.75;
+}
+.menu-btn:hover {
+  background: var(--soft);
+}
+.menu-btn:active {
+  background: var(--line);
+}
+
+.menu-divider {
+  height: 1px;
+  margin: 5px 8px;
+  background: var(--line);
+}
+
+/* LinkCreateMenu 图文结构 */
+.menu-btn-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: var(--soft);
+  color: var(--muted);
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.menu-btn:hover .menu-btn-icon {
+  background: var(--panel);
+  color: var(--text);
+}
+.menu-btn-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.menu-btn-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.menu-btn-sub {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* GeneratorNodeMenu 输入/输出类型网格 */
+.node-port-menu-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+}
+
 /* === ImageNodeMenu 资产元数据 === */
 .image-menu-meta {
   display: flex;
   flex-direction: column;
   gap: 4px;
   padding: 6px 10px;
-  border-bottom: 1px solid var(--line);
+  border-radius: 10px;
   background: var(--soft);
-  max-width: 280px;
 }
 .image-menu-meta-row {
   display: flex;
