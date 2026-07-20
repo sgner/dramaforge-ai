@@ -117,8 +117,12 @@ async def export_sequence(
     asset_ids: list[str],
     sec_per_image: float = 3.0,
     title: str = "",
+    durations: list[float] | None = None,
 ) -> dict:
     """把 asset_ids 指定的镜头按顺序合成一个 mp4，落 uploads 并登记 Asset。
+
+    durations：可选逐镜头秒数，非 None 时长度必须等于 asset_ids，
+    每个镜头用 durations[i] 替代 sec_per_image；为 None 时行为不变。
 
     Returns: {"asset_id", "url", "segments", "width", "height", "fps"}
     """
@@ -126,6 +130,10 @@ async def export_sequence(
 
     if not asset_ids:
         raise ValueError("asset_ids is empty")
+    if durations is not None and len(durations) != len(asset_ids):
+        raise ValueError(
+            f"durations length ({len(durations)}) must match asset_ids length ({len(asset_ids)})"
+        )
     ffmpeg = _ffmpeg_path()
 
     rows = []
@@ -146,7 +154,8 @@ async def export_sequence(
             src = local if local else await _download(url, work)
             is_image = _is_image_asset(row)
             seg = work / f"seg_{i:03d}.mp4"
-            await _run(_segment_cmd(ffmpeg, src, is_image, sec_per_image, seg), SEG_TIMEOUT_SEC)
+            sec = durations[i] if durations is not None else sec_per_image
+            await _run(_segment_cmd(ffmpeg, src, is_image, sec, seg), SEG_TIMEOUT_SEC)
             segments.append(seg)
 
         concat_list = work / "concat.txt"
@@ -176,6 +185,7 @@ async def export_sequence(
             extra={
                 "segment_asset_ids": asset_ids,
                 "sec_per_image": sec_per_image,
+                "durations": durations,
                 "width": WIDTH, "height": HEIGHT, "fps": FPS,
             },
         )

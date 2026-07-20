@@ -416,6 +416,13 @@ export const api = {
       `/studio/character-cards?project_id=${encodeURIComponent(projectId)}`
     ),
 
+  // 同步接口：vision LLM 从参考图提取身份指纹，可能较慢，调用方要给 loading 态。
+  createStudioCharacterCard: (payload: StudioCharacterCardCreatePayload) =>
+    request<StudioCharacterCardOut>('/studio/character-cards', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
   // ---------- Studio 审片台（镜头人工审核 + 单镜头重生成） ----------
   listStudioShots: (projectId: string) =>
     request<StudioShotOut[]>(`/studio/shots?project_id=${encodeURIComponent(projectId)}`),
@@ -436,6 +443,13 @@ export const api = {
   // 导出选中镜头为 mp4（同步接口，调用方要给 loading 态）。
   createStudioExport: (payload: StudioExportCreatePayload) =>
     request<StudioExportOut>('/studio/export', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  // LLM 智能编排：给时间线资产排序并配时长/字幕（同步接口，无 LLM 配置时后端 400）。
+  arrangeStudioAssets: (payload: StudioArrangePayload) =>
+    request<StudioArrangeOut>('/studio/arrange', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
@@ -624,6 +638,15 @@ export interface StudioCharacterCardOut {
   url?: string | null;
 }
 
+/** POST /api/studio/character-cards 请求体。reference_asset_ids 至少 1 个。 */
+export interface StudioCharacterCardCreatePayload {
+  project_id: string;
+  name: string;
+  reference_asset_ids: string[];
+  llm_provider_id?: string;
+  llm_model_id?: string;
+}
+
 // ============ Studio 审片台 ============
 /** 人工审核动作：approve→approved，reject→rejected，lock→locked，unlock→pending_review。 */
 export type StudioReviewAction = 'approve' | 'reject' | 'lock' | 'unlock';
@@ -680,7 +703,23 @@ export interface StudioExportCreatePayload {
   project_id: string;
   asset_ids: string[];
   sec_per_image?: number;
+  /** 逐镜头秒数（与 asset_ids 等长）；给了就优先于 sec_per_image。 */
+  durations?: number[];
   title?: string;
+}
+
+/** POST /api/studio/arrange 请求体：LLM 智能编排时间线。 */
+export interface StudioArrangePayload {
+  project_id: string;
+  asset_ids: string[];
+  story_hint?: string;
+  llm_provider_id?: string;
+  llm_model_id?: string;
+}
+
+/** POST /api/studio/arrange 响应体（items 有序、完整覆盖输入资产）。 */
+export interface StudioArrangeOut {
+  items: { asset_id: string; sec: number; caption: string }[];
 }
 
 /** POST /api/studio/export 响应体。 */

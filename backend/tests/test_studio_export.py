@@ -99,6 +99,32 @@ async def test_export_empty_ids_rejected(db_session):
 
 
 @pytest.mark.asyncio
+async def test_export_per_shot_durations(db_session, fake_ffmpeg):
+    """durations 非 None：逐镜头用 durations[i] 作为秒数，并记录到 extra。"""
+    _add_asset(db_session, "a1", "image", "https://cdn.test/1.png")
+    _add_asset(db_session, "a2", "image", "https://cdn.test/2.png")
+
+    result = await export_sequence(
+        db_session, project_id="p1", asset_ids=["a1", "a2"], durations=[1.5, 4.25],
+    )
+    seg_cmds = [c for c in fake_ffmpeg if "concat" not in c]
+    assert len(seg_cmds) == 2
+    assert "1.50" in seg_cmds[0] and "4.25" in seg_cmds[1]
+    asset = db_session.query(Asset).filter_by(id=result["asset_id"]).first()
+    assert asset.extra["durations"] == [1.5, 4.25]
+
+
+@pytest.mark.asyncio
+async def test_export_durations_length_mismatch(db_session, fake_ffmpeg):
+    _add_asset(db_session, "a1", "image", "https://cdn.test/1.png")
+    _add_asset(db_session, "a2", "image", "https://cdn.test/2.png")
+    with pytest.raises(ValueError, match="durations length"):
+        await export_sequence(
+            db_session, project_id="p1", asset_ids=["a1", "a2"], durations=[1.0],
+        )
+
+
+@pytest.mark.asyncio
 async def test_export_unknown_asset_rejected(db_session, fake_ffmpeg):
     with pytest.raises(ValueError, match="not found"):
         await export_sequence(db_session, project_id="p1", asset_ids=["ghost"])
@@ -153,3 +179,21 @@ def test_export_endpoint(client, db_session, fake_ffmpeg):
 def test_export_endpoint_400_on_empty(client):
     r = client.post("/api/studio/export", json={"project_id": "p1", "asset_ids": []})
     assert r.status_code == 422  # pydantic min_length=1
+
+
+def test_export_endpoint_with_durations(client, db_session, fake_ffmpeg):
+    """端点透传 durations；长度不匹配 → 400。"""
+    _add_asset(db_session, "a1", "image", "https://cdn.test/1.png")
+    _add_asset(db_session, "a2", "image", "https://cdn.test/2.png")
+    r = client.post("/api/studio/export", json={
+        "project_id": "p1", "asset_ids": ["a1", "a2"], "durations": [2.0, 5.0],
+    })
+    assert r.status_code == 200, r.text
+    seg_cmds = [c for c in fake_ffmpeg if "concat" not in c]
+    assert "2.00" in seg_cmds[0] and "5.00" in seg_cmds[1]
+
+    r = client.post("/api/studio/export", json={
+        "project_id": "p1", "asset_ids": ["a1", "a2"], "durations": [2.0],
+    })
+    assert r.status_code == 400
+    assert "durations" in r.json()["detail"]

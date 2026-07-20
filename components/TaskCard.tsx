@@ -1,16 +1,18 @@
 import React, { useState, useRef, useCallback } from 'react';
 import { DramaTask, TaskStatus } from '../types';
-import { Play, Loader2, Film, Trash2, Download, CheckCircle2, AlertCircle, Clock } from 'lucide-react';
+import { Play, Loader2, Film, Trash2, Download, CheckCircle2, AlertCircle, Clock, Clapperboard } from 'lucide-react';
 
 interface Props {
   task: DramaTask;
   onClick: () => void;
   onDelete: () => void;
   onExport: () => void;
+  /** 封面左下角"去工作室成片"按钮（hover 显示）。 */
+  onOpenStudio?: () => void;
   t: (key: string) => string;
 }
 
-export const TaskCard: React.FC<Props> = ({ task, onClick, onDelete, onExport, t }) => {
+export const TaskCard: React.FC<Props> = ({ task, onClick, onDelete, onExport, onOpenStudio, t }) => {
   const [isHovering, setIsHovering] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
 
@@ -83,6 +85,17 @@ export const TaskCard: React.FC<Props> = ({ task, onClick, onDelete, onExport, t
         </div>
 
         {/* Action buttons */}
+        {onOpenStudio && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onOpenStudio(); }}
+            className="absolute bottom-3 left-3 px-3 py-2 glass rounded-lg z-20 opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 transition-all duration-300 hover:bg-brand-600/30 hover:text-brand-500 text-[#64748b] btn-press flex items-center gap-1.5 text-xs font-medium"
+            title={t('goStudio')}
+          >
+            <Clapperboard className="w-4 h-4" />
+            {t('goStudio')}
+          </button>
+        )}
+
         <button
           onClick={(e) => { e.stopPropagation(); onDelete(); }}
           className="absolute bottom-3 right-3 p-2 glass rounded-lg z-20 opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 transition-all duration-300 hover:bg-red-600/30 hover:text-red-600 text-[#64748b] btn-press"

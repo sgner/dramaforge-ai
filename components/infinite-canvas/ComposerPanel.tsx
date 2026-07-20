@@ -57,8 +57,48 @@ export const ComposerPanel: React.FC = React.memo(() => {
       left: rect.x + rect.w / 2 - cardW / 2,
       top: rect.y + rect.h + gap,
       width: cardW,
+      gap,
+      nodeTop: rect.y,
     };
   }, [selectedNode]);
+
+  // ===== 视口边界保护 =====
+  // 节点靠近视口底部时浮窗翻转到节点上方；横向越界时平移收回。
+  // 依据节点 DOM 的屏幕位置与上/下剩余空间做决策（而非浮窗自身位置），避免翻转抖动。
+  const composerRef = useRef<HTMLDivElement>(null);
+  const [edgeAdjust, setEdgeAdjust] = useState<{ flip: boolean; shiftX: number }>({ flip: false, shiftX: 0 });
+
+  // 切换选中节点时复位，让浮窗先回到默认位置再重新测量
+  useEffect(() => {
+    setEdgeAdjust({ flip: false, shiftX: 0 });
+  }, [selectedNode?.id]);
+
+  useEffect(() => {
+    const el = composerRef.current;
+    if (!el || !selectedNode || !composerPosition) return;
+    const margin = 12;
+    const scale = viewport.scale || 1;
+    const nodeEl = document.querySelector(`.image-node[data-id="${CSS.escape(selectedNode.id)}"]`);
+    if (!nodeEl) return;
+    const nodeRect = nodeEl.getBoundingClientRect();
+
+    // 垂直方向：下方放不下且上方空间更大 → 翻转
+    const hScreen = el.offsetHeight * scale;
+    const spaceBelow = window.innerHeight - nodeRect.bottom - margin;
+    const spaceAbove = nodeRect.top - margin;
+    const flip = spaceBelow < hScreen && spaceAbove > spaceBelow;
+
+    // 水平方向：期望居中位置越界 → 平移收回（屏幕像素换算回世界单位）
+    const wScreen = el.offsetWidth * scale;
+    const desiredLeft = nodeRect.left + nodeRect.width / 2 - wScreen / 2;
+    const maxLeft = window.innerWidth - margin - wScreen;
+    const clampedLeft = Math.max(margin, Math.min(desiredLeft, Math.max(margin, maxLeft)));
+    const shiftX = (clampedLeft - desiredLeft) / scale;
+
+    setEdgeAdjust((prev) =>
+      prev.flip === flip && Math.abs(prev.shiftX - shiftX) < 1 ? prev : { flip, shiftX }
+    );
+  }, [selectedNode, composerPosition, viewport, promptH, engine, apiKind]);
 
   // 同步提示词 + 资产元数据：仅在选中节点变化时加载。
   // 注意：依赖不能包含 nodes/taskAssets/connections——生成过程中 updateNode
@@ -262,12 +302,18 @@ export const ComposerPanel: React.FC = React.memo(() => {
   // 非选中 image/video 节点 → 不渲染
   if (!selectedNode || !composerPosition) return null;
 
+  // 边界保护：翻转到节点上方 / 横向收回
+  const composerTop = edgeAdjust.flip && composerRef.current
+    ? composerPosition.nodeTop - composerRef.current.offsetHeight - composerPosition.gap
+    : composerPosition.top;
+
   return (
     <div
+      ref={composerRef}
       className="composer open"
       style={{
-        left: composerPosition.left,
-        top: composerPosition.top,
+        left: composerPosition.left + edgeAdjust.shiftX,
+        top: composerTop,
         width: composerPosition.width,
       }}
       onPointerDown={(e) => e.stopPropagation()}

@@ -1,5 +1,5 @@
 import React, { Suspense, lazy, useState, useEffect, useCallback, useRef } from 'react';
-import { Film, Globe, Settings, ArrowLeft, RotateCw, RefreshCw, Loader2, AlertTriangle, PlayCircle, SkipForward, XOctagon, Sparkles, BookOpen, XCircle, CheckCircle, AlertCircle, Info, Shield, ChevronDown, PanelLeftClose, PanelLeftOpen, ChevronRight, Users, Clapperboard, Terminal, ChevronUp, UserPlus, User } from 'lucide-react';
+import { Film, Globe, Settings, ArrowLeft, RotateCw, RefreshCw, Loader2, AlertTriangle, PlayCircle, SkipForward, XOctagon, Sparkles, BookOpen, XCircle, CheckCircle, AlertCircle, Info, Shield, ChevronDown, PanelLeftClose, PanelLeftOpen, Users, Terminal, ChevronUp, UserPlus, User } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { NewTaskModal } from './components/NewTaskModal';
 import { EditCharacterModal } from './components/EditCharacterModal';
@@ -85,6 +85,7 @@ function AppContent() {
   const [apiConfig, setApiConfig] = useState<ApiConfig>(createDefaultApiConfig());
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [studioOpen, setStudioOpen] = useState(false);
+  const [studioProjectId, setStudioProjectId] = useState<string | null>(null);
   const [assetCheckResult, setAssetCheckResult] = useState<AssetCheckResult | null>(null);
   const [isTitleEndCardOpen, setIsTitleEndCardOpen] = useState(false);
   const [toasts, setToasts] = useState<{ id: number; type: ToastType; message: string; exiting?: boolean }[]>([]);
@@ -114,6 +115,12 @@ function AppContent() {
   // 订阅全局 toast 事件总线（utils/toast.ts）：
   // hooks / 画布组件 / services 纯模块拿不到 addToast，统一通过事件总线发提示。
   useEffect(() => subscribeToast(addToast), [addToast]);
+
+  // 打开工作室：项目卡封面按钮或画布工具栏入口直达，必须携带项目 id。
+  const handleOpenStudio = (projectId: string) => {
+    setStudioProjectId(projectId);
+    setStudioOpen(true);
+  };
 
   // 点击 Canvas 工具栏的 Agent 按钮时：先确保有 activeTask，再进入 AgentMode。
   const handleEnterAgentMode = useCallback(() => {
@@ -799,25 +806,7 @@ function AppContent() {
       <main className={`relative z-10 ${!activeTask ? 'pt-0 pb-0' : 'fixed inset-0 z-10'}`}>
         {!activeTask ? (
           <div key="project-list" className="page-transition-enter">
-          {/* 工作室主入口卡：从一段故事到整集成片 */}
-          <div className="px-8 lg:px-12 pt-6">
-            <button
-              onClick={() => setStudioOpen(true)}
-              data-testid="open-studio"
-              className="w-full group flex items-center gap-5 bg-white border border-[#e8edf3] rounded-2xl px-6 py-5 text-left shadow-sm hover:shadow-xl hover:shadow-brand-600/10 hover:border-brand-600/30 hover:-translate-y-0.5 transition-all duration-300"
-            >
-              <div className="w-14 h-14 bg-brand-600 rounded-2xl flex items-center justify-center shadow-lg shadow-brand-600/25 group-hover:scale-105 transition-transform duration-300 flex-shrink-0">
-                <Clapperboard className="w-7 h-7 text-white" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="text-lg font-bold text-[#111827] tracking-tight">{t('studioTitle')}</div>
-                <div className="text-sm text-[#64748b] mt-0.5">{t('studioEntrySubtitle')}</div>
-              </div>
-              <div className="w-10 h-10 rounded-xl bg-brand-600/10 text-brand-600 flex items-center justify-center group-hover:bg-brand-600 group-hover:text-white transition-all duration-300 flex-shrink-0">
-                <ChevronRight className="w-5 h-5" />
-              </div>
-            </button>
-          </div>
+          {/* 工作室入口：项目卡"去工作室成片"按钮（首页不放横幅）；画布页入口在 CanvasToolbar */}
           <ProjectList
             tasks={tasks}
             onNewTask={() => {
@@ -829,6 +818,7 @@ function AppContent() {
             onSelectTask={(id) => { setActiveTaskId(id); setPageKey(k => k + 1); }}
             onDeleteTask={deleteTask}
             onExportTask={exportProject}
+            onOpenStudio={(id) => handleOpenStudio(id)}
             importFileInputRef={importFileInputRef}
             setImportFileInputRef={setImportFileInputRef}
             t={t}
@@ -841,6 +831,7 @@ function AppContent() {
           <InfiniteCanvas
             projectId={activeTask.id}
             onBack={() => setActiveTaskId(null)}
+            onOpenStudio={() => handleOpenStudio(activeTask.id)}
             onAgentMode={handleToggleAgentMode}
             agentModeActive={agentMode}
             onStart={() => executeTaskStep(activeTask.id)}
@@ -1100,9 +1091,9 @@ function AppContent() {
       {/* 工作室（Studio）：整集生成全屏视图。projectId 取当前项目；无上下文时面板内可选/手输。 */}
       {studioOpen && (
         <StudioPanel
-          projectId={activeTaskId}
+          projectId={studioProjectId ?? activeTaskId}
           projects={tasks.map((task) => ({ id: task.id, name: task.name }))}
-          onClose={() => setStudioOpen(false)}
+          onClose={() => { setStudioOpen(false); setStudioProjectId(null); }}
         />
       )}
 

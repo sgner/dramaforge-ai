@@ -1,128 +1,136 @@
 /**
- * StudioPanel — 专业工作室布局：左侧阶段导航 + 中央工作区 + 右侧检查器（可折叠）。
+ * StudioPanel — 专业工作室布局：左侧阶段导航 + 中央工作区。
  *
- * 阶段：故事（story）/ 角色卡（cards）/ 镜头审片（shots）/ 成片（episode）。
+ * 三台：导演台（director，默认）/ 剪辑台（timeline）/ 成片库（episode）。
+ * - 导演台：整理 / 审核 / 补缺本项目资产（components/studio/DirectorDesk.tsx），
+ *   "生成设置"行与单镜头重生成都在导演台；一键"送入剪辑台"把匹配到资产的镜头
+ *   按脚本序灌入时间线并切到剪辑台。
+ * - 剪辑台：AE 式专业剪辑工作区（组件在 components/studio/ 下）：补充素材 bin
+ *   （默认折叠，只显示未入轨资产）+ 节目监视器 + clip 检查器 + 时间线 +
+ *   全局快捷键（use-timeline-shortcuts）；该阶段无右侧检查器。
+ * - 成片库：项目视频类资产（剪辑台导出后由后端登记，刷新可见）。
  * 后端契约见 services/apiClient.ts 的 Studio 类型：
- *   POST /api/studio/episodes          → 202 { task_id }（轮询 GET 直到 status !== 'running'）
- *   GET  /api/studio/shots             → 镜头列表（同 brief 多资产 = 同镜头多版本）
- *   POST /api/studio/shots/{id}/review → 人工审核（approve/reject/lock/unlock）
- *   POST /api/studio/shots/regenerate  → 单镜头重生成（同步，1~2 分钟）
- *   POST /api/studio/export            → 选中镜头合成 mp4（同步）
- * 轮询间隔 3s，status !== 'running' 或组件卸载/重新生成时停止；done/partial 后自动切到成片阶段。
+ *   POST /api/assets/rebuild-from-nodes/{projectId} → 画布产物同步为 Asset
+ *   GET  /api/drama-tasks/{id}                      → 脚本（data.bigShots）
+ *   GET  /api/studio/shots                          → 镜头列表（审片状态）
+ *   POST /api/studio/shots/{id}/review              → 人工审核（approve/reject）
+ *   POST /api/studio/shots/regenerate               → 单镜头重生成（同步，1~2 分钟）
+ *   POST /api/studio/arrange                        → LLM 智能编排时间线（无 LLM 配置 400）
+ *   POST /api/studio/export                         → 时间线合成 mp4（登记为项目资产）
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   AlertCircle,
   ArrowLeft,
-  CheckCheck,
-  CheckCircle,
   Clapperboard,
-  Clock,
   Download,
-  FileText,
   Film,
   Loader2,
-  Lock,
-  LockOpen,
   MonitorPlay,
-  PanelRightClose,
-  PanelRightOpen,
-  RefreshCw,
-  Users,
-  X,
-  XCircle,
+  Scissors,
 } from 'lucide-react';
-import {
-  api,
-  ProviderOut,
-  StudioCharacterCardOut,
-  StudioEpisodeTaskOut,
-  StudioExportOut,
-  StudioReviewAction,
-  StudioReviewStatus,
-  StudioShotOut,
-  StudioShotProgress,
-  StudioShotReviewOut,
-} from '../services/apiClient';
+import { api, AssetOut, ProviderOut, StudioExportOut } from '../services/apiClient';
 import { useI18n } from '../i18n';
+import { TimelineItem } from './studio/types';
+import { useSequencePlayback } from './studio/use-sequence-playback';
+import { useTimelineShortcuts } from './studio/use-timeline-shortcuts';
+import { AssetBin } from './studio/AssetBin';
+import { ProgramMonitor } from './studio/ProgramMonitor';
+import {
+  DEFAULT_PX_PER_SEC,
+  MAX_PX_PER_SEC,
+  MIN_PX_PER_SEC,
+  PX_PER_SEC_STEP,
+  TimelineEditor,
+} from './studio/TimelineEditor';
+import { ClipInspector } from './studio/ClipInspector';
+import { DirectorDesk } from './studio/DirectorDesk';
+import { appleInput, applePanel } from './studio/theme';
 
-const POLL_INTERVAL_MS = 3000;
-
-type StudioStage = 'story' | 'cards' | 'shots' | 'episode';
-type ShotFilter = 'all' | StudioReviewStatus;
+type StudioStage = 'director' | 'timeline' | 'episode';
 
 interface StudioPanelProps {
-  /** 当前项目 id（有画布上下文时传入）。 */
+  /** 当前项目 id（有画布上下文时传入；传了 onProjectChange 则受控）。 */
   projectId?: string | null;
   /** 可选项目列表（项目选择下拉）；为空时退化为手输 project id。 */
   projects?: { id: string; name: string }[];
   onClose: () => void;
+  /** 受控阶段（外壳映射：Studio→director / Timeline→timeline / Export→episode）。 */
+  activeStage?: StudioStage;
+  /** 阶段变化回调（配合 activeStage 受控使用）。 */
+  onStageChange?: (stage: StudioStage) => void;
+  /** 传了则 projectId 受控，选中变化回调。 */
+  onProjectChange?: (projectId: string) => void;
+  /** full（默认）：独立全屏覆盖层（自带顶栏 + 阶段 nav）；
+   *  embedded：嵌入外壳（隐藏顶栏与阶段 nav、去全屏定位）。 */
+  chrome?: 'full' | 'embedded';
 }
 
-// 深色专业工作台配色
-const inputCls =
-  'w-full bg-[#0d1117] border border-[#2a3342] rounded-xl px-4 py-2.5 text-sm text-[#e6eaf2] ' +
-  'focus:outline-none focus:border-brand-600/60 focus:ring-1 focus:ring-brand-600/30 transition-all placeholder:text-[#5b6474]';
-const labelCls = 'block text-xs font-bold text-[#8b94a7] mb-1.5 uppercase tracking-wider';
-const panelCls = 'bg-[#151a23] border border-[#232b38] rounded-2xl';
-const actionBtnCls =
-  'px-3 py-1.5 rounded-lg text-xs font-bold transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1';
+// Apple HIG 深色工作台配色（与 components/studio/ 共用）
+const inputCls = appleInput;
+const panelCls = applePanel;
 
-export const StudioPanel: React.FC<StudioPanelProps> = ({ projectId, projects = [], onClose }) => {
+export const StudioPanel: React.FC<StudioPanelProps> = ({
+  projectId,
+  projects = [],
+  onClose,
+  activeStage,
+  onStageChange,
+  onProjectChange,
+  chrome = 'full',
+}) => {
   const { t } = useI18n();
 
-  const [selectedProjectId, setSelectedProjectId] = useState(
+  // 项目：传了 onProjectChange 则受控（外壳工作区共享），否则内部 state
+  const [internalProjectId, setInternalProjectId] = useState(
     projectId || projects[0]?.id || 'studio-demo'
   );
-  const [storyText, setStoryText] = useState('');
-  const [title, setTitle] = useState('');
-  const [maxShots, setMaxShots] = useState(5);
+  const selectedProjectId = onProjectChange
+    ? projectId || projects[0]?.id || 'studio-demo'
+    : internalProjectId;
+  const setSelectedProjectId = (id: string) => {
+    if (onProjectChange) onProjectChange(id);
+    else setInternalProjectId(id);
+  };
 
   const [providers, setProviders] = useState<ProviderOut[]>([]);
-  const [imageProviderId, setImageProviderId] = useState('');
-  const [imageModel, setImageModel] = useState('');
-  const [llmProviderId, setLlmProviderId] = useState('');
-  const [llmModelId, setLlmModelId] = useState('');
 
-  const [cards, setCards] = useState<StudioCharacterCardOut[]>([]);
-  const [selectedCardIds, setSelectedCardIds] = useState<Set<string>>(new Set());
-
-  const [task, setTask] = useState<StudioEpisodeTaskOut | null>(null);
-  const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  // 审片台：项目全部镜头（按 brief 分组的版本列表）
-  const [shots, setShots] = useState<StudioShotOut[]>([]);
-  const [shotsLoading, setShotsLoading] = useState(false);
-  const [reviewingId, setReviewingId] = useState<string | null>(null);
-  const [regeneratingId, setRegeneratingId] = useState<string | null>(null);
-  const [approvingAll, setApprovingAll] = useState(false);
+  // 工作台布局状态（默认导演台：先整理/审核资产，再进剪辑台）；
+  // 传了 activeStage 则受控（外壳 view 驱动），否则内部 state
+  const [internalStage, setInternalStage] = useState<StudioStage>('director');
+  const stage = activeStage ?? internalStage;
+  const setStage = (s: StudioStage) => {
+    if (activeStage !== undefined) onStageChange?.(s);
+    else setInternalStage(s);
+  };
 
-  // 工作台布局状态
-  const [stage, setStage] = useState<StudioStage>('story');
-  const [inspectorOpen, setInspectorOpen] = useState(true);
-  const [selectedShotId, setSelectedShotId] = useState<string | null>(null);
-  const [shotFilter, setShotFilter] = useState<ShotFilter>('all');
+  const embedded = chrome === 'embedded';
 
-  // 成片导出
-  const [exportSelIds, setExportSelIds] = useState<Set<string>>(new Set());
-  const [exportSecPerImage, setExportSecPerImage] = useState(2);
-  const [exporting, setExporting] = useState(false);
-  const [exportResult, setExportResult] = useState<StudioExportOut | null>(null);
+  // 成片库：项目视频类资产
+  const [filmAssets, setFilmAssets] = useState<AssetOut[]>([]);
+  const [filmsLoading, setFilmsLoading] = useState(false);
 
-  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // 剪辑台：补充素材 + 时间线
+  const [tlAssets, setTlAssets] = useState<AssetOut[]>([]);
+  const [tlAssetsLoading, setTlAssetsLoading] = useState(false);
+  const [timeline, setTimeline] = useState<TimelineItem[]>([]);
+  const [arranging, setArranging] = useState(false);
+  const [tlExporting, setTlExporting] = useState(false);
+  const [tlExportResult, setTlExportResult] = useState<StudioExportOut | null>(null);
+  // 智能编排的可选故事线索（story_hint）
+  const [storyHint, setStoryHint] = useState('');
+  // 导出成片标题（可选）
+  const [filmTitle, setFilmTitle] = useState('');
+  // 选中的 clip 下标（-1 = 未选中，检查器显示序列汇总）
+  const [selectedClipIndex, setSelectedClipIndex] = useState(-1);
+  // 时间线缩放（受控，快捷键 +/- 与缩放控件共用）
+  const [pxPerSec, setPxPerSec] = useState(DEFAULT_PX_PER_SEC);
+  // 序列预览播放（节目监视器 / 时间线 playhead 共用）
+  const tlPlayback = useSequencePlayback(timeline);
 
-  const stopPolling = useCallback(() => {
-    if (pollTimerRef.current) {
-      clearInterval(pollTimerRef.current);
-      pollTimerRef.current = null;
-    }
-  }, []);
-
-  // 卸载时停止轮询
-  useEffect(() => stopPolling, [stopPolling]);
-
-  // 加载供应商（只保留 enabled）
+  // 加载供应商（只保留 enabled；导演台"生成设置"用）
   useEffect(() => {
     let cancelled = false;
     api
@@ -136,362 +144,203 @@ export const StudioPanel: React.FC<StudioPanelProps> = ({ projectId, projects = 
     };
   }, []);
 
-  // 项目切换时重新拉角色卡，并清空已选/选中镜头/导出状态
+  // 项目切换时清空时间线等状态
   useEffect(() => {
-    setSelectedCardIds(new Set());
-    setSelectedShotId(null);
-    setExportSelIds(new Set());
-    setExportResult(null);
-    setShotFilter('all');
-    if (!selectedProjectId.trim()) {
-      setCards([]);
+    setTimeline([]);
+    setTlExportResult(null);
+    setSelectedClipIndex(-1);
+  }, [selectedProjectId]);
+
+  // 进入剪辑台阶段时拉取项目资产，供补充素材 bin 挑选
+  useEffect(() => {
+    if (stage !== 'timeline') return;
+    const pid = selectedProjectId.trim();
+    if (!pid) {
+      setTlAssets([]);
       return;
     }
     let cancelled = false;
+    setTlAssetsLoading(true);
     api
-      .listStudioCharacterCards(selectedProjectId.trim())
+      .listAssets(pid)
       .then((rows) => {
-        if (!cancelled) setCards(rows || []);
+        if (!cancelled) setTlAssets(rows || []);
       })
       .catch((e) => {
-        console.warn('[Studio] listStudioCharacterCards failed', e);
-        if (!cancelled) setCards([]);
+        console.warn('[Studio] listAssets(timeline) failed', e);
+        if (!cancelled) setTlAssets([]);
+      })
+      .finally(() => {
+        if (!cancelled) setTlAssetsLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [selectedProjectId]);
+  }, [stage, selectedProjectId]);
 
-  // 审片台：拉取项目全部镜头
-  const refreshShots = useCallback(async () => {
+  // 进入成片库阶段时拉取项目资产，过滤出视频类成片
+  useEffect(() => {
+    if (stage !== 'episode') return;
     const pid = selectedProjectId.trim();
     if (!pid) {
-      setShots([]);
+      setFilmAssets([]);
       return;
     }
-    setShotsLoading(true);
-    try {
-      const rows = await api.listStudioShots(pid);
-      setShots(rows || []);
-    } catch (e) {
-      console.warn('[Studio] listStudioShots failed', e);
-    } finally {
-      setShotsLoading(false);
-    }
-  }, [selectedProjectId]);
-
-  // 面板加载 / 项目切换时拉镜头列表
-  useEffect(() => {
-    void refreshShots();
-  }, [refreshShots]);
-
-  const imageProviders = providers.filter((p) => (p.image_models || []).length > 0);
-  const llmProviders = providers.filter((p) => (p.chat_models || []).length > 0);
-  const selectedImageProvider = imageProviders.find((p) => p.provider_id === imageProviderId);
-  const selectedLlmProvider = llmProviders.find((p) => p.provider_id === llmProviderId);
-
-  const startPolling = useCallback(
-    (taskId: string) => {
-      stopPolling();
-      const tick = async () => {
-        try {
-          const data = await api.getStudioEpisode(taskId);
-          setTask(data);
-          if (data.status !== 'running') {
-            stopPolling();
-            // 整集生成结束后刷新审片台镜头列表；有结果时自动切到成片阶段
-            void refreshShots();
-            if ((data.status === 'done' || data.status === 'partial') && data.result) {
-              setStage('episode');
-            }
-          }
-        } catch (e: any) {
-          stopPolling();
-          setTask((prev) => ({
-            task_id: taskId,
-            status: 'error',
-            progress: prev?.progress ?? {
-              phase: 'finished',
-              current_shot: 0,
-              total_shots: 0,
-              shots: [],
-            },
-            result: prev?.result ?? null,
-            error: e?.message || String(e),
-          }));
-        }
-      };
-      void tick();
-      pollTimerRef.current = setInterval(tick, POLL_INTERVAL_MS);
-    },
-    [stopPolling, refreshShots]
-  );
-
-  const handleGenerate = async () => {
-    if (!storyText.trim()) {
-      setFormError(t('studioErrorStoryRequired'));
-      return;
-    }
-    if (!imageProviderId || !imageModel) {
-      setFormError(t('studioErrorProviderRequired'));
-      return;
-    }
-    setFormError(null);
-    stopPolling();
-    setTask(null);
-    setSubmitting(true);
-    try {
-      const { task_id } = await api.createStudioEpisode({
-        project_id: selectedProjectId.trim(),
-        story_text: storyText,
-        image_provider_id: imageProviderId,
-        image_model: imageModel,
-        llm_provider_id: llmProviderId || undefined,
-        llm_model_id: llmModelId || undefined,
-        max_shots: maxShots,
-        character_card_ids: selectedCardIds.size > 0 ? Array.from(selectedCardIds) : undefined,
-        title: title.trim() || undefined,
+    let cancelled = false;
+    setFilmsLoading(true);
+    api
+      .listAssets(pid)
+      .then((rows) => {
+        if (!cancelled) setFilmAssets(rows || []);
+      })
+      .catch((e) => {
+        console.warn('[Studio] listAssets(films) failed', e);
+        if (!cancelled) setFilmAssets([]);
+      })
+      .finally(() => {
+        if (!cancelled) setFilmsLoading(false);
       });
-      startPolling(task_id);
-    } catch (e: any) {
-      setFormError(e?.message || String(e));
-    } finally {
-      setSubmitting(false);
-    }
+    return () => {
+      cancelled = true;
+    };
+  }, [stage, selectedProjectId]);
+
+  // ---------- 剪辑台（时间线） ----------
+
+  // 可作时间线素材的资产：图片/视频类（kind/asset_kind 含 image/video/character/shot），排除失败/生成中/无 url
+  const tlLibraryAssets = tlAssets.filter((a) => {
+    if (a.failed || a.generating || !a.url) return false;
+    const k = `${a.kind || ''} ${a.asset_kind || ''}`.toLowerCase();
+    return (
+      k.includes('image') || k.includes('video') || k.includes('character') || k.includes('shot')
+    );
+  });
+
+  const tlAssetIds = new Set(timeline.map((it) => it.asset.id));
+  const tlTotalSec = timeline.reduce((sum, it) => sum + (it.sec || 0), 0);
+
+  /** 点补充素材缩略图：追加到时间线末尾（默认 2 秒/镜头）。 */
+  const addToTimeline = (asset: AssetOut) => {
+    if (tlAssetIds.has(asset.id)) return;
+    setTimeline((prev) => [...prev, { asset, sec: 2, caption: '' }]);
+    setTlExportResult(null);
   };
 
-  const toggleCard = (cardId: string) => {
-    setSelectedCardIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(cardId)) next.delete(cardId);
-      else next.add(cardId);
+  const moveTlItem = (index: number, dir: -1 | 1) => {
+    setTimeline((prev) => {
+      const next = [...prev];
+      const target = index + dir;
+      if (target < 0 || target >= next.length) return prev;
+      [next[index], next[target]] = [next[target], next[index]];
       return next;
     });
+    // 选中态跟随 clip 移动
+    setSelectedClipIndex((sel) =>
+      sel === index ? index + dir : sel === index + dir ? index : sel
+    );
+    setTlExportResult(null);
   };
 
-  // ---------- 审片台 ----------
-
-  /** 审核操作：approve/reject/lock/unlock；reject 时弹备注输入。成功后就地更新。 */
-  const handleReview = async (shot: StudioShotOut, action: StudioReviewAction) => {
-    let note: string | undefined;
-    if (action === 'reject') {
-      const input = window.prompt(t('studioReviewNotePrompt'));
-      if (input === null) return; // 用户取消
-      note = input.trim() || undefined;
-    }
-    setReviewingId(shot.asset_id);
-    try {
-      const res = await api.reviewStudioShot(shot.asset_id, action, note);
-      setShots((prev) =>
-        prev.map((s) =>
-          s.asset_id === shot.asset_id
-            ? { ...s, review_status: res.review_status, review_note: res.review_note }
-            : s
-        )
-      );
-    } catch (e: any) {
-      console.warn('[Studio] reviewStudioShot failed', e);
-      setFormError(e?.message || String(e));
-    } finally {
-      setReviewingId(null);
-    }
+  const removeTlItem = (index: number) => {
+    setTimeline((prev) => prev.filter((_, i) => i !== index));
+    // 移除选中 clip 则取消选中，其后 clip 下标前移
+    setSelectedClipIndex((sel) => (sel === index ? -1 : sel > index ? sel - 1 : sel));
+    setTlExportResult(null);
   };
 
-  /** 全部通过：对所有待审镜头批量 approve。 */
-  const handleApproveAll = async () => {
-    const pending = shots.filter((s) => s.review_status === 'pending_review');
-    if (pending.length === 0) return;
+  const setTlItemSec = (index: number, sec: number) => {
+    setTimeline((prev) =>
+      prev.map((it, i) => (i === index ? { ...it, sec: Math.max(1, sec || 1) } : it))
+    );
+    setTlExportResult(null);
+  };
+
+  const setTlItemCaption = (index: number, caption: string) => {
+    setTimeline((prev) => prev.map((it, i) => (i === index ? { ...it, caption } : it)));
+    setTlExportResult(null);
+  };
+
+  /** 智能编排：LLM 按故事线索重排时间线并回填 sec/caption（同步接口，无 LLM 配置 400）。 */
+  const handleArrange = async () => {
+    if (timeline.length < 2 || arranging) return;
     setFormError(null);
-    setApprovingAll(true);
+    setArranging(true);
     try {
-      const results = await Promise.all(
-        pending.map((s) => api.reviewStudioShot(s.asset_id, 'approve'))
-      );
-      const byId = new Map<string, StudioShotReviewOut>(
-        results.map((r) => [r.asset_id, r] as [string, StudioShotReviewOut])
-      );
-      setShots((prev) =>
-        prev.map((s) => {
-          const r = byId.get(s.asset_id);
-          return r ? { ...s, review_status: r.review_status, review_note: r.review_note } : s;
-        })
-      );
-    } catch (e: any) {
-      console.warn('[Studio] approve-all failed', e);
-      setFormError(e?.message || String(e));
-    } finally {
-      setApprovingAll(false);
-    }
-  };
-
-  /** 单镜头重生成：同步接口（1~2 分钟），用表单区已选的图像供应商/模型。 */
-  const handleRegenerate = async (shot: StudioShotOut) => {
-    if (!imageProviderId || !imageModel) {
-      setFormError(t('studioErrorProviderRequired'));
-      return;
-    }
-    setFormError(null);
-    setRegeneratingId(shot.asset_id);
-    try {
-      await api.regenerateStudioShot({
+      const res = await api.arrangeStudioAssets({
         project_id: selectedProjectId.trim(),
-        asset_id: shot.asset_id,
-        image_provider_id: imageProviderId,
-        image_model: imageModel,
-        llm_provider_id: llmProviderId || undefined,
-        llm_model_id: llmModelId || undefined,
+        asset_ids: timeline.map((it) => it.asset.id),
+        story_hint: storyHint.trim() || undefined,
+        llm_provider_id: undefined,
+        llm_model_id: undefined,
       });
-      await refreshShots(); // 新版本出现，version 数 +1
+      const byId = new Map<string, AssetOut>(timeline.map((it) => [it.asset.id, it.asset]));
+      const next: TimelineItem[] = [];
+      for (const item of res.items || []) {
+        const asset = byId.get(item.asset_id);
+        if (asset) next.push({ asset, sec: item.sec, caption: item.caption || '' });
+      }
+      if (next.length > 0) setTimeline(next);
+      // 编排后顺序变化，清除 clip 选中态
+      setSelectedClipIndex(-1);
+      setTlExportResult(null);
     } catch (e: any) {
-      console.warn('[Studio] regenerateStudioShot failed', e);
+      console.warn('[Studio] arrangeStudioAssets failed', e);
       setFormError(e?.message || String(e));
     } finally {
-      setRegeneratingId(null);
+      setArranging(false);
     }
   };
 
-  // ---------- 成片导出 ----------
-
-  const toggleExportSel = (assetId: string) => {
-    setExportSelIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(assetId)) next.delete(assetId);
-      else next.add(assetId);
-      return next;
-    });
-  };
-
-  /** 导出选中镜头为 mp4（同步接口）。 */
-  const handleExport = async () => {
-    if (exportSelIds.size === 0) return;
+  /** 从时间线导出成片（逐镜头秒数走 durations；后端登记为项目资产，成片库可见）。 */
+  const handleTlExport = async () => {
+    if (timeline.length === 0 || tlExporting) return;
     setFormError(null);
-    setExporting(true);
+    setTlExporting(true);
     try {
       const res = await api.createStudioExport({
         project_id: selectedProjectId.trim(),
-        asset_ids: Array.from(exportSelIds),
-        sec_per_image: exportSecPerImage,
-        title: title.trim() || undefined,
+        asset_ids: timeline.map((it) => it.asset.id),
+        durations: timeline.map((it) => it.sec),
+        title: filmTitle.trim() || undefined,
       });
-      setExportResult(res);
+      setTlExportResult(res);
     } catch (e: any) {
-      console.warn('[Studio] createStudioExport failed', e);
+      console.warn('[Studio] timeline export failed', e);
       setFormError(e?.message || String(e));
     } finally {
-      setExporting(false);
+      setTlExporting(false);
     }
   };
 
-  // ---------- 标记元数据 ----------
-
-  const phaseLabel = (phase?: string) => {
-    switch (phase) {
-      case 'planning':
-        return t('studioPhasePlanning');
-      case 'shooting':
-        return t('studioPhaseShooting');
-      case 'exporting':
-        return t('studioPhaseExporting');
-      case 'finished':
-        return t('studioPhaseFinished');
-      default:
-        return '—';
-    }
+  /** 导演台"送入剪辑台"：灌入镜头序列并切到剪辑台阶段。 */
+  const handleSendToTimeline = (items: TimelineItem[]) => {
+    setTimeline(items);
+    setSelectedClipIndex(-1);
+    setTlExportResult(null);
+    setStage('timeline');
   };
 
-  const shotStatusMeta = (status: StudioShotProgress['status']) => {
-    switch (status) {
-      case 'running':
-        return {
-          icon: <Loader2 className="w-4 h-4 text-brand-500 animate-spin" />,
-          text: t('studioShotRunning'),
-          cls: 'text-brand-500',
-        };
-      case 'approved':
-        return {
-          icon: <CheckCircle className="w-4 h-4 text-emerald-500" />,
-          text: t('studioShotApproved'),
-          cls: 'text-emerald-500',
-        };
-      case 'max_rounds_exceeded':
-        return {
-          icon: <XCircle className="w-4 h-4 text-red-500" />,
-          text: t('studioShotMaxRounds'),
-          cls: 'text-red-500',
-        };
-      default:
-        return {
-          icon: <Clock className="w-4 h-4 text-[#5b6474]" />,
-          text: t('studioShotPending'),
-          cls: 'text-[#5b6474]',
-        };
-    }
-  };
-
-  const reviewStatusMeta = (status: StudioReviewStatus) => {
-    switch (status) {
-      case 'approved':
-        return { text: t('studioReviewApproved'), cls: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' };
-      case 'rejected':
-        return { text: t('studioReviewRejected'), cls: 'bg-red-500/10 text-red-400 border-red-500/30' };
-      case 'locked':
-        return { text: t('studioReviewLocked'), cls: 'bg-indigo-500/10 text-indigo-400 border-indigo-500/30' };
-      default:
-        return { text: t('studioReviewPending'), cls: 'bg-[#1c2230] text-[#8b94a7] border-[#2a3342]' };
-    }
-  };
-
-  const criticMeta = (status: StudioShotOut['critic_status']) => {
-    if (status === 'approved') return { text: t('studioCriticPass'), cls: 'text-emerald-400' };
-    if (status === 'max_rounds_exceeded') return { text: t('studioCriticFail'), cls: 'text-amber-400' };
-    return null;
-  };
-
-  const taskStatusMeta = (status: StudioEpisodeTaskOut['status']) => {
-    switch (status) {
-      case 'running':
-        return { text: t('studioStatusRunning'), cls: 'bg-brand-600/15 text-brand-400 border-brand-600/40' };
-      case 'done':
-        return { text: t('studioStatusDone'), cls: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' };
-      case 'partial':
-        return { text: t('studioStatusPartial'), cls: 'bg-amber-500/10 text-amber-400 border-amber-500/30' };
-      case 'failed':
-        return { text: t('studioStatusFailed'), cls: 'bg-red-500/10 text-red-400 border-red-500/30' };
-      default:
-        return { text: t('studioStatusError'), cls: 'bg-red-500/10 text-red-400 border-red-500/30' };
-    }
-  };
+  // 剪辑台全局快捷键（仅剪辑台阶段激活）
+  useTimelineShortcuts(stage === 'timeline', {
+    playback: tlPlayback,
+    selectedIndex: selectedClipIndex,
+    onRemove: removeTlItem,
+    onMove: moveTlItem,
+    onZoom: (dir) =>
+      setPxPerSec((v) =>
+        Math.min(MAX_PX_PER_SEC, Math.max(MIN_PX_PER_SEC, v + dir * PX_PER_SEC_STEP))
+      ),
+    onExport: () => void handleTlExport(),
+    canExport: timeline.length > 0 && !tlExporting,
+  });
 
   // ---------- 派生数据 ----------
 
-  const running = submitting || task?.status === 'running';
-
-  const countByStatus = (st: StudioReviewStatus) =>
-    shots.filter((s) => s.review_status === st).length;
-  const pendingCount = countByStatus('pending_review');
-
-  const filteredShots =
-    shotFilter === 'all' ? shots : shots.filter((s) => s.review_status === shotFilter);
-
-  /** 按 brief 分组（保持出现顺序），组内按 version 升序。 */
-  const shotGroups: { brief: string; shots: StudioShotOut[] }[] = [];
-  for (const s of filteredShots) {
-    const key = s.brief || s.title || s.asset_id;
-    const group = shotGroups.find((g) => g.brief === key);
-    if (group) group.shots.push(s);
-    else shotGroups.push({ brief: key, shots: [s] });
-  }
-  for (const g of shotGroups) g.shots.sort((a, b) => a.version - b.version);
-
-  const selectedShot = shots.find((s) => s.asset_id === selectedShotId) || null;
-
-  const shotFilters: { id: ShotFilter; label: string; count: number }[] = [
-    { id: 'all', label: t('studioFilterAll'), count: shots.length },
-    { id: 'pending_review', label: t('studioReviewPending'), count: pendingCount },
-    { id: 'approved', label: t('studioReviewApproved'), count: countByStatus('approved') },
-    { id: 'rejected', label: t('studioReviewRejected'), count: countByStatus('rejected') },
-    { id: 'locked', label: t('studioReviewLocked'), count: countByStatus('locked') },
-  ];
+  // 成片库：视频类资产（kind === 'video' 或 asset_kind === 'sequence'），排除失败/生成中/无 url
+  const films = filmAssets.filter((a) => {
+    if (a.failed || a.generating || !a.url) return false;
+    return a.kind === 'video' || a.asset_kind === 'sequence';
+  });
 
   const stageItems: {
     id: StudioStage;
@@ -499,151 +348,45 @@ export const StudioPanel: React.FC<StudioPanelProps> = ({ projectId, projects = 
     label: string;
     count?: number;
   }[] = [
-    { id: 'story', icon: <FileText className="w-4 h-4" />, label: t('studioStageStory') },
-    { id: 'cards', icon: <Users className="w-4 h-4" />, label: t('studioStageCards'), count: cards.length },
-    { id: 'shots', icon: <Film className="w-4 h-4" />, label: t('studioStageShots'), count: shots.length },
+    { id: 'director', icon: <Film className="w-4 h-4" />, label: t('studioStageDirector') },
+    { id: 'timeline', icon: <Scissors className="w-4 h-4" />, label: t('studioStageTimeline'), count: timeline.length },
     { id: 'episode', icon: <MonitorPlay className="w-4 h-4" />, label: t('studioStageEpisode') },
   ];
-
-  /** 单个镜头卡片（审片阶段网格用）。 */
-  const renderShotCard = (s: StudioShotOut) => {
-    const rsMeta = reviewStatusMeta(s.review_status);
-    const cMeta = criticMeta(s.critic_status);
-    const locked = s.review_status === 'locked';
-    const busy = reviewingId === s.asset_id || regeneratingId === s.asset_id;
-    const selected = selectedShotId === s.asset_id;
-    return (
-      <div
-        key={s.asset_id}
-        data-testid={`studio-shot-card-${s.asset_id}`}
-        onClick={() => setSelectedShotId(s.asset_id)}
-        className={`flex flex-col gap-2 bg-[#11151d] border rounded-xl px-4 py-3 cursor-pointer transition-all hover:border-brand-600/40 ${
-          selected ? 'border-brand-600/60 ring-1 ring-brand-600/30' : 'border-[#232b38]'
-        }`}
-      >
-        <div className="flex items-center gap-3">
-          {s.url && (
-            <img
-              src={s.url}
-              alt={s.title || s.brief}
-              className="w-16 h-16 rounded-lg object-cover flex-shrink-0 bg-black/30"
-            />
-          )}
-          <div className="min-w-0 flex-1">
-            <div className="text-sm font-bold text-[#e6eaf2] truncate">{s.title || s.brief}</div>
-            <div className="flex items-center flex-wrap gap-2 mt-1">
-              <span className="text-xs text-[#5b6474] font-mono">
-                {t('studioShotVersion')
-                  .replace('{x}', String(s.version))
-                  .replace('{y}', String(s.versions))}
-              </span>
-              {cMeta && <span className={`text-xs font-bold ${cMeta.cls}`}>{cMeta.text}</span>}
-              <span
-                data-testid={`studio-review-status-${s.asset_id}`}
-                className={`text-xs font-bold px-2 py-0.5 rounded-full border ${rsMeta.cls}`}
-              >
-                {locked && <Lock className="inline w-3 h-3 mr-1 -mt-0.5" />}
-                {rsMeta.text}
-              </span>
-            </div>
-            {s.review_note && (
-              <div className="text-xs text-[#8b94a7] mt-1 truncate">{s.review_note}</div>
-            )}
-          </div>
-        </div>
-
-        <div className="flex items-center flex-wrap gap-2" onClick={(e) => e.stopPropagation()}>
-          {locked ? (
-            <button
-              data-testid={`studio-review-unlock-${s.asset_id}`}
-              disabled={busy}
-              onClick={() => handleReview(s, 'unlock')}
-              className={`${actionBtnCls} bg-transparent border border-indigo-500/30 text-indigo-400 hover:bg-indigo-500/10`}
-            >
-              <LockOpen className="w-3.5 h-3.5" />
-              {t('studioReviewUnlock')}
-            </button>
-          ) : (
-            <>
-              <button
-                data-testid={`studio-review-approve-${s.asset_id}`}
-                disabled={busy}
-                onClick={() => handleReview(s, 'approve')}
-                className={`${actionBtnCls} bg-emerald-600 text-white hover:bg-emerald-500`}
-              >
-                {t('studioReviewApprove')}
-              </button>
-              <button
-                data-testid={`studio-review-reject-${s.asset_id}`}
-                disabled={busy}
-                onClick={() => handleReview(s, 'reject')}
-                className={`${actionBtnCls} bg-transparent border border-red-500/30 text-red-400 hover:bg-red-500/10`}
-              >
-                {t('studioReviewReject')}
-              </button>
-              <button
-                data-testid={`studio-review-lock-${s.asset_id}`}
-                disabled={busy}
-                onClick={() => handleReview(s, 'lock')}
-                className={`${actionBtnCls} bg-transparent border border-indigo-500/30 text-indigo-400 hover:bg-indigo-500/10`}
-              >
-                <Lock className="w-3.5 h-3.5" />
-                {t('studioReviewLock')}
-              </button>
-            </>
-          )}
-          <button
-            data-testid={`studio-regen-${s.asset_id}`}
-            disabled={busy || regeneratingId !== null}
-            onClick={() => handleRegenerate(s)}
-            className={`${actionBtnCls} bg-transparent border border-[#2a3342] text-[#e6eaf2] hover:border-brand-600/50`}
-          >
-            {regeneratingId === s.asset_id ? (
-              <>
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                {t('studioRegenerating')}
-              </>
-            ) : (
-              <>
-                <RefreshCw className="w-3.5 h-3.5" />
-                {t('studioRegenerate')}
-              </>
-            )}
-          </button>
-        </div>
-      </div>
-    );
-  };
 
   // ---------- 渲染 ----------
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-[#0b0e14] text-[#e6eaf2] flex flex-col"
+      className={
+        embedded
+          ? 'relative h-full min-h-0 text-white/90 studio-font flex flex-col'
+          : 'fixed inset-0 z-50 bg-[radial-gradient(1200px_600px_at_50%_-10%,rgba(64,64,74,0.35),transparent)] bg-black text-white/90 studio-font flex flex-col'
+      }
       data-testid="studio-panel"
     >
-      {/* 顶栏：返回 / 项目选择 / 任务状态徽章 / 生成整集 */}
-      <header className="flex items-center gap-3 px-5 h-14 border-b border-[#232b38] bg-[#11151d] flex-shrink-0">
+      {/* 顶栏：返回 / 项目选择（毛玻璃吸顶条）—— embedded 模式由外壳 TopBar 承担，隐藏 */}
+      {!embedded && (
+      <header className="flex items-center gap-3 px-5 h-14 border-b border-white/[0.05] bg-black/60 backdrop-blur-xl flex-shrink-0">
         <button
           onClick={onClose}
           data-testid="studio-back"
-          className="p-2 hover:bg-white/5 rounded-lg text-[#8b94a7] hover:text-[#e6eaf2] transition-all flex items-center gap-1.5"
+          className="p-2 hover:bg-white/[0.08] rounded-full text-white/55 hover:text-white/90 transition-all flex items-center gap-1.5"
         >
           <ArrowLeft className="w-5 h-5" />
           <span className="text-sm font-medium">{t('studioBack')}</span>
         </button>
         <div className="flex items-center gap-2">
-          <div className="w-8 h-8 bg-brand-600 rounded-lg flex items-center justify-center shadow-lg shadow-brand-600/30">
+          <div className="w-8 h-8 bg-[#0A84FF] rounded-xl flex items-center justify-center shadow-lg shadow-[#0A84FF]/30">
             <Clapperboard className="w-4 h-4 text-white" />
           </div>
-          <h1 className="text-base font-bold tracking-tight">{t('studioTitle')}</h1>
+          <h1 className="text-[17px] font-semibold tracking-tight">{t('studioTitle')}</h1>
         </div>
-        <div className="w-px h-6 bg-[#232b38]" />
+        <div className="w-px h-6 bg-white/[0.08]" />
         <div className="min-w-[160px] max-w-[240px]">
           {projects.length > 0 ? (
             <select
               data-testid="studio-project-select"
-              className={`${inputCls} !py-1.5 !rounded-lg`}
+              className={`${inputCls} !py-1.5 !rounded-full !bg-white/[0.08]`}
               value={selectedProjectId}
               onChange={(e) => setSelectedProjectId(e.target.value)}
             >
@@ -656,635 +399,174 @@ export const StudioPanel: React.FC<StudioPanelProps> = ({ projectId, projects = 
           ) : (
             <input
               data-testid="studio-project-input"
-              className={`${inputCls} !py-1.5 !rounded-lg`}
+              className={`${inputCls} !py-1.5 !rounded-full !bg-white/[0.08]`}
               value={selectedProjectId}
               placeholder={t('studioProjectPlaceholder')}
               onChange={(e) => setSelectedProjectId(e.target.value)}
             />
           )}
         </div>
-        {task && (
-          <span
-            data-testid="studio-task-status"
-            className={`text-xs font-bold px-2.5 py-1 rounded-full border ${taskStatusMeta(task.status).cls}`}
-          >
-            {taskStatusMeta(task.status).text}
-          </span>
-        )}
         <div className="flex-1" />
-        <button
-          data-testid="studio-generate-button"
-          onClick={handleGenerate}
-          disabled={running}
-          className={`px-5 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-all ${
-            running
-              ? 'bg-white/5 text-[#5b6474] cursor-not-allowed'
-              : 'bg-brand-600 text-white shadow-lg shadow-brand-600/30 hover:bg-brand-500'
-          }`}
-        >
-          {running ? (
-            <>
-              <Loader2 className="w-4 h-4 animate-spin" />
-              {t('studioGenerating')}
-            </>
-          ) : (
-            <>
-              <Clapperboard className="w-4 h-4" />
-              {t('studioGenerate')}
-            </>
-          )}
-        </button>
       </header>
+      )}
 
       <div className="flex flex-1 min-h-0">
-        {/* 左侧阶段导航 */}
-        <nav className="w-52 flex-shrink-0 border-r border-[#232b38] bg-[#11151d] p-3 flex flex-col gap-1">
+        {/* 左侧阶段导航：无边框，选中态 = 蓝色指示条 + 填充圆角块 —— embedded 模式由外壳 Sidebar 承担，隐藏 */}
+        {!embedded && (
+        <nav className="w-52 flex-shrink-0 border-r border-white/[0.05] p-3 flex flex-col gap-1">
           {stageItems.map((item) => (
             <button
               key={item.id}
               data-testid={`studio-stage-${item.id}`}
               onClick={() => setStage(item.id)}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+              className={`flex items-center gap-3.5 px-3 py-3 rounded-xl text-sm font-medium transition-all ${
                 stage === item.id
-                  ? 'bg-brand-600/15 text-brand-400 border border-brand-600/30'
-                  : 'text-[#8b94a7] hover:bg-white/5 hover:text-[#e6eaf2] border border-transparent'
+                  ? 'bg-white/[0.08] text-white'
+                  : 'text-white/55 hover:bg-white/[0.04] hover:text-white/90'
               }`}
             >
+              <span
+                className={`w-0.5 h-4 rounded-full flex-shrink-0 ${
+                  stage === item.id ? 'bg-[#0A84FF]' : 'bg-transparent'
+                }`}
+              />
               {item.icon}
               <span className="flex-1 text-left">{item.label}</span>
               {item.count !== undefined && item.count > 0 && (
-                <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded-full bg-white/5 text-[#8b94a7]">
+                <span className="text-[10px] font-mono font-medium px-1.5 py-0.5 rounded-full bg-white/[0.08] text-white/55">
                   {item.count}
-                </span>
-              )}
-              {item.id === 'shots' && pendingCount > 0 && (
-                <span
-                  data-testid="studio-pending-badge"
-                  className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400"
-                >
-                  {pendingCount}
                 </span>
               )}
             </button>
           ))}
         </nav>
+        )}
 
-        {/* 中央工作区 */}
-        <main className="flex-1 min-w-0 overflow-y-auto p-6">
+        {/* 中央工作区（剪辑台阶段为全幅 AE 式布局，无滚动边距） */}
+        <main
+          className={
+            stage === 'timeline'
+              ? 'flex-1 min-w-0 min-h-0 flex flex-col'
+              : 'flex-1 min-w-0 overflow-y-auto p-6'
+          }
+        >
           {formError && (
             <div
               data-testid="studio-form-error"
-              className="max-w-3xl mx-auto mb-4 flex items-center gap-2 text-sm text-red-400 bg-red-500/10 border border-red-500/30 rounded-xl px-4 py-2.5"
+              className="max-w-3xl mx-auto mb-4 flex items-center gap-2 text-sm text-[#FF453A] bg-[#FF453A]/10 border border-[#FF453A]/30 rounded-xl px-4 py-2.5"
             >
               <AlertCircle className="w-4 h-4 flex-shrink-0" />
               {formError}
             </div>
           )}
 
-          {/* 故事阶段 */}
-          {stage === 'story' && (
-            <div className="max-w-3xl mx-auto flex flex-col gap-5">
-              <section className={`${panelCls} p-6 flex flex-col gap-4`}>
-                <div>
-                  <label className={labelCls}>{t('studioStory')}</label>
-                  <textarea
-                    data-testid="studio-story-input"
-                    className={`${inputCls} min-h-[220px] resize-y font-mono leading-relaxed`}
-                    value={storyText}
-                    placeholder={t('studioStoryPlaceholder')}
-                    onChange={(e) => setStoryText(e.target.value)}
-                  />
-                </div>
+          {/* 导演台阶段：整理 / 审核 / 补缺本项目资产 */}
+          {stage === 'director' && (
+            <DirectorDesk
+              projectId={selectedProjectId.trim()}
+              providers={providers}
+              onSendToTimeline={handleSendToTimeline}
+            />
+          )}
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className={labelCls}>{t('studioEpisodeTitle')}</label>
-                    <input
-                      data-testid="studio-title-input"
-                      className={inputCls}
-                      value={title}
-                      placeholder={t('studioEpisodeTitlePlaceholder')}
-                      onChange={(e) => setTitle(e.target.value)}
-                    />
-                  </div>
-                  <div>
-                    <label className={labelCls}>{t('studioMaxShots')}</label>
-                    <input
-                      data-testid="studio-max-shots"
-                      type="number"
-                      min={1}
-                      max={30}
-                      className={inputCls}
-                      value={maxShots}
-                      onChange={(e) => setMaxShots(Math.max(1, Number(e.target.value) || 1))}
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className={labelCls}>{t('studioImageProvider')}</label>
-                    <select
-                      data-testid="studio-image-provider"
-                      className={inputCls}
-                      value={imageProviderId}
-                      onChange={(e) => {
-                        setImageProviderId(e.target.value);
-                        setImageModel('');
-                      }}
-                    >
-                      <option value="">{t('studioSelectProvider')}</option>
-                      {imageProviders.map((p) => (
-                        <option key={p.provider_id} value={p.provider_id}>
-                          {p.name || p.provider_id}
-                        </option>
-                      ))}
-                    </select>
-                    {imageProviders.length === 0 && (
-                      <p className="text-xs text-amber-400 mt-1.5">{t('studioNoImageProviders')}</p>
-                    )}
-                  </div>
-                  <div>
-                    <label className={labelCls}>{t('studioImageModel')}</label>
-                    <select
-                      data-testid="studio-image-model"
-                      className={inputCls}
-                      value={imageModel}
-                      onChange={(e) => setImageModel(e.target.value)}
-                    >
-                      <option value="">{t('studioSelectModel')}</option>
-                      {(selectedImageProvider?.image_models || []).map((m) => (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className={labelCls}>{t('studioLlmProvider')}</label>
-                    <select
-                      data-testid="studio-llm-provider"
-                      className={inputCls}
-                      value={llmProviderId}
-                      onChange={(e) => {
-                        setLlmProviderId(e.target.value);
-                        setLlmModelId('');
-                      }}
-                    >
-                      <option value="">{t('studioAutoSelect')}</option>
-                      {llmProviders.map((p) => (
-                        <option key={p.provider_id} value={p.provider_id}>
-                          {p.name || p.provider_id}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className={labelCls}>{t('studioLlmModel')}</label>
-                    <select
-                      data-testid="studio-llm-model"
-                      className={inputCls}
-                      value={llmModelId}
-                      onChange={(e) => setLlmModelId(e.target.value)}
-                    >
-                      <option value="">{t('studioAutoSelect')}</option>
-                      {(selectedLlmProvider?.chat_models || []).map((m) => (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                <div>
-                  <label className={labelCls}>{t('studioCharacterCards')}</label>
-                  {cards.length === 0 ? (
-                    <p className="text-xs text-[#5b6474]">{t('studioNoCharacterCards')}</p>
-                  ) : (
-                    <div className="flex flex-wrap gap-2" data-testid="studio-card-list">
-                      {cards.map((c) => (
-                        <label
-                          key={c.card_id}
-                          className={`flex items-center gap-2 border rounded-xl px-3 py-2 cursor-pointer transition-all ${
-                            selectedCardIds.has(c.card_id)
-                              ? 'border-brand-600/50 bg-brand-600/10'
-                              : 'border-[#2a3342] bg-[#0d1117] hover:border-brand-600/30'
-                          }`}
-                        >
-                          <input
-                            type="checkbox"
-                            data-testid={`studio-card-${c.card_id}`}
-                            checked={selectedCardIds.has(c.card_id)}
-                            onChange={() => toggleCard(c.card_id)}
-                            className="accent-brand-600 w-4 h-4"
-                          />
-                          {c.url && (
-                            <img src={c.url} alt={c.name} className="w-6 h-6 rounded-md object-cover" />
-                          )}
-                          <span className="text-sm font-bold text-[#e6eaf2]">{c.name}</span>
-                        </label>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </section>
+          {/* 剪辑台阶段：AE 式布局（补充素材 bin + 节目监视器 + clip 检查器 + 时间线） */}
+          {stage === 'timeline' && (
+            <div
+              className="flex-1 min-h-0 flex flex-col text-white/90"
+              data-testid="studio-timeline"
+            >
+              <div className="flex flex-1 min-h-0">
+                <AssetBin
+                  assets={tlLibraryAssets}
+                  loading={tlAssetsLoading}
+                  addedIds={tlAssetIds}
+                  onAdd={addToTimeline}
+                />
+                <ProgramMonitor items={timeline} playback={tlPlayback} />
+                <ClipInspector
+                  items={timeline}
+                  selectedIndex={selectedClipIndex}
+                  totalSec={tlTotalSec}
+                  arranging={arranging}
+                  exporting={tlExporting}
+                  exportResult={tlExportResult}
+                  storyHint={storyHint}
+                  onStoryHintChange={setStoryHint}
+                  filmTitle={filmTitle}
+                  onFilmTitleChange={setFilmTitle}
+                  onSetSec={setTlItemSec}
+                  onSetCaption={setTlItemCaption}
+                  onMove={moveTlItem}
+                  onRemove={removeTlItem}
+                  onArrange={handleArrange}
+                  onExport={handleTlExport}
+                />
+              </div>
+              <TimelineEditor
+                items={timeline}
+                playback={tlPlayback}
+                selectedIndex={selectedClipIndex}
+                onSelect={setSelectedClipIndex}
+                onResize={setTlItemSec}
+                pxPerSec={pxPerSec}
+                onPxPerSecChange={setPxPerSec}
+              />
+              {/* 快捷键提示条 */}
+              <div
+                data-testid="studio-tl-shortcut-hint"
+                className="flex-shrink-0 border-t border-white/[0.05] px-3 py-1 text-[10px] text-white/35"
+              >
+                {t('studioTlShortcutHint')}
+              </div>
             </div>
           )}
 
-          {/* 角色卡阶段 */}
-          {stage === 'cards' && (
-            <div className="max-w-4xl mx-auto flex flex-col gap-4">
-              {cards.length > 0 && (
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-4" data-testid="studio-card-grid">
-                  {cards.map((c) => (
-                    <div key={c.card_id} className={`${panelCls} p-4 flex flex-col gap-2`}>
-                      {c.url && (
-                        <img
-                          src={c.url}
-                          alt={c.name}
-                          className="w-full aspect-square rounded-xl object-cover bg-black/30"
-                        />
-                      )}
-                      <div className="text-sm font-bold text-[#e6eaf2] truncate">{c.name}</div>
-                      {c.identity?.face_anchor && (
-                        <div className="text-xs text-[#8b94a7] line-clamp-2">
-                          {c.identity.face_anchor}
+          {/* 成片库阶段：项目视频类资产网格（剪辑台导出后登记入库） */}
+          {stage === 'episode' && (
+            <div className="max-w-4xl mx-auto flex flex-col gap-6">
+              {filmsLoading ? (
+                <Loader2 className="w-5 h-5 text-[#0A84FF] animate-spin" />
+              ) : films.length === 0 ? (
+                <div className="flex flex-col items-center justify-center text-center py-24 gap-4">
+                  <div className="w-14 h-14 rounded-2xl bg-white/[0.06] p-4 flex items-center justify-center">
+                    <Film className="w-6 h-6 text-white/45" />
+                  </div>
+                  <div className="text-[15px] font-semibold text-white/90">
+                    {t('studioStageEpisode')}
+                  </div>
+                  <p className="text-xs text-white/45 max-w-[280px]" data-testid="studio-film-empty">
+                    {t('studioFilmEmpty')}
+                  </p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-5" data-testid="studio-film-grid">
+                  {films.map((a) => (
+                    <div
+                      key={a.id}
+                      data-testid={`studio-film-${a.id}`}
+                      className={`${panelCls} p-3 flex flex-col gap-3`}
+                    >
+                      <video controls src={a.url!} className="w-full rounded-2xl bg-black" />
+                      <div className="flex items-center gap-3 px-1 pb-1">
+                        <div className="flex-1 min-w-0 text-sm font-semibold text-white/90 truncate">
+                          {a.title || a.name}
                         </div>
-                      )}
+                        <a
+                          href={a.url!}
+                          download
+                          className="inline-flex items-center gap-1.5 flex-shrink-0 px-3 py-1.5 rounded-full bg-[#0A84FF] text-white text-xs font-medium hover:bg-[#0A84FF]/90 active:scale-[0.98] transition-all"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          {t('studioDownload')}
+                        </a>
+                      </div>
                     </div>
                   ))}
                 </div>
               )}
-              <p className="text-xs text-[#5b6474]">{t('studioCardsApiHint')}</p>
-            </div>
-          )}
-
-          {/* 镜头审片阶段 */}
-          {stage === 'shots' && (
-            <div
-              className="max-w-4xl mx-auto flex flex-col gap-4"
-              data-testid="studio-review-board"
-            >
-              <div className="flex items-center flex-wrap gap-2">
-                {shotFilters.map((f) => (
-                  <button
-                    key={f.id}
-                    data-testid={`studio-filter-${f.id}`}
-                    onClick={() => setShotFilter(f.id)}
-                    className={`px-3 py-1.5 rounded-full text-xs font-bold border transition-all ${
-                      shotFilter === f.id
-                        ? 'bg-brand-600/15 text-brand-400 border-brand-600/40'
-                        : 'text-[#8b94a7] border-[#2a3342] hover:border-brand-600/30'
-                    }`}
-                  >
-                    {f.label}
-                    <span className="ml-1.5 font-mono opacity-70">{f.count}</span>
-                  </button>
-                ))}
-                <div className="flex-1" />
-                {shotsLoading && <Loader2 className="w-4 h-4 text-brand-500 animate-spin" />}
-                <button
-                  data-testid="studio-approve-all"
-                  onClick={handleApproveAll}
-                  disabled={approvingAll || pendingCount === 0}
-                  className="px-4 py-1.5 rounded-full text-xs font-bold bg-emerald-600 text-white hover:bg-emerald-500 transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
-                >
-                  {approvingAll ? (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  ) : (
-                    <CheckCheck className="w-3.5 h-3.5" />
-                  )}
-                  {t('studioApproveAll')}
-                </button>
-              </div>
-
-              {!shotsLoading && shotGroups.length === 0 && (
-                <p className="text-xs text-[#5b6474]">{t('studioNoShots')}</p>
-              )}
-
-              {shotGroups.map((g, gi) => (
-                <div key={g.brief} data-testid={`studio-shot-group-${gi}`} className="flex flex-col gap-2">
-                  <div className="text-xs font-bold text-[#8b94a7] truncate">{g.brief}</div>
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
-                    {g.shots.map((s) => renderShotCard(s))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* 成片阶段 */}
-          {stage === 'episode' && (
-            <div className="max-w-3xl mx-auto flex flex-col gap-5">
-              {/* 当前任务成片结果（无任务历史接口，只显示当前任务） */}
-              {task && (task.status === 'done' || task.status === 'partial') && task.result ? (
-                <section className={`${panelCls} p-6 flex flex-col gap-3`}>
-                  <div className="flex items-center gap-2 text-sm font-bold text-emerald-400">
-                    <CheckCircle className="w-4 h-4" />
-                    {t('studioResultReady')}
-                  </div>
-                  {task.status === 'partial' && (
-                    <p className="text-xs text-amber-400">{t('studioPartialNote')}</p>
-                  )}
-                  <video
-                    data-testid="studio-video"
-                    controls
-                    src={task.result.url}
-                    className="w-full rounded-xl bg-black"
-                  />
-                  <a
-                    data-testid="studio-download"
-                    href={task.result.url}
-                    download
-                    className="inline-flex items-center gap-2 self-start px-4 py-2 rounded-xl bg-brand-600 text-white text-sm font-bold shadow-lg shadow-brand-600/30 hover:bg-brand-500 transition-all"
-                  >
-                    <Download className="w-4 h-4" />
-                    {t('studioDownload')}
-                  </a>
-
-                  {/* 每镜头状态列表（trace 数据） */}
-                  <div className="flex flex-col gap-2 pt-3 border-t border-[#232b38]">
-                    {(task.progress?.shots || []).map((s, i) => {
-                      const meta = shotStatusMeta(s.status);
-                      return (
-                        <div
-                          key={`${i}-${s.title}`}
-                          className="flex items-center gap-3 bg-[#11151d] border border-[#232b38] rounded-xl px-4 py-2.5"
-                        >
-                          {meta.icon}
-                          <span className="flex-1 text-sm text-[#e6eaf2] truncate">{s.title}</span>
-                          <span className="text-xs text-[#5b6474] font-mono">
-                            {t('studioRounds').replace('{n}', String(s.rounds))}
-                          </span>
-                          <span className={`text-xs font-bold ${meta.cls}`}>{meta.text}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </section>
-              ) : (
-                <p className="text-xs text-[#5b6474]">{t('studioNoEpisode')}</p>
-              )}
-
-              {/* 导出选中镜头 */}
-              <section className={`${panelCls} p-6 flex flex-col gap-4`}>
-                <div className="flex items-center justify-between">
-                  <h3 className="text-sm font-bold text-[#e6eaf2]">{t('studioExportSelected')}</h3>
-                  <div className="flex items-center gap-2">
-                    <label className="text-xs text-[#8b94a7]">{t('studioSecPerImage')}</label>
-                    <input
-                      data-testid="studio-export-sec"
-                      type="number"
-                      min={1}
-                      max={10}
-                      className={`${inputCls} !w-20 !py-1.5 !rounded-lg`}
-                      value={exportSecPerImage}
-                      onChange={(e) =>
-                        setExportSecPerImage(Math.max(1, Number(e.target.value) || 1))
-                      }
-                    />
-                  </div>
-                </div>
-
-                {shots.length === 0 ? (
-                  <p className="text-xs text-[#5b6474]">{t('studioNoShots')}</p>
-                ) : (
-                  <div className="grid grid-cols-2 md:grid-cols-3 gap-2" data-testid="studio-export-list">
-                    {shots.map((s) => (
-                      <label
-                        key={s.asset_id}
-                        className={`flex items-center gap-2 border rounded-xl px-3 py-2 cursor-pointer transition-all ${
-                          exportSelIds.has(s.asset_id)
-                            ? 'border-brand-600/50 bg-brand-600/10'
-                            : 'border-[#2a3342] bg-[#0d1117] hover:border-brand-600/30'
-                        }`}
-                      >
-                        <input
-                          type="checkbox"
-                          data-testid={`studio-export-check-${s.asset_id}`}
-                          checked={exportSelIds.has(s.asset_id)}
-                          onChange={() => toggleExportSel(s.asset_id)}
-                          className="accent-brand-600 w-4 h-4"
-                        />
-                        {s.url && (
-                          <img
-                            src={s.url}
-                            alt={s.title || s.brief}
-                            className="w-10 h-10 rounded-lg object-cover flex-shrink-0 bg-black/30"
-                          />
-                        )}
-                        <div className="min-w-0">
-                          <div className="text-xs font-bold text-[#e6eaf2] truncate">
-                            {s.title || s.brief}
-                          </div>
-                          <div className="text-[10px] text-[#5b6474] font-mono">
-                            {t('studioShotVersion')
-                              .replace('{x}', String(s.version))
-                              .replace('{y}', String(s.versions))}
-                          </div>
-                        </div>
-                      </label>
-                    ))}
-                  </div>
-                )}
-
-                <button
-                  data-testid="studio-export-selected"
-                  onClick={handleExport}
-                  disabled={exporting || exportSelIds.size === 0}
-                  className="px-5 py-2.5 rounded-xl text-sm font-bold bg-brand-600 text-white shadow-lg shadow-brand-600/30 hover:bg-brand-500 transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 self-start"
-                >
-                  {exporting ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      {t('studioExporting')}
-                    </>
-                  ) : (
-                    <>
-                      <Download className="w-4 h-4" />
-                      {t('studioExportSelected')}
-                    </>
-                  )}
-                </button>
-
-                {exportResult && (
-                  <div className="flex flex-col gap-3 pt-3 border-t border-[#232b38]">
-                    <div className="flex items-center gap-2 text-sm font-bold text-emerald-400">
-                      <CheckCircle className="w-4 h-4" />
-                      {t('studioResultReady')}
-                    </div>
-                    <video
-                      data-testid="studio-export-video"
-                      controls
-                      src={exportResult.url}
-                      className="w-full rounded-xl bg-black"
-                    />
-                    <a
-                      data-testid="studio-export-download"
-                      href={exportResult.url}
-                      download
-                      className="inline-flex items-center gap-2 self-start px-4 py-2 rounded-xl bg-brand-600 text-white text-sm font-bold shadow-lg shadow-brand-600/30 hover:bg-brand-500 transition-all"
-                    >
-                      <Download className="w-4 h-4" />
-                      {t('studioDownload')}
-                    </a>
-                  </div>
-                )}
-              </section>
             </div>
           )}
         </main>
-
-        {/* 右侧检查器（可折叠） */}
-        {inspectorOpen ? (
-          <aside
-            data-testid="studio-inspector"
-            className="w-80 flex-shrink-0 border-l border-[#232b38] bg-[#11151d] overflow-y-auto p-4 flex flex-col gap-4"
-          >
-            <div className="flex items-center justify-between">
-              <h3 className="text-xs font-bold text-[#8b94a7] uppercase tracking-wider">
-                {t('studioInspector')}
-              </h3>
-              <button
-                data-testid="studio-inspector-toggle"
-                onClick={() => setInspectorOpen(false)}
-                className="p-1.5 hover:bg-white/5 rounded-lg text-[#8b94a7] hover:text-[#e6eaf2] transition-all"
-              >
-                <PanelRightClose className="w-4 h-4" />
-              </button>
-            </div>
-
-            {selectedShot ? (
-              <div data-testid="studio-inspector-shot" className="flex flex-col gap-3">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="text-sm font-bold text-[#e6eaf2] truncate">
-                    {selectedShot.title || selectedShot.brief}
-                  </div>
-                  <button
-                    data-testid="studio-inspector-clear"
-                    onClick={() => setSelectedShotId(null)}
-                    className="p-1 hover:bg-white/5 rounded-lg text-[#8b94a7] hover:text-[#e6eaf2] transition-all flex-shrink-0"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-                {selectedShot.url && (
-                  <img
-                    src={selectedShot.url}
-                    alt={selectedShot.title || selectedShot.brief}
-                    className="w-full rounded-xl object-cover bg-black/30"
-                  />
-                )}
-                <div className="flex items-center flex-wrap gap-2">
-                  <span className="text-xs text-[#5b6474] font-mono">
-                    {t('studioShotVersion')
-                      .replace('{x}', String(selectedShot.version))
-                      .replace('{y}', String(selectedShot.versions))}
-                  </span>
-                  {criticMeta(selectedShot.critic_status) && (
-                    <span className={`text-xs font-bold ${criticMeta(selectedShot.critic_status)!.cls}`}>
-                      {criticMeta(selectedShot.critic_status)!.text}
-                    </span>
-                  )}
-                  <span
-                    className={`text-xs font-bold px-2 py-0.5 rounded-full border ${reviewStatusMeta(selectedShot.review_status).cls}`}
-                  >
-                    {reviewStatusMeta(selectedShot.review_status).text}
-                  </span>
-                </div>
-                {selectedShot.review_note && (
-                  <div className="text-xs text-[#8b94a7]">{selectedShot.review_note}</div>
-                )}
-                <div>
-                  <div className={labelCls}>{t('studioStageStory')}</div>
-                  <div className="text-xs text-[#e6eaf2] bg-[#0d1117] border border-[#2a3342] rounded-xl px-3 py-2">
-                    {selectedShot.brief}
-                  </div>
-                </div>
-                <div>
-                  <div className={labelCls}>{t('studioPromptLabel')}</div>
-                  <pre className="text-xs text-[#8b94a7] bg-[#0d1117] border border-[#2a3342] rounded-xl px-3 py-2 whitespace-pre-wrap break-words font-mono max-h-48 overflow-y-auto">
-                    {selectedShot.prompt}
-                  </pre>
-                </div>
-              </div>
-            ) : task ? (
-              <div data-testid="studio-progress" className="flex flex-col gap-3">
-                <h4 className="text-xs font-bold text-[#8b94a7] uppercase tracking-wider">
-                  {t('studioTaskProgress')}
-                </h4>
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-[#8b94a7] font-bold">{t('studioPhase')}:</span>
-                  <span className="font-bold text-[#e6eaf2]">{phaseLabel(task.progress?.phase)}</span>
-                </div>
-                <div className="text-sm text-[#8b94a7] font-mono">
-                  {t('studioShotCounter')
-                    .replace('{current}', String(task.progress?.current_shot ?? 0))
-                    .replace('{total}', String(task.progress?.total_shots ?? 0))}
-                </div>
-
-                {task.status === 'running' && (
-                  <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-brand-600 rounded-full transition-all duration-500"
-                      style={{
-                        width: `${
-                          task.progress?.total_shots
-                            ? Math.round((task.progress.current_shot / task.progress.total_shots) * 100)
-                            : 5
-                        }%`,
-                      }}
-                    />
-                  </div>
-                )}
-
-                <div className="flex flex-col gap-2">
-                  {(task.progress?.shots || []).map((s, i) => {
-                    const meta = shotStatusMeta(s.status);
-                    return (
-                      <div
-                        key={`${i}-${s.title}`}
-                        data-testid={`studio-shot-${i}`}
-                        className="flex items-center gap-3 bg-[#0d1117] border border-[#232b38] rounded-xl px-3 py-2"
-                      >
-                        {meta.icon}
-                        <span className="flex-1 text-sm text-[#e6eaf2] truncate">{s.title}</span>
-                        <span className={`text-xs font-bold ${meta.cls}`}>{meta.text}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {(task.status === 'failed' || task.status === 'error') && (
-                  <div
-                    data-testid="studio-task-error"
-                    className="flex items-center gap-2 text-sm text-red-400 bg-red-500/10 border border-red-500/30 rounded-xl px-4 py-2.5"
-                  >
-                    <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                    <span>
-                      {t('studioFailed')}
-                      {task.error ? `: ${task.error}` : ''}
-                    </span>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <p className="text-xs text-[#5b6474]">{t('studioSelectShotHint')}</p>
-            )}
-          </aside>
-        ) : (
-          <button
-            data-testid="studio-inspector-toggle"
-            onClick={() => setInspectorOpen(true)}
-            className="w-10 flex-shrink-0 border-l border-[#232b38] bg-[#11151d] flex items-start justify-center pt-4 text-[#8b94a7] hover:text-[#e6eaf2] transition-all"
-          >
-            <PanelRightOpen className="w-4 h-4" />
-          </button>
-        )}
       </div>
     </div>
   );

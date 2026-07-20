@@ -248,25 +248,31 @@ GroupNodeBody.displayName = 'GroupNodeBody';
 /* ===== 媒体自适应：图片/视频加载完成后，按实际宽高比调整节点高度 =====
  * 触发时机：img onLoad / video onLoadedMetadata
  * 公式：newH = wrap宽度 × (媒体高/媒体宽) + chrome（节点其余部分高度，实测）
- * DOM 测得的是屏幕像素，需除以 viewport.scale 转回世界坐标。
+ * 注意：world 容器用的是 CSS transform: scale()，不影响布局——
+ * offsetWidth/scrollHeight 返回的就是世界坐标单位，绝不能再除以 viewport.scale，
+ * 否则缩放 < 1 时高度会被放大 1/scale 倍（agent 模式自动缩放下 Composer 浮窗被推得很远）。
  * 同时把宽高比 (_imgAspect) 与 chrome (_imgChrome) 存到节点上，供 resize 保比例使用。
  */
 function useMediaAutoFit(node: CanvasNode) {
   const updateNode = useCanvasStore((s) => s.updateNode);
   const lastFitRef = useRef<{ url: string; w: number; h: number } | null>(null);
 
-  return useCallback(
+  const fitMedia = useCallback(
     (mediaEl: HTMLElement, naturalW: number, naturalH: number) => {
       if (!naturalW || !naturalH || !node.url) return;
       const wrapEl = mediaEl.closest('.image-wrap') as HTMLElement | null;
-      const nodeEl = mediaEl.closest('.image-node') as HTMLElement | null;
-      if (!wrapEl || !nodeEl) return;
-      const scale = useCanvasStore.getState().viewport.scale || 1;
+      const bodyEl = mediaEl.closest('.node-body') as HTMLElement | null;
+      if (!wrapEl || !bodyEl) return;
       const wrapW = wrapEl.offsetWidth;
       if (wrapW <= 0) return;
-      // chrome = 节点自然高度 - 媒体 wrap 高度（asset meta 面板、错误条等），屏幕像素
-      const extra = Math.max(0, nodeEl.scrollHeight - wrapEl.offsetHeight);
-      let newH = (wrapW * (naturalH / naturalW) + extra) / scale;
+      // chrome = body 内容高度 - 媒体 wrap 高度（asset meta 面板、错误条等）。
+      // 注意：必须测 .node-body（高度 auto，恒等于内容高度），不能测 .image-node——
+      // 节点被 style height 固定后其 scrollHeight 返回的是盒子高度而非内容高度，
+      // 一旦 node.h 因故偏大（如历史持久化数据），错误高度会自我延续、永远纠正不回来。
+      // 另：world 容器是 CSS transform: scale()，不影响布局，offsetWidth/scrollHeight
+      // 本身就是世界坐标单位，绝不能再除以 viewport.scale。
+      const extra = Math.max(0, bodyEl.offsetHeight - wrapEl.offsetHeight);
+      let newH = wrapW * (naturalH / naturalW) + extra;
       newH = Math.min(1200, Math.max(96, newH));
       // 防重复：同 url + 同宽度 + 同计算结果则跳过
       const last = lastFitRef.current;
@@ -277,11 +283,27 @@ function useMediaAutoFit(node: CanvasNode) {
       updateNode(node.id, {
         h: newH,
         _imgAspect: naturalH / naturalW,
-        _imgChrome: extra / scale,
+        _imgChrome: extra,
       } as Partial<CanvasNode>);
     },
     [node.id, node.url, node.w, node.h, updateNode]
   );
+
+  // ref 回调：挂载时媒体若已就绪（缓存命中、HMR 复用等不再触发 onLoad 的场景），
+  // 立即重新测量一次——这是历史遗留的过大 node.h 能自我校正的关键路径。
+  const mediaRef = useCallback(
+    (el: HTMLImageElement | HTMLVideoElement | null) => {
+      if (!el) return;
+      if (el instanceof HTMLImageElement) {
+        if (el.complete && el.naturalWidth > 0) fitMedia(el, el.naturalWidth, el.naturalHeight);
+      } else if (el.readyState >= 1) {
+        fitMedia(el, el.videoWidth, el.videoHeight);
+      }
+    },
+    [fitMedia]
+  );
+
+  return { fitMedia, mediaRef };
 }
 
 /* ===== Image Node (上传/图片节点) - 参考项目 smart-image ===== */
@@ -290,7 +312,7 @@ const ImageNodeBody: React.FC<{ node: CanvasNode }> = React.memo(({ node }) => {
   const updateNode = useCanvasStore((s) => s.updateNode);
   const retryFailedAsset = useCanvasStore((s) => s.retryFailedAsset);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const autoFitMedia = useMediaAutoFit(node);
+  const { fitMedia, mediaRef } = useMediaAutoFit(node);
 
   const handleFileSelect = useCallback(
     (files: FileList | null) => {
@@ -409,8 +431,8 @@ const ImageNodeBody: React.FC<{ node: CanvasNode }> = React.memo(({ node }) => {
         <div>
           <div className="image-wrap" data-image-index="0">
             {mediaKind === 'video' ? (
-              <video src={node.url} muted preload="metadata" playsInline className="node-img"
-                onLoadedMetadata={(e) => autoFitMedia(e.currentTarget, e.currentTarget.videoWidth, e.currentTarget.videoHeight)} />
+              <video src={node.url} muted preload="metadata" playsInline className="node-img" ref={mediaRef}
+                onLoadedMetadata={(e) => fitMedia(e.currentTarget, e.currentTarget.videoWidth, e.currentTarget.videoHeight)} />
             ) : mediaKind === 'audio' ? (
               <div className="media-audio-card">
                 <div className="media-card-icon">
@@ -420,8 +442,8 @@ const ImageNodeBody: React.FC<{ node: CanvasNode }> = React.memo(({ node }) => {
                 <audio src={node.url} controls preload="metadata" />
               </div>
             ) : (
-              <img src={node.url} alt="" draggable={false} className="node-img"
-                onLoad={(e) => autoFitMedia(e.currentTarget, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)} />
+              <img src={node.url} alt="" draggable={false} className="node-img" ref={mediaRef}
+                onLoad={(e) => fitMedia(e.currentTarget, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)} />
             )}
             <button className="mini-x image-replace" type="button" title={t('canvasNodeReplaceImage')}
               onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}>
@@ -814,7 +836,7 @@ const VideoNodeBody: React.FC<{ node: CanvasNode }> = React.memo(({ node }) => {
   const apiConfig = useCanvasStore((s) => s.apiConfig);
   const nodes = useCanvasStore((s) => s.nodes);
   const connections = useCanvasStore((s) => s.connections);
-  const autoFitMedia = useMediaAutoFit(node);
+  const { fitMedia, mediaRef } = useMediaAutoFit(node);
 
   const enabledProviders = apiConfig.providers.filter(p => p.enabled);
   const providerId = (node.videoProviderId as string) || (enabledProviders[0]?.id ?? '');
@@ -863,8 +885,8 @@ const VideoNodeBody: React.FC<{ node: CanvasNode }> = React.memo(({ node }) => {
     return (
       <div className="video-node-body">
         <div className="image-wrap" data-image-index="0">
-          <video src={node.url} controls preload="metadata" className="node-img"
-            onLoadedMetadata={(e) => autoFitMedia(e.currentTarget, e.currentTarget.videoWidth, e.currentTarget.videoHeight)} />
+          <video src={node.url} controls preload="metadata" className="node-img" ref={mediaRef}
+            onLoadedMetadata={(e) => fitMedia(e.currentTarget, e.currentTarget.videoWidth, e.currentTarget.videoHeight)} />
           <button className="mini-x image-delete" type="button" title={t('canvasVideoClear')}
             onClick={(e) => { e.stopPropagation(); updateNode(node.id, { url: '', mediaKind: 'video', runStatus: undefined }); }}>
             <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>

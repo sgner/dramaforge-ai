@@ -50,10 +50,11 @@ export const InfiniteCanvas: React.FC<{
   projectId?: string;
   onAgentMode?: () => void;
   agentModeActive?: boolean;
+  onOpenStudio?: () => void;
   /** 当 true 时隐藏画布自带顶栏（用于 AgentMode 已有自己的顶栏） */
   hideToolbar?: boolean;
   [key: string]: any;
-}> = React.memo(({ onBack, projectId, onAgentMode, agentModeActive, hideToolbar, ...rest }) => {
+}> = React.memo(({ onBack, projectId, onAgentMode, agentModeActive, onOpenStudio, hideToolbar, ...rest }) => {
   const boardRef = useRef<HTMLDivElement>(null);
   const worldRef = useRef<HTMLDivElement>(null);
   const { t } = useI18n();
@@ -873,6 +874,7 @@ export const InfiniteCanvas: React.FC<{
           onBack={onBack}
           onAgentMode={onAgentMode}
           agentModeActive={agentModeActive}
+          onOpenStudio={onOpenStudio}
         />
         {hideToolbar && <style>{`.canvas-root > .canvas-topbar{display:none !important;}`}</style>}
 

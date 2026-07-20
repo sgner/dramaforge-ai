@@ -12,6 +12,7 @@ export const ProjectList = ({
   onSelectTask,
   onDeleteTask,
   onExportTask,
+  onOpenStudio,
   importFileInputRef,
   setImportFileInputRef,
   t,
@@ -24,6 +25,7 @@ export const ProjectList = ({
   onSelectTask: (id: string) => void;
   onDeleteTask: (id: string) => void;
   onExportTask: (id: string) => void;
+  onOpenStudio: (id: string) => void;
   importFileInputRef: HTMLInputElement | null;
   setImportFileInputRef: (ref: HTMLInputElement | null) => void;
   t: any;
@@ -78,13 +80,18 @@ export const ProjectList = ({
           {/* ─── Projects Grid ─── */}
           <div className="relative px-8 lg:px-12 pb-12 pt-8">
             <div className="flex items-center justify-between mb-6">
-              <h3 className="text-xl font-bold text-[#111827] tracking-tight">{t('yourProjects')}</h3>
+              <div>
+                <h3 className="text-xl font-bold text-[#111827] tracking-tight">{t('workshopTitle')}</h3>
+                <p className="text-xs text-[#94a3b8] mt-1" data-testid="projects-workshop-hint">
+                  {t('projectsWorkshopHint')}
+                </p>
+              </div>
               <span className="text-xs font-mono text-[#94a3b8]">{tasks.length} {tasks.length > 1 ? t('projectsCount') : t('projectCount')}</span>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
               {tasks.map((task, idx) => (
                 <div key={task.id} className="animate-fade-in-up opacity-0" style={{ animationDelay: `${0.1 + idx * 0.08}s` }}>
-                  <TaskCard task={task} onClick={() => onSelectTask(task.id)} onDelete={() => onDeleteTask(task.id)} onExport={() => onExportTask(task.id)} t={t} />
+                  <TaskCard task={task} onClick={() => onSelectTask(task.id)} onDelete={() => onDeleteTask(task.id)} onExport={() => onExportTask(task.id)} onOpenStudio={() => onOpenStudio(task.id)} t={t} />
                 </div>
               ))}
             </div>

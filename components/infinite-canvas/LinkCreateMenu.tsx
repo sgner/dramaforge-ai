@@ -3,6 +3,7 @@ import { useCanvasStore } from './use-canvas-store';
 import { createNode } from './use-canvas-store';
 import { CanvasNode, NodeType } from './types';
 import { useI18n } from '../../i18n';
+import { useMenuEdgeAdjust } from './use-menu-edge-adjust';
 
 interface LinkCreateMenuProps {
   open: boolean;
@@ -16,6 +17,8 @@ interface LinkCreateMenuProps {
 export const LinkCreateMenu: React.FC<LinkCreateMenuProps> = React.memo(
   ({ open, x, y, fromId, kind, onClose }) => {
     const menuRef = useRef<HTMLDivElement>(null);
+    // 边界保护：越界时收回 / 翻转到点击位置上方
+    const menuPos = useMenuEdgeAdjust(open, x, y, menuRef);
     const addNode = useCanvasStore((s) => s.addNode);
     const addConnection = useCanvasStore((s) => s.addConnection);
     const viewport = useCanvasStore((s) => s.viewport);
@@ -88,7 +91,7 @@ export const LinkCreateMenu: React.FC<LinkCreateMenuProps> = React.memo(
       <div
         ref={menuRef}
         className="create-menu open"
-        style={{ left: x, top: y }}
+        style={{ left: menuPos.left, top: menuPos.top }}
       >
         <div className="menu-section-title">{t('canvasLinkCreate')}</div>
         {MENU_ITEMS.map((item) => (

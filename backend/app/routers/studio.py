@@ -9,7 +9,12 @@ GET  /api/studio/character-cards          列出项目的角色卡。
 PUT  /api/studio/character-cards/{id}     更新身份指纹，返回受影响镜头（只读影响分析）。
 GET  /api/studio/character-cards/{id}/impact  该角色卡出现在哪些镜头里。
 POST /api/studio/export                   把一组镜头资产按顺序合成 mp4（ffmpeg 拼接）。
+POST /api/studio/arrange                  资产智能编排：LLM 按短剧叙事排序并建议逐镜头时长/旁白。
 """
+import json
+import logging
+import re
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -28,6 +33,8 @@ from ..agent.studio_export import export_sequence
 from ..agent.studio_tasks import get_episode_task, start_episode_task
 
 router = APIRouter()
+
+logger = logging.getLogger("dramaforge.studio.arrange")
 
 
 class StudioShotIn(BaseModel):
@@ -250,6 +257,8 @@ class StudioExportIn(BaseModel):
     asset_ids: list[str] = Field(..., min_length=1)
     sec_per_image: float = Field(3.0, gt=0, le=30)
     title: str = ""
+    # 可选逐镜头秒数；非 None 时长度必须等于 asset_ids（export_sequence 校验）
+    durations: list[float] | None = None
 
 
 @router.post("/export")
@@ -261,9 +270,126 @@ async def create_studio_export(body: StudioExportIn, db: Session = Depends(get_d
             asset_ids=body.asset_ids,
             sec_per_image=body.sec_per_image,
             title=body.title,
+            durations=body.durations,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
         # ffmpeg 缺失 / 下载失败 / 转码失败等运行期错误
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------- 资产智能编排 ----------
+
+ARRANGE_SYSTEM = """You are the editor agent for a short-drama studio.
+Your ONLY job: order the given shot assets into a short-drama narrative sequence
+and suggest per-shot timing plus a one-line caption.
+Rules:
+- Output JSON only: {"items": [{"asset_id": "<one of the given ids>", "sec": <seconds>, "caption": "<one-sentence narration / shot note>"}]}
+- Order the assets by short-drama narrative (setup → conflict → payoff).
+- sec: 2–5 seconds for images; for videos use the asset's own length if known, else 3–8.
+- caption: a single short sentence (voiceover or shot description).
+- Only use asset_id values from the input; each at most once."""
+
+DEFAULT_ARRANGE_SEC = 3.0
+
+
+class StudioArrangeIn(BaseModel):
+    project_id: str
+    asset_ids: list[str] = Field(default_factory=list)  # ≥2，端点内校验（400）
+    story_hint: str = ""
+    llm_provider_id: str | None = None
+    llm_model_id: str | None = None
+
+
+def _parse_arrange_items(text: str) -> list[dict]:
+    """与 director._parse_shot_list 同款容错：抠第一个 {...} 块解析，失败返回 []。"""
+    m = re.search(r"\{[\s\S]*\}", text or "")
+    items: list[dict] = []
+    if m:
+        try:
+            data = json.loads(m.group(0))
+            raw = data.get("items") if isinstance(data, dict) else None
+            if isinstance(raw, list):
+                items = [it for it in raw if isinstance(it, dict)]
+        except json.JSONDecodeError:
+            pass
+    return items
+
+
+def _merge_arrange_items(parsed: list[dict], input_ids: list[str]) -> list[dict]:
+    """校验 + 兜底：asset_id 必须是输入子集并去重；LLM 漏掉的按原输入顺序补到末尾。"""
+    valid = set(input_ids)
+    seen: set[str] = set()
+    items: list[dict] = []
+    for it in parsed:
+        aid = it.get("asset_id")
+        if not isinstance(aid, str) or aid not in valid or aid in seen:
+            continue
+        seen.add(aid)
+        try:
+            sec = float(it.get("sec"))
+            if sec <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            sec = DEFAULT_ARRANGE_SEC
+        items.append({"asset_id": aid, "sec": sec, "caption": str(it.get("caption") or "")})
+    for aid in input_ids:
+        if aid not in seen:
+            items.append({"asset_id": aid, "sec": DEFAULT_ARRANGE_SEC, "caption": ""})
+    return items
+
+
+@router.post("/arrange")
+async def arrange_assets(body: StudioArrangeIn, db: Session = Depends(get_db)):
+    """资产智能编排（建议性质）：LLM 按短剧叙事排序 + 建议逐镜头秒数与旁白。
+
+    LLM 输出不可解析 / 调用失败时不报错，降级为原顺序 + 默认 sec + 空 caption。
+    """
+    try:
+        asset_ids = list(dict.fromkeys(body.asset_ids))  # 去重且保持传入顺序
+        if len(asset_ids) < 2:
+            raise ValueError("asset_ids 至少需要 2 个资产")
+        rows = []
+        for aid in asset_ids:
+            row = db.query(Asset).filter(Asset.id == aid).first()
+            if row is None:
+                raise ValueError(f"asset '{aid}' not found")
+            rows.append(row)
+
+        configs = load_llm_configs(db)
+        llm = select_llm_for_task(body.llm_provider_id, configs, body.llm_model_id)
+    except NoLLMConfigured as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    summaries = [
+        {
+            "asset_id": r.id,
+            "name": r.name or r.title or "",
+            "kind": r.kind or "",
+            "prompt": (r.prompt or "")[:200],
+        }
+        for r in rows
+    ]
+    user = "[ASSETS]\n" + json.dumps(summaries, ensure_ascii=False)
+    if body.story_hint.strip():
+        user += f"\n\n[STORY HINT]\n{body.story_hint.strip()}"
+
+    parsed: list[dict] = []
+    try:
+        resp = await llm.generate_structured(
+            [
+                {"role": "system", "content": ARRANGE_SYSTEM},
+                {"role": "user", "content": user},
+            ],
+            json_schema={"type": "object"},
+            temperature=0.7,
+            max_tokens=4096,
+        )
+        parsed = _parse_arrange_items(resp.content or "")
+    except Exception:  # noqa: BLE001 — 编排是建议性质，LLM 挂了降级为原顺序
+        logger.warning("[arrange] LLM call failed, fallback to input order", exc_info=True)
+
+    return {"items": _merge_arrange_items(parsed, asset_ids)}

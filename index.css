@@ -1,1 +1,6 @@
 /* Global styles - handled by index.html and component CSS */
+
+/* 工作室（StudioPanel）深色工作台字体栈：Inter 优先 */
+.studio-font {
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Segoe UI", sans-serif;
+}

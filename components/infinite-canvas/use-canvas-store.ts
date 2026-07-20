@@ -2007,7 +2007,15 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
             _assetProviderName: itemProviderName,
             _assetModelId: itemModelId,
             _assetKind: bucket.kind,
-            ...(existingImg ? { running: existingImg.running } : {}),
+            // 保留已有节点的尺寸与媒体自适应结果：否则每次 agent 轮询重建节点都会把
+            // useMediaAutoFit 调好的高度重置为 IMG_H，Composer 浮窗位置随之跳动。
+            ...(existingImg ? {
+              running: existingImg.running,
+              w: existingImg.w,
+              h: existingImg.h,
+              _imgAspect: existingImg._imgAspect,
+              _imgChrome: existingImg._imgChrome,
+            } : {}),
           } as CanvasNode);
           const tagKey = assetTagMap[bucket.kind] || '';
           const tagLabel = tagKey ? t(tagKey) : bucket.kind;

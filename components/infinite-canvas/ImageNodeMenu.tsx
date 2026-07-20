@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef } from 'react';
 import { Search, Pencil, Download, Copy, RefreshCw, Trash2, FileText, Cpu, Sparkles } from 'lucide-react';
 import { useI18n } from '../../i18n';
+import { useMenuEdgeAdjust } from './use-menu-edge-adjust';
 
 interface ImageNodeMenuProps {
   open: boolean;
@@ -44,6 +45,8 @@ export const ImageNodeMenu: React.FC<ImageNodeMenuProps> = React.memo(
   }) => {
     const { t } = useI18n();
     const menuRef = useRef<HTMLDivElement>(null);
+    // 边界保护：越界时收回 / 翻转到点击位置上方
+    const menuPos = useMenuEdgeAdjust(open, x, y, menuRef);
 
     const handleClickOutside = useCallback(
       (e: MouseEvent) => {
@@ -90,7 +93,7 @@ export const ImageNodeMenu: React.FC<ImageNodeMenuProps> = React.memo(
       <div
         ref={menuRef}
         className="create-menu open"
-        style={{ left: x, top: y, minWidth: 220 }}
+        style={{ left: menuPos.left, top: menuPos.top, minWidth: 220 }}
       >
         {/* 资产元数据展示 */}
         {hasMeta && (

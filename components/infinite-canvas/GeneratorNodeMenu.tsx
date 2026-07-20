@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { Zap, RefreshCw, Copy, Trash2, MessageSquare, Image as ImageIcon, Target, Sparkles } from 'lucide-react';
 import { useI18n } from '../../i18n';
+import { useMenuEdgeAdjust } from './use-menu-edge-adjust';
 
 interface GeneratorNodeMenuProps {
   open: boolean;
@@ -31,6 +32,8 @@ export const GeneratorNodeMenu: React.FC<GeneratorNodeMenuProps> = ({
 }) => {
   const { t } = useI18n();
   const menuRef = useRef<HTMLDivElement>(null);
+  // 边界保护：越界时收回 / 翻转到点击位置上方
+  const menuPos = useMenuEdgeAdjust(open, x, y, menuRef);
 
   const INPUT_TYPES: { type: string; label: string; icon: React.ReactNode }[] = [
     { type: 'prompt', label: t('canvasGenMenuInputPrompt'), icon: <MessageSquare size={14} /> },
@@ -59,7 +62,7 @@ export const GeneratorNodeMenu: React.FC<GeneratorNodeMenuProps> = ({
     <div
       ref={menuRef}
       className="create-menu open node-port-menu"
-      style={{ left: x, top: y }}
+      style={{ left: menuPos.left, top: menuPos.top }}
     >
       <div className="menu-section-title">{t('canvasGenMenuActions')}</div>
       <button
