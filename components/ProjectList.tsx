@@ -78,14 +78,14 @@ export const ProjectList = ({
         <div className="flex items-center gap-3 animate-fade-in-up opacity-0" style={{ animationDelay: '0.35s' }}>
           <button
             onClick={() => importFileInputRef?.click()}
-            className="px-4 py-2.5 bg-[#1A1A1F] hover:bg-white/[0.08] border border-white/[0.07] text-white/60 hover:text-[#F5F5F7] rounded-full font-medium flex items-center gap-2 transition-all text-sm"
+            className="px-4 py-2.5 bg-white/[0.045] hover:bg-white/[0.09] border border-white/[0.06] backdrop-blur-xl text-white/60 hover:text-[#F5F5F7] rounded-full font-medium flex items-center gap-2 transition-all text-sm"
           >
             <UploadCloud className="w-4 h-4" />
             <span>{t('importProject') || 'Import'}</span>
           </button>
           <button
             onClick={onNewTask}
-            className="btn-press group inline-flex items-center gap-2 px-6 py-2.5 bg-[#6E6BF2] hover:bg-[#817FF5] text-white rounded-full font-semibold transition-all shadow-lg shadow-[#6E6BF2]/25 text-sm"
+            className="btn-press group inline-flex items-center gap-2 px-6 py-2.5 bg-[#6E6BF2] hover:bg-[#817FF5] text-white rounded-full font-semibold transition-all shadow-[0_0_0_rgba(110,107,242,0)] hover:shadow-[0_0_32px_rgba(110,107,242,0.45)] text-sm"
           >
             <Plus className="w-4 h-4 group-hover:rotate-90 transition-transform duration-300" />
             <span>{t('newProject')}</span>
@@ -109,21 +109,21 @@ export const ProjectList = ({
           <input type="file" accept=".json" ref={(ref) => setImportFileInputRef(ref)} onChange={onImportProject} className="hidden" />
           <button
             onClick={() => importFileInputRef?.click()}
-            className="px-3.5 py-2 bg-[#1A1A1F] hover:bg-white/[0.08] border border-white/[0.07] text-white/60 hover:text-[#F5F5F7] rounded-full font-medium flex items-center gap-1.5 transition-all text-xs"
+            className="px-3.5 py-2 bg-white/[0.045] hover:bg-white/[0.09] border border-white/[0.06] backdrop-blur-xl text-white/60 hover:text-[#F5F5F7] rounded-full font-medium flex items-center gap-1.5 transition-all text-xs"
           >
             <UploadCloud className="w-3.5 h-3.5" />
             <span>{t('importProject') || 'Import'}</span>
           </button>
           <button
             onClick={onExportAll}
-            className="px-3.5 py-2 bg-[#1A1A1F] hover:bg-white/[0.08] border border-white/[0.07] text-white/60 hover:text-[#F5F5F7] rounded-full font-medium flex items-center gap-1.5 transition-all text-xs"
+            className="px-3.5 py-2 bg-white/[0.045] hover:bg-white/[0.09] border border-white/[0.06] backdrop-blur-xl text-white/60 hover:text-[#F5F5F7] rounded-full font-medium flex items-center gap-1.5 transition-all text-xs"
           >
             <Download className="w-3.5 h-3.5" />
             <span>{t('exportAll') || 'Export All'}</span>
           </button>
           <button
             onClick={onNewTask}
-            className="btn-press group inline-flex items-center gap-1.5 px-4 py-2 bg-[#6E6BF2] hover:bg-[#817FF5] text-white rounded-full font-semibold transition-all shadow-lg shadow-[#6E6BF2]/25 text-xs"
+            className="btn-press group inline-flex items-center gap-1.5 px-4 py-2 bg-[#6E6BF2] hover:bg-[#817FF5] text-white rounded-full font-semibold transition-all shadow-[0_0_0_rgba(110,107,242,0)] hover:shadow-[0_0_32px_rgba(110,107,242,0.45)] text-xs"
           >
             <Plus className="w-3.5 h-3.5 group-hover:rotate-90 transition-transform duration-300" />
             <span>{t('newProject')}</span>
@@ -155,7 +155,7 @@ export const ProjectList = ({
 
       {/* ─── 项目卡网格 ─── */}
       {visibleTasks.length > 0 ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {visibleTasks.map((task, idx) => (
             <div key={task.id} className="animate-fade-in-up opacity-0" style={{ animationDelay: `${0.05 + idx * 0.06}s` }}>
               <TaskCard task={task} onClick={() => onSelectTask(task.id)} onDelete={() => onDeleteTask(task.id)} onExport={() => onExportTask(task.id)} onOpenStudio={() => onOpenStudio(task.id)} t={t} />

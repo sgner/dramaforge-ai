@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback } from 'react';
 import { DramaTask, TaskStatus } from '../types';
 import { Play, Loader2, Film, Trash2, Download, CheckCircle2, AlertCircle, Clock, Clapperboard } from 'lucide-react';
+import { TiltCard } from './ambient/TiltCard';
 
 interface Props {
   task: DramaTask;
@@ -49,13 +50,13 @@ export const TaskCard: React.FC<Props> = ({ task, onClick, onDelete, onExport, o
   }, [onClick]);
 
   return (
+    <TiltCard className="group relative" onClick={handleClick}>
     <div
       ref={cardRef}
-      className="group relative rounded-xl overflow-hidden cursor-pointer transition-all duration-300 hover-lift hover:border-white/[0.14]"
-      style={{ background: '#131316', border: '1px solid rgba(255,255,255,0.07)' }}
+      className="relative rounded-[22px] overflow-hidden cursor-pointer transition-all duration-300 border border-white/[0.06] hover:border-white/[0.12] hover:shadow-[0_24px_64px_-20px_rgba(110,107,242,0.35)]"
+      style={{ background: 'rgba(255,255,255,0.04)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)' }}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
-      onClick={handleClick}
     >
       {/* Cover 16:9 */}
       <div className="aspect-video relative bg-[#0A0A0B] overflow-hidden">
@@ -75,7 +76,7 @@ export const TaskCard: React.FC<Props> = ({ task, onClick, onDelete, onExport, o
           />
         )}
 
-        <div className="absolute inset-0 bg-gradient-to-t from-[#131316] via-transparent to-transparent pointer-events-none" />
+        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent pointer-events-none" />
 
         {/* Status badge：暗色语义色点 + 文字 */}
         <div className="absolute top-3 right-3 glass px-2.5 py-1 rounded-full text-[10px] font-mono uppercase tracking-wider z-10 text-white/60 flex items-center gap-1.5">
@@ -153,5 +154,6 @@ export const TaskCard: React.FC<Props> = ({ task, onClick, onDelete, onExport, o
         </div>
       </div>
     </div>
+    </TiltCard>
   );
 };

@@ -1,8 +1,11 @@
 import React, { Suspense, lazy, useState, useEffect, useCallback, useRef } from 'react';
+import { motion } from 'framer-motion';
 import { Film, Globe, Settings, RefreshCw, AlertTriangle, CheckCircle, AlertCircle, Info, Home, Layers, FolderOpen, Clapperboard, Search, HelpCircle, Bot, ChevronsUpDown } from 'lucide-react';
 import { NewTaskModal } from './components/NewTaskModal';
 import { EditCharacterModal } from './components/EditCharacterModal';
 import { ImageLightbox } from './components/ImageLightbox';
+import { AuroraBackground } from './components/ambient/AuroraBackground';
+import { MouseLight } from './components/ambient/MouseLight';
 
 import { ConfirmModal } from './components/ConfirmModal';
 import { BigShotDetailModal } from './components/BigShotDetailModal';
@@ -710,8 +713,12 @@ function AppContent() {
   };
 
   return (
-    <div className="min-h-screen bg-[#0A0A0B] text-[#F5F5F7] font-sans selection:bg-[#6E6BF2]/30 overflow-x-hidden">
+    <div className="min-h-screen bg-[#040406] text-[#F5F5F7] font-sans selection:bg-[#6E6BF2]/30 overflow-x-hidden">
       <input type="file" accept="image/*" ref={charFileInputRef} onChange={handleRefFileChange} className="hidden" />
+
+      {/* 电影感氛围层：WebGL 极光背景 + 光标柔光（仅项目列表页；画布/工作室为全屏自有工作面） */}
+      {!activeTask && <AuroraBackground />}
+      {!activeTask && <MouseLight />}
 
       <>
       {/* Agent 后台运行提示横幅 — 退出 agent 模式后仍能看到任务在跑 */}
@@ -759,9 +766,9 @@ function AppContent() {
         </div>
       )}
 
-      {/* ── Runway 风格左侧固定侧边栏（brief §2）：仅项目列表页显示，画布/工作室保留自有全屏 chrome ── */}
+      {/* ── 悬浮玻璃侧边栏：脱离屏幕边缘，半透明叠在 WebGL 背景上 ── */}
       {!activeTask && (
-      <aside data-testid="app-sidebar" className="fixed inset-y-0 left-0 w-60 z-40 flex flex-col bg-[#0A0A0B] border-r border-white/[0.07]">
+      <aside data-testid="app-sidebar" className="fixed left-4 top-4 bottom-4 w-60 z-40 flex flex-col rounded-[20px] border border-white/[0.06] bg-white/[0.035] backdrop-blur-2xl shadow-[0_24px_64px_-32px_rgba(0,0,0,0.7)]">
         {/* 工作区卡 */}
         <div className="px-3 pt-4 pb-2">
           <div className="flex items-center gap-2.5 px-2 py-2 rounded-xl hover:bg-white/[0.04] transition-colors cursor-pointer" onClick={() => setActiveTaskId(null)}>
@@ -837,8 +844,8 @@ function AppContent() {
         </nav>
 
         {/* 底部：用量占位卡 + 设置 + 语言 */}
-        <div className="border-t border-white/[0.07] p-3 space-y-0.5">
-          <div className="mb-2 px-3 py-2.5 rounded-xl bg-[#131316] border border-white/[0.07]">
+        <div className="border-t border-white/[0.06] p-3 space-y-0.5">
+          <div className="mb-2 px-3 py-2.5 rounded-xl bg-white/[0.04] border border-white/[0.06]">
             <div className="flex items-center justify-between text-[11px]">
               <span className="text-white/45 font-medium">{t('sidebarPlan')}</span>
               <span className="font-mono text-white/50">{tasks.length} {tasks.length > 1 ? t('projectsCount') : t('projectCount')}</span>
@@ -874,17 +881,17 @@ function AppContent() {
       </aside>
       )}
 
-      {/* ── 内容区：首页左移 240px 让位侧边栏；画布/工作室全屏 ── */}
-      <div className={!activeTask ? 'pl-60' : ''}>
+      {/* ── 内容区：首页左移 272px 让位悬浮侧边栏（16 边距 + 240 宽 + 16 间隙）；画布/工作室全屏 ── */}
+      <div className={!activeTask ? 'pl-[272px]' : ''}>
       {!activeTask && (
-      <header className="sticky top-0 z-30 h-14 flex items-center gap-3 px-6 bg-[#0A0A0B]/85 backdrop-blur-md border-b border-white/[0.07]">
+      <header className="sticky top-0 z-30 h-14 flex items-center gap-3 px-7">
         <div className="relative flex-1 max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30 pointer-events-none" />
           <input
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder={t('searchPlaceholder')}
-            className="w-full h-9 pl-9 pr-3 rounded-lg bg-[#1A1A1F] border border-white/[0.07] text-[13px] text-[#F5F5F7] placeholder:text-white/30 focus:outline-none focus:border-[#6E6BF2]/60 focus:ring-2 focus:ring-[#6E6BF2]/20 transition-all"
+            className="w-full h-9 pl-9 pr-3 rounded-xl bg-white/[0.045] backdrop-blur-xl border border-white/[0.06] text-[13px] text-[#F5F5F7] placeholder:text-white/30 focus:outline-none focus:border-[#6E6BF2]/50 focus:ring-2 focus:ring-[#6E6BF2]/15 transition-all"
           />
         </div>
         <div className="flex-1" />
@@ -904,7 +911,12 @@ function AppContent() {
 
       <main className={`relative z-10 ${!activeTask ? '' : 'fixed inset-0 z-10'}`}>
         {!activeTask ? (
-          <div key="project-list" className="page-transition-enter">
+          <motion.div
+            key="project-list"
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+          >
           {/* 工作室入口：项目卡"去工作室成片"按钮（首页不放横幅）；画布页入口在 CanvasToolbar */}
           <ProjectList
             tasks={tasks}
@@ -924,7 +936,7 @@ function AppContent() {
             t={t}
             lang={lang}
           />
-          </div>
+          </motion.div>
         ) : (
           <div ref={canvasContainerRef} className="app-canvas-shell" style={{ position: 'relative', width: '100%', height: '100%' }}>
           <Suspense fallback={null}>

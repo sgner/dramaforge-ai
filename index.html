@@ -102,8 +102,8 @@
     </script>
     <style>
       :root {
-        /* Runway 暗色设计令牌（brief §1） */
-        --bg: #0A0A0B;
+        /* Runway 暗色设计令牌（brief §1）；页面底随 WebGL 背景基调下沉到 #040406 */
+        --bg: #040406;
         --bg-soft: #131316;
         --surface: #131316;
         --surface-2: #1A1A1F;
@@ -128,11 +128,11 @@
 
       /* 首屏兜底必须暗色：Tailwind CDN 异步加载前的 fallback 渲染不能白闪 */
       html {
-        background-color: #0A0A0B;
+        background-color: #040406;
       }
 
       body {
-        background-color: #0A0A0B;
+        background-color: #040406;
         color: #F5F5F7;
         font-family: 'Inter', system-ui, sans-serif;
         -webkit-font-smoothing: antialiased;
