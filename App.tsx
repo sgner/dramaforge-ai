@@ -5,7 +5,6 @@ import { NewTaskModal } from './components/NewTaskModal';
 import { EditCharacterModal } from './components/EditCharacterModal';
 import { ImageLightbox } from './components/ImageLightbox';
 import { AuroraBackground } from './components/ambient/AuroraBackground';
-import { MouseLight } from './components/ambient/MouseLight';
 
 import { ConfirmModal } from './components/ConfirmModal';
 import { BigShotDetailModal } from './components/BigShotDetailModal';
@@ -716,9 +715,8 @@ function AppContent() {
     <div className="min-h-screen bg-[#040406] text-[#F5F5F7] font-sans selection:bg-[#6E6BF2]/30 overflow-x-hidden">
       <input type="file" accept="image/*" ref={charFileInputRef} onChange={handleRefFileChange} className="hidden" />
 
-      {/* 电影感氛围层：WebGL 极光背景 + 光标柔光（仅项目列表页；画布/工作室为全屏自有工作面） */}
+      {/* 电影感氛围层：WebGL 极光背景（仅项目列表页；画布/工作室为全屏自有工作面） */}
       {!activeTask && <AuroraBackground />}
-      {!activeTask && <MouseLight />}
 
       <>
       {/* Agent 后台运行提示横幅 — 退出 agent 模式后仍能看到任务在跑 */}
