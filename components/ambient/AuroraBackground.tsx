@@ -53,29 +53,29 @@ void main() {
   float w2 = fbm(q + 1.7 * w1 + vec2(t * 0.011, -t * 0.009));
   float f = fbm(q + 2.1 * vec2(w1, w2));
 
-  /* 色板：深底 + 靛蓝/紫罗兰/青/玫瑰，全部压暗 */
-  vec3 base   = vec3(0.016, 0.016, 0.023);
-  vec3 indigo = vec3(0.13, 0.11, 0.40);
-  vec3 violet = vec3(0.20, 0.09, 0.36);
-  vec3 teal   = vec3(0.05, 0.20, 0.28);
-  vec3 rose   = vec3(0.22, 0.07, 0.18);
+  /* 色板：Suno 式暖色电影感——近黑暖底 + 琥珀/橙红/品红/紫罗兰 */
+  vec3 base   = vec3(0.020, 0.012, 0.010);
+  vec3 amber  = vec3(0.52, 0.24, 0.05);
+  vec3 ember  = vec3(0.55, 0.13, 0.08);
+  vec3 magenta= vec3(0.44, 0.08, 0.25);
+  vec3 violet = vec3(0.20, 0.09, 0.34);
 
   vec3 col = base;
-  col = mix(col, indigo, smoothstep(0.32, 0.85, f) * 0.55);
-  col = mix(col, violet, smoothstep(0.55, 0.95, w2) * 0.42);
-  col = mix(col, teal,   smoothstep(0.62, 1.0, w1) * 0.32);
-  col = mix(col, rose,   smoothstep(0.72, 1.05, f * w2 * 1.6) * 0.25);
+  col = mix(col, amber,   smoothstep(0.30, 0.85, f) * 0.60);
+  col = mix(col, ember,   smoothstep(0.50, 0.95, w2) * 0.50);
+  col = mix(col, magenta, smoothstep(0.58, 1.00, w1) * 0.45);
+  col = mix(col, violet,  smoothstep(0.70, 1.05, f * w2 * 1.7) * 0.40);
 
-  /* 极光光带：噪声扭曲的横向柔带，缓慢漂移 + 呼吸 */
-  float band = exp(-pow((uv.y - 0.64 - 0.08 * sin(t * 0.05) - w1 * 0.14) * 4.2, 2.0));
-  col += vec3(0.10, 0.10, 0.27) * band * (0.30 + 0.22 * breathe2);
+  /* 极光光带：暖橙→品红的柔带，缓慢漂移 + 呼吸 */
+  float band = exp(-pow((uv.y - 0.66 - 0.08 * sin(t * 0.05) - w1 * 0.14) * 4.2, 2.0));
+  col += vec3(0.38, 0.14, 0.10) * band * (0.35 + 0.25 * breathe2);
 
-  /* 浮动光源 ×2：缓慢游走的柔光斑（反射感） */
+  /* 浮动光源 ×2：琥珀 + 品红，缓慢游走的柔光斑（反射感） */
   vec2 asp = vec2(aspect, 1.0);
   vec2 l1 = asp * vec2(0.50 + 0.34 * sin(t * 0.070 + 1.0), 0.56 + 0.24 * cos(t * 0.055));
   vec2 l2 = asp * vec2(0.50 + 0.40 * cos(t * 0.045 + 3.0), 0.40 + 0.28 * sin(t * 0.062 + 2.0));
-  col += vec3(0.20, 0.19, 0.46) * 0.10 * exp(-13.0 * dot(p - l1, p - l1));
-  col += vec3(0.09, 0.22, 0.34) * 0.08 * exp(-15.0 * dot(p - l2, p - l2));
+  col += vec3(0.55, 0.26, 0.08) * 0.11 * exp(-13.0 * dot(p - l1, p - l1));
+  col += vec3(0.45, 0.10, 0.28) * 0.09 * exp(-15.0 * dot(p - l2, p - l2));
 
   /* 全局呼吸亮度 */
   col *= 0.92 + 0.08 * breathe;
@@ -181,7 +181,7 @@ export function AuroraBackground() {
       ref={canvasRef}
       aria-hidden
       className="pointer-events-none fixed inset-0 z-0 h-full w-full"
-      style={{ background: '#040406' }}
+      style={{ background: '#050303' }}
     />
   );
 }

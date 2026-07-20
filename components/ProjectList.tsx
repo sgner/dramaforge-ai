@@ -65,9 +65,9 @@ export const ProjectList = ({
         <input type="file" accept=".json" ref={(ref) => setImportFileInputRef(ref)} onChange={onImportProject} className="hidden" />
         <div
           className="w-16 h-16 rounded-2xl flex items-center justify-center mb-6 animate-fade-in-up opacity-0"
-          style={{ animationDelay: '0.05s', background: 'rgba(110,107,242,0.14)', border: '1px solid rgba(110,107,242,0.35)' }}
+          style={{ animationDelay: '0.05s', background: 'rgba(255,92,57,0.12)', border: '1px solid rgba(255,138,107,0.35)' }}
         >
-          <Film className="w-7 h-7 text-[#817FF5]" />
+          <Film className="w-7 h-7 text-[#FF8A6B]" />
         </div>
         <h1 className="text-2xl font-semibold text-[#F5F5F7] tracking-tight mb-2 animate-fade-in-up opacity-0" style={{ animationDelay: '0.15s' }}>
           {t('noProjects')}
@@ -85,7 +85,7 @@ export const ProjectList = ({
           </button>
           <button
             onClick={onNewTask}
-            className="btn-press group inline-flex items-center gap-2 px-6 py-2.5 bg-[#6E6BF2] hover:bg-[#817FF5] text-white rounded-full font-semibold transition-all shadow-[0_0_0_rgba(110,107,242,0)] hover:shadow-[0_0_32px_rgba(110,107,242,0.45)] text-sm"
+            className="btn-press cta-primary group inline-flex items-center gap-2 px-6 py-2.5 rounded-full font-semibold text-sm"
           >
             <Plus className="w-4 h-4 group-hover:rotate-90 transition-transform duration-300" />
             <span>{t('newProject')}</span>
@@ -100,8 +100,8 @@ export const ProjectList = ({
       {/* ─── 页头：大标题 + tab 下划线 + 右侧动作（brief §3） ─── */}
       <div className="flex items-end justify-between gap-4 mb-2">
         <div>
-          <h1 className="text-[28px] font-semibold text-[#F5F5F7] tracking-tight leading-tight">{t('workshopTitle')}</h1>
-          <p className="text-xs text-white/40 mt-1.5" data-testid="projects-workshop-hint">
+          <h1 className="text-[32px] font-semibold text-white tracking-[-0.025em] leading-tight">{t('workshopTitle')}</h1>
+          <p className="text-[13px] text-white/45 mt-1.5" data-testid="projects-workshop-hint">
             {t('projectsWorkshopHint')}
           </p>
         </div>
@@ -123,7 +123,7 @@ export const ProjectList = ({
           </button>
           <button
             onClick={onNewTask}
-            className="btn-press group inline-flex items-center gap-1.5 px-4 py-2 bg-[#6E6BF2] hover:bg-[#817FF5] text-white rounded-full font-semibold transition-all shadow-[0_0_0_rgba(110,107,242,0)] hover:shadow-[0_0_32px_rgba(110,107,242,0.45)] text-xs"
+            className="btn-press cta-primary group inline-flex items-center gap-1.5 px-4 py-2 rounded-full font-semibold text-xs"
           >
             <Plus className="w-3.5 h-3.5 group-hover:rotate-90 transition-transform duration-300" />
             <span>{t('newProject')}</span>
@@ -143,7 +143,7 @@ export const ProjectList = ({
           >
             {tab.label}
             {activeTab === tab.id && (
-              <span className="absolute left-0 right-0 -bottom-px h-[2px] rounded-full bg-[#6E6BF2]" />
+              <span className="absolute left-0 right-0 -bottom-px h-[2px] rounded-full warm-gradient-bar" />
             )}
           </button>
         ))}

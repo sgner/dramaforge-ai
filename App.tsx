@@ -712,7 +712,7 @@ function AppContent() {
   };
 
   return (
-    <div className="min-h-screen bg-[#040406] text-[#F5F5F7] font-sans selection:bg-[#6E6BF2]/30 overflow-x-hidden">
+    <div className="min-h-screen bg-[#040406] text-[#F5F5F7] font-sans selection:bg-[#FF6B4A]/30 overflow-x-hidden">
       <input type="file" accept="image/*" ref={charFileInputRef} onChange={handleRefFileChange} className="hidden" />
 
       {/* 电影感氛围层：WebGL 极光背景（仅项目列表页；画布/工作室为全屏自有工作面） */}
@@ -770,7 +770,7 @@ function AppContent() {
         {/* 工作区卡 */}
         <div className="px-3 pt-4 pb-2">
           <div className="flex items-center gap-2.5 px-2 py-2 rounded-xl hover:bg-white/[0.04] transition-colors cursor-pointer" onClick={() => setActiveTaskId(null)}>
-            <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 shadow-lg shadow-[#6E6BF2]/25" style={{ background: 'linear-gradient(135deg, #6E6BF2, #4B48C8)' }}>
+            <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 shadow-lg shadow-[#FF5C39]/25" style={{ background: 'linear-gradient(135deg, #FF8A3D, #F43F5E)' }}>
               <Film className="w-4 h-4 text-white" />
             </div>
             <div className="min-w-0 flex-1">
@@ -787,9 +787,9 @@ function AppContent() {
             <div className="px-2.5 mb-1.5 text-[11px] font-medium uppercase tracking-wider text-white/30">{t('navSectionOverview')}</div>
             <button
               onClick={() => setActiveTaskId(null)}
-              className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-[13px] font-medium bg-[#6E6BF2]/[0.14] text-[#F5F5F7] transition-colors"
+              className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-[13px] font-medium bg-[#FF6B4A]/[0.12] text-[#F5F5F7] transition-colors"
             >
-              <Home className="w-4 h-4 text-[#817FF5]" />
+              <Home className="w-4 h-4 text-[#FF8A6B]" />
               {t('navHome')}
             </button>
           </div>
@@ -849,7 +849,7 @@ function AppContent() {
               <span className="font-mono text-white/50">{tasks.length} {tasks.length > 1 ? t('projectsCount') : t('projectCount')}</span>
             </div>
             <div className="mt-2 h-1 rounded-full bg-white/[0.08] overflow-hidden">
-              <div className="h-full rounded-full bg-[#6E6BF2] transition-all duration-500" style={{ width: `${Math.min(100, Math.max(6, tasks.length * 20))}%` }} />
+              <div className="h-full rounded-full warm-gradient-bar transition-all duration-500" style={{ width: `${Math.min(100, Math.max(6, tasks.length * 20))}%` }} />
             </div>
           </div>
           <button
@@ -868,7 +868,7 @@ function AppContent() {
             <div className="absolute left-0 bottom-full pb-1.5 w-full hidden group-hover:block z-50">
               <div className="rounded-xl overflow-hidden bg-[#1A1A1F] border border-white/[0.07] shadow-2xl shadow-black/50">
                 {['zh', 'en', 'ja', 'ko'].map(l => (
-                  <button key={l} onClick={() => changeLanguage(l as Language)} className={`w-full text-left px-3.5 py-2 text-xs transition-colors hover:bg-white/[0.06] ${lang === l ? 'text-[#817FF5] font-semibold' : 'text-white/55'}`}>
+                  <button key={l} onClick={() => changeLanguage(l as Language)} className={`w-full text-left px-3.5 py-2 text-xs transition-colors hover:bg-white/[0.06] ${lang === l ? 'text-[#FF8A6B] font-semibold' : 'text-white/55'}`}>
                     {l === 'zh' ? '中文' : l === 'en' ? 'English' : l === 'ja' ? '日本語' : '한국어'}
                   </button>
                 ))}
@@ -889,7 +889,7 @@ function AppContent() {
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder={t('searchPlaceholder')}
-            className="w-full h-9 pl-9 pr-3 rounded-xl bg-white/[0.045] backdrop-blur-xl border border-white/[0.06] text-[13px] text-[#F5F5F7] placeholder:text-white/30 focus:outline-none focus:border-[#6E6BF2]/50 focus:ring-2 focus:ring-[#6E6BF2]/15 transition-all"
+            className="w-full h-9 pl-9 pr-3 rounded-xl bg-white/[0.045] backdrop-blur-xl border border-white/[0.06] text-[13px] text-[#F5F5F7] placeholder:text-white/30 focus:outline-none focus:border-[#FF6B4A]/50 focus:ring-2 focus:ring-[#FF6B4A]/15 transition-all"
           />
         </div>
         <div className="flex-1" />
@@ -901,7 +901,7 @@ function AppContent() {
         </button>
         <div
           className="w-7 h-7 rounded-full flex-shrink-0 border border-white/10"
-          style={{ background: 'linear-gradient(135deg, #6E6BF2, #E8738C)' }}
+          style={{ background: 'linear-gradient(135deg, #FF8A3D, #F43F5E)' }}
           title={t('appTitle')}
         />
       </header>
@@ -1044,7 +1044,7 @@ function AppContent() {
               value={newProjectName}
               onChange={(e) => setNewProjectName(e.target.value)}
               placeholder={t('projectNamePlaceholder')}
-              className="w-full bg-white/[0.06] border border-transparent rounded-xl px-4 py-3 text-sm text-[#F5F5F7] focus:outline-none focus:border-[#6E6BF2]/50 focus:ring-2 focus:ring-[#6E6BF2]/25 transition-all placeholder:text-white/30"
+              className="w-full bg-white/[0.06] border border-transparent rounded-xl px-4 py-3 text-sm text-[#F5F5F7] focus:outline-none focus:border-[#FF6B4A]/50 focus:ring-2 focus:ring-[#FF6B4A]/25 transition-all placeholder:text-white/30"
               autoFocus
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && newProjectName.trim()) {
@@ -1103,7 +1103,7 @@ function AppContent() {
                 disabled={!newProjectName.trim()}
                 className={`btn-press px-5 py-2 rounded-full text-sm font-semibold flex items-center gap-2 transition-all ${
                   newProjectName.trim()
-                    ? 'bg-[#6E6BF2] hover:bg-[#817FF5] text-white shadow-lg shadow-[#6E6BF2]/25'
+                    ? 'cta-primary'
                     : 'bg-white/[0.06] text-white/25 cursor-not-allowed'
                 }`}
               >
@@ -1196,13 +1196,13 @@ function AppContent() {
             <div
               key={toast.id}
               className={`glass rounded-xl px-4 py-3 flex items-center gap-3 min-w-[280px] max-w-[400px] shadow-2xl shadow-black/40 ${toast.exiting ? 'toast-exit' : 'toast-enter'} ${
-                toast.type === 'success' ? 'border border-[#3ECF8E]/25' : toast.type === 'error' ? 'border border-[#F26161]/25' : toast.type === 'warning' ? 'border border-[#F5B544]/25' : 'border border-[#6E6BF2]/30'
+                toast.type === 'success' ? 'border border-[#3ECF8E]/25' : toast.type === 'error' ? 'border border-[#F26161]/25' : toast.type === 'warning' ? 'border border-[#F5B544]/25' : 'border border-[#FF6B4A]/30'
               }`}
             >
               {toast.type === 'success' && <CheckCircle className="w-5 h-5 text-[#3ECF8E] flex-shrink-0" />}
               {toast.type === 'error' && <AlertCircle className="w-5 h-5 text-[#F26161] flex-shrink-0" />}
               {toast.type === 'warning' && <AlertTriangle className="w-5 h-5 text-[#F5B544] flex-shrink-0" />}
-              {toast.type === 'info' && <Info className="w-5 h-5 text-[#817FF5] flex-shrink-0" />}
+              {toast.type === 'info' && <Info className="w-5 h-5 text-[#FF8A6B] flex-shrink-0" />}
               <span className="text-sm text-[#F5F5F7]">{toast.message}</span>
             </div>
           ))}
@@ -1235,7 +1235,7 @@ function AppContent() {
             const distance = 60 + Math.random() * 80;
             const dx = Math.cos(angle) * distance;
             const dy = Math.sin(angle) * distance;
-            const colors = ['#6E6BF2', '#817FF5', '#3ECF8E', '#A5A3F8', '#F5B544'];
+            const colors = ['#FF8A3D', '#FF5C39', '#F43F5E', '#FFB494', '#F5B544'];
             return (
               <div
                 key={`${celebration.id}-${i}`}

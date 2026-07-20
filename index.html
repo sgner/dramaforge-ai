@@ -166,6 +166,24 @@
         border-color: rgba(255, 255, 255, 0.14);
       }
 
+      /* ── Suno 暖色 CTA：琥珀→橙红→品红渐变，内高光 + 柔光 ── */
+      .cta-primary {
+        background: linear-gradient(135deg, #FF8A3D 0%, #FF5C39 48%, #F43F5E 100%);
+        color: #fff;
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.24), 0 2px 14px rgba(255, 92, 57, 0.28);
+        transition: filter 0.2s ease, box-shadow 0.3s ease, transform 0.15s ease;
+      }
+      .cta-primary:hover {
+        filter: brightness(1.1);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28), 0 4px 34px rgba(255, 92, 57, 0.48);
+      }
+
+      /* ── 暖色渐变进度/装饰条 ── */
+      .warm-gradient-bar {
+        background: linear-gradient(90deg, #FF8A3D, #FF5C39 55%, #F43F5E);
+      }
+
       /* ── Gradient text ── */
       .gradient-text {
         background: linear-gradient(135deg, #F5F5F7, #A5A3F8, #F5F5F7);

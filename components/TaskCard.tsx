@@ -53,8 +53,8 @@ export const TaskCard: React.FC<Props> = ({ task, onClick, onDelete, onExport, o
     <TiltCard className="group relative" onClick={handleClick}>
     <div
       ref={cardRef}
-      className="relative rounded-[22px] overflow-hidden cursor-pointer transition-all duration-300 border border-white/[0.06] hover:border-white/[0.12] hover:shadow-[0_24px_64px_-20px_rgba(110,107,242,0.35)]"
-      style={{ background: 'rgba(255,255,255,0.04)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)' }}
+      className="relative rounded-[22px] overflow-hidden cursor-pointer transition-all duration-300 border border-white/[0.06] hover:border-white/[0.12] hover:shadow-[0_24px_64px_-20px_rgba(255,92,57,0.30)]"
+      style={{ background: 'rgba(255,255,255,0.04)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.05)' }}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
     >
@@ -89,7 +89,7 @@ export const TaskCard: React.FC<Props> = ({ task, onClick, onDelete, onExport, o
         {onOpenStudio && (
           <button
             onClick={(e) => { e.stopPropagation(); onOpenStudio(); }}
-            className="absolute bottom-3 left-3 px-3 py-1.5 bg-[#6E6BF2] hover:bg-[#817FF5] text-white rounded-full z-20 opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 transition-all duration-300 shadow-lg shadow-[#6E6BF2]/30 btn-press flex items-center gap-1.5 text-xs font-semibold"
+            className="absolute bottom-3 left-3 px-3 py-1.5 cta-primary rounded-full z-20 opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 transition-all duration-300 btn-press flex items-center gap-1.5 text-xs font-semibold"
             title={t('goStudio')}
           >
             <Clapperboard className="w-3.5 h-3.5" />
@@ -116,41 +116,41 @@ export const TaskCard: React.FC<Props> = ({ task, onClick, onDelete, onExport, o
         {/* Play indicator for completed */}
         {isCompleted && !isHovering && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-            <div className="bg-[#6E6BF2]/25 backdrop-blur-sm p-3 rounded-full border border-[#817FF5]/40 group-hover:scale-110 transition-transform duration-300">
-              <Play className="w-6 h-6 text-[#A5A3F8] fill-[#A5A3F8]" />
+            <div className="bg-[#FF5C39]/25 backdrop-blur-sm p-3 rounded-full border border-[#FF8A6B]/40 group-hover:scale-110 transition-transform duration-300">
+              <Play className="w-6 h-6 text-[#FFB494] fill-[#FFB494]" />
             </div>
           </div>
         )}
 
         {/* Processing overlay */}
         {isProcessing && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#0A0A0B]/80 backdrop-blur-sm pointer-events-none">
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/75 backdrop-blur-sm pointer-events-none">
             <div className="relative mb-3">
-              <div className="absolute inset-0 bg-[#6E6BF2] blur-xl opacity-30 animate-pulse"></div>
-              <Loader2 className="w-8 h-8 text-[#817FF5] animate-spin relative z-10" />
+              <div className="absolute inset-0 bg-[#FF5C39] blur-xl opacity-30 animate-pulse"></div>
+              <Loader2 className="w-8 h-8 text-[#FF8A6B] animate-spin relative z-10" />
             </div>
-            <span className="text-xs font-medium text-[#A5A3F8] font-mono uppercase tracking-wider processing-dots">{t(task.status)}</span>
+            <span className="text-xs font-medium text-[#FFB494] font-mono uppercase tracking-wider processing-dots">{t(task.status)}</span>
           </div>
         )}
       </div>
 
       {/* Info */}
       <div className="p-4">
-        <h3 className="text-sm font-semibold text-[#F5F5F7] truncate group-hover:text-[#A5A3F8] transition-colors duration-300">{task.name}</h3>
+        <h3 className="text-[15px] font-semibold text-white tracking-[-0.01em] truncate group-hover:text-[#FFB494] transition-colors duration-300">{task.name}</h3>
         <p className="text-xs text-white/40 mt-1 flex items-center gap-2">
           <Film className="w-3 h-3 text-white/30" /> {t(task.style)}
         </p>
 
-        {/* 进度条：细 3px accent */}
+        {/* 进度条：细 3px 暖色渐变 */}
         <div className="mt-3 w-full bg-white/[0.08] rounded-full h-[3px] overflow-hidden">
           <div
-            className="h-full bg-[#6E6BF2] transition-all duration-700 rounded-full progress-bar-animated"
+            className="h-full warm-gradient-bar transition-all duration-700 rounded-full progress-bar-animated"
             style={{ width: `${task.progress}%` }}
           />
         </div>
         <div className="flex justify-between mt-1.5">
           <span className="text-[10px] text-white/30 font-mono">{new Date(task.createdAt).toLocaleDateString()}</span>
-          <span className="text-[10px] text-[#817FF5] font-mono font-semibold">{task.progress}%</span>
+          <span className="text-[10px] text-[#FF8A6B] font-mono font-semibold">{task.progress}%</span>
         </div>
       </div>
     </div>
