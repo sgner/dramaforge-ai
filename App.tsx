@@ -1159,12 +1159,15 @@ function AppContent() {
         message={confirmModal.message}
       />
 
-      <ApiSettingsModal
-        open={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
-        config={apiConfig}
-        onSave={handleSaveConfig}
-      />
+      {/* API 设置弹窗样式来自 canvas.css，首页无 .canvas-root 作用域，补 .theme-dark 提供暗色变量 */}
+      <div className="theme-dark">
+        <ApiSettingsModal
+          open={isSettingsOpen}
+          onClose={() => setIsSettingsOpen(false)}
+          config={apiConfig}
+          onSave={handleSaveConfig}
+        />
+      </div>
 
       {/* 工作室（Studio）：整集生成全屏视图。projectId 取当前项目；无上下文时面板内可选/手输。 */}
       {studioOpen && (

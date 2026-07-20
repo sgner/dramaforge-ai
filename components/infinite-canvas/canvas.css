@@ -25,7 +25,9 @@
   --danger: #dc2626;
 }
 
-.canvas-root.theme-dark {
+/* 暗色变量块：画布暗色主题 + 任何独立的 .theme-dark 作用域（如 App 层弹窗）共用 */
+.canvas-root.theme-dark,
+.theme-dark {
   --page: #0A0A0B;
   --grid: rgba(255,255,255,.06);
   --panel: rgba(19,19,22,.92);
@@ -3835,7 +3837,12 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity: 0 !imp
   box-shadow: 0 28px 64px rgba(15,23,42,.25);
   overflow: hidden;
 }
-.theme-dark .api-settings-panel { box-shadow: 0 28px 64px rgba(0,0,0,.58); }
+.theme-dark .api-settings-panel {
+  box-shadow: 0 28px 64px rgba(0,0,0,.58);
+  /* 抵消上方的浅色统一覆盖，恢复暗色 soft 层级 */
+  --soft: #1A1A1F;
+  --soft-2: #232329;
+}
 
 /* Page Head */
 .api-page-head {
@@ -4786,16 +4793,31 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity: 0 !imp
   box-shadow: 0 8px 18px var(--shadow);
 }
 .theme-dark .api-save-btn {
-  background: var(--text);
-  color: var(--bg);
-  border-color: var(--text);
-  box-shadow: 0 8px 18px var(--shadow);
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+  box-shadow: 0 8px 18px rgba(110,107,242,.24);
 }
 .theme-dark .api-save-btn:hover {
-  background: var(--text);
-  color: var(--bg);
-  border-color: var(--text);
-  box-shadow: 0 10px 22px var(--shadow);
+  background: #8381f6;
+  color: #fff;
+  border-color: #8381f6;
+  box-shadow: 0 10px 22px rgba(110,107,242,.32);
+}
+.theme-dark .api-save-btn.is-saved {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.theme-dark .api-action-btn.api-primary-btn,
+.theme-dark .api-action-btn.api-primary-btn:hover {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.theme-dark .api-action-btn.api-primary-btn:hover {
+  background: #8381f6;
+  border-color: #8381f6;
 }
 
 /* Step Grid */
