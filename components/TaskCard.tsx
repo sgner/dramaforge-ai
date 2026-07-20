@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useMemo } from 'react';
 import { DramaTask, TaskStatus } from '../types';
 import { Play, Loader2, Film, Trash2, Download, CheckCircle2, AlertCircle, Clock, Clapperboard } from 'lucide-react';
 import { TiltCard } from './ambient/TiltCard';
@@ -17,11 +17,25 @@ export const TaskCard: React.FC<Props> = ({ task, onClick, onDelete, onExport, o
   const [isHovering, setIsHovering] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
 
-  const coverImage = task.coverImage || 'https://picsum.photos/400/225?grayscale';
   const videoUrl = task.bigShots.find(bs => bs.videoUrl)?.videoUrl;
   const isCompleted = task.status === TaskStatus.COMPLETED;
   const isFailed = task.status === TaskStatus.FAILED;
   const isProcessing = task.status !== TaskStatus.COMPLETED && task.status !== TaskStatus.IDLE && task.status !== TaskStatus.FAILED;
+
+  /* 无封面项目：按 id 哈希取一张确定性暖色暗渐变 + 首字符，替代随机图床 */
+  const placeholder = useMemo(() => {
+    const PALETTES: [string, string][] = [
+      ['#3A1C08', '#160A04'], // 琥珀棕
+      ['#3B0F1E', '#170510'], // 品红暗紫
+      ['#2B1226', '#100613'], // 紫罗兰
+      ['#40100C', '#180606'], // 余烬红
+      ['#1F1B2E', '#0B0A12'], // 冷夜蓝(兜底中性)
+    ];
+    let h = 0;
+    for (let i = 0; i < task.id.length; i++) h = (h * 31 + task.id.charCodeAt(i)) >>> 0;
+    const [from, to] = PALETTES[h % PALETTES.length];
+    return { from, to, initial: (task.name || '?').trim().charAt(0).toUpperCase() };
+  }, [task.id, task.name]);
 
   const getStatusDot = () => {
     if (isCompleted) return 'status-dot-completed';
@@ -68,12 +82,23 @@ export const TaskCard: React.FC<Props> = ({ task, onClick, onDelete, onExport, o
             loop
             className="w-full h-full object-cover scale-105 transition-transform duration-500"
           />
-        ) : (
+        ) : task.coverImage ? (
           <img
-            src={coverImage}
+            src={task.coverImage}
             alt={task.name}
             className="w-full h-full object-cover opacity-80 group-hover:opacity-100 group-hover:scale-105 transition-all duration-500"
           />
+        ) : (
+          /* 无封面：暖色暗渐变 + 首字符标记，与背景氛围同色 */
+          <div
+            className="w-full h-full flex items-center justify-center transition-transform duration-500 group-hover:scale-105"
+            style={{ background: `linear-gradient(135deg, ${placeholder.from}, ${placeholder.to})` }}
+          >
+            <span className="text-[64px] font-bold leading-none text-white/[0.08] select-none tracking-tight">
+              {placeholder.initial}
+            </span>
+            <Film className="absolute bottom-3 left-4 w-4 h-4 text-white/[0.14]" />
+          </div>
         )}
 
         <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent pointer-events-none" />
