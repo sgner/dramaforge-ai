@@ -103,8 +103,8 @@ describe('<App /> — 工作室入口（项目卡 + 画布工具栏）', () => {
 
     expect(screen.queryByTestId('studio-banner')).toBeNull();
     expect(screen.queryByTestId('open-studio')).toBeNull();
-    // 项目区正名"素材车间"
-    expect(screen.getByText('素材车间')).toBeInTheDocument();
+    // 项目区正名"素材车间"（页面大标题；侧边栏导航也含同名入口，故限定 heading）
+    expect(screen.getByRole('heading', { name: '素材车间' })).toBeInTheDocument();
   });
 
   it('点项目卡的"去工作室成片"按钮 → StudioPanel 以该项目 id 打开', async () => {

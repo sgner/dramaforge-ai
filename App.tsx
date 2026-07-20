@@ -1,6 +1,5 @@
 import React, { Suspense, lazy, useState, useEffect, useCallback, useRef } from 'react';
-import { Film, Globe, Settings, ArrowLeft, RotateCw, RefreshCw, Loader2, AlertTriangle, PlayCircle, SkipForward, XOctagon, Sparkles, BookOpen, XCircle, CheckCircle, AlertCircle, Info, Shield, ChevronDown, PanelLeftClose, PanelLeftOpen, Users, Terminal, ChevronUp, UserPlus, User } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { Film, Globe, Settings, RefreshCw, AlertTriangle, CheckCircle, AlertCircle, Info, Home, Layers, FolderOpen, Clapperboard, Search, HelpCircle, Bot, ChevronsUpDown } from 'lucide-react';
 import { NewTaskModal } from './components/NewTaskModal';
 import { EditCharacterModal } from './components/EditCharacterModal';
 import { ImageLightbox } from './components/ImageLightbox';
@@ -18,12 +17,10 @@ import { ApiSettingsModal } from './components/infinite-canvas/ApiSettingsModal'
 import { useCanvasStore, migrateLocalProvidersToBackendForce, getLocalProvidersSnapshot } from './components/infinite-canvas/use-canvas-store';
 import { TaskAssetRef } from './components/infinite-canvas/types';
 import { syncProvidersToBackend } from './services/providerSync';
-import { AssetCheckReport } from './components/AssetCheckReport';
-import { TitleEndCardEditor } from './components/TitleEndCardEditor';
 import { runAssetCheck, AssetCheckResult } from './utils/assetChecker';
 import { ProjectList } from './components/ProjectList';
 import { StudioPanel } from './components/StudioPanel';
-import { DramaTask, TaskStatus, ArtStyle, BigShot, Character, Language, TaskMode, ApiConfig, ProcessedSegment, createDefaultApiConfig, normalizeModelBindings, LOGICAL_STEPS } from './types';
+import { DramaTask, TaskStatus, ArtStyle, Character, Language, ApiConfig, createDefaultApiConfig, normalizeModelBindings, LOGICAL_STEPS } from './types';
 import { storageService } from './services/storageService';
 import { useTaskExecutor } from './hooks/useTaskExecutor';
 import { useTaskActions } from './hooks/useTaskActions';
@@ -74,14 +71,11 @@ function AppContent() {
   const [editingCharacter, setEditingCharacter] = useState<Character | null>(null);
   const [isExpandingStory, setIsExpandingStory] = useState(false);
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<'list' | 'tree'>('list');
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [selectedShotConfig, setSelectedShotConfig] = useState<{ id: string; initialEdit: boolean } | null>(null);
   const [isEditingSourceText, setIsEditingSourceText] = useState(false);
   const [tempSourceText, setTempSourceText] = useState('');
   const [uploadingCharName, setUploadingCharName] = useState<string | null>(null);
   const [importFileInputRef, setImportFileInputRef] = useState<HTMLInputElement | null>(null);
-  const [viewingSegment, setViewingSegment] = useState<ProcessedSegment | null>(null);
   const [apiConfig, setApiConfig] = useState<ApiConfig>(createDefaultApiConfig());
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [studioOpen, setStudioOpen] = useState(false);
@@ -90,8 +84,8 @@ function AppContent() {
   const [isTitleEndCardOpen, setIsTitleEndCardOpen] = useState(false);
   const [toasts, setToasts] = useState<{ id: number; type: ToastType; message: string; exiting?: boolean }[]>([]);
   const [celebration, setCelebration] = useState<{ x: number; y: number; id: number } | null>(null);
-  const [pageKey, setPageKey] = useState(0);
   const [newProjectName, setNewProjectName] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
   const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false);
   const [agentMode, setAgentMode] = useState(() => {
     if (typeof window === 'undefined') return false;
@@ -716,7 +710,7 @@ function AppContent() {
   };
 
   return (
-    <div className="min-h-screen bg-[#f8fafc] text-[#111827] font-sans selection:bg-brand-600/20 overflow-x-hidden">
+    <div className="min-h-screen bg-[#0A0A0B] text-[#F5F5F7] font-sans selection:bg-[#6E6BF2]/30 overflow-x-hidden">
       <input type="file" accept="image/*" ref={charFileInputRef} onChange={handleRefFileChange} className="hidden" />
 
       <>
@@ -764,46 +758,151 @@ function AppContent() {
           </button>
         </div>
       )}
-      <div className="fixed inset-0 z-0 pointer-events-none">
-        <div className="absolute inset-0" style={{ background: 'radial-gradient(ellipse 80% 50% at 50% -20%, rgba(17,24,39,0.03), transparent)' }} />
-      </div>
 
+      {/* ── Runway 风格左侧固定侧边栏（brief §2）：仅项目列表页显示，画布/工作室保留自有全屏 chrome ── */}
       {!activeTask && (
-      <header className="sticky top-0 z-40 glass border-b border-[#e8edf3]">
-        <div className="px-6 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3 cursor-pointer group" onClick={() => setActiveTaskId(null)}>
-            <div className="w-9 h-9 bg-brand-600 rounded-xl flex items-center justify-center shadow-lg shadow-brand-600/20 group-hover:scale-105 transition-all duration-300">
-              <Film className="w-5 h-5 text-white" />
+      <aside data-testid="app-sidebar" className="fixed inset-y-0 left-0 w-60 z-40 flex flex-col bg-[#0A0A0B] border-r border-white/[0.07]">
+        {/* 工作区卡 */}
+        <div className="px-3 pt-4 pb-2">
+          <div className="flex items-center gap-2.5 px-2 py-2 rounded-xl hover:bg-white/[0.04] transition-colors cursor-pointer" onClick={() => setActiveTaskId(null)}>
+            <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 shadow-lg shadow-[#6E6BF2]/25" style={{ background: 'linear-gradient(135deg, #6E6BF2, #4B48C8)' }}>
+              <Film className="w-4 h-4 text-white" />
             </div>
-            <h1 className="text-lg font-bold gradient-text-animated tracking-tight">
-              {t('appTitle')}
-            </h1>
+            <div className="min-w-0 flex-1">
+              <div className="text-[13px] font-semibold text-[#F5F5F7] truncate">{t('appTitle')}</div>
+              <div className="text-[11px] text-white/40 truncate">{t('sidebarWorkspaceSub')}</div>
+            </div>
+            <ChevronsUpDown className="w-3.5 h-3.5 text-white/30 flex-shrink-0" />
           </div>
-          <div className="flex items-center gap-2">
-            <button onClick={() => setIsSettingsOpen(true)} className="p-2 hover:bg-black/5 rounded-lg text-[#64748b] hover:text-[#111827] transition-all">
-              <Settings className="w-5 h-5" />
+        </div>
+
+        {/* 分组导航：只映射真实存在的动作 */}
+        <nav className="flex-1 overflow-y-auto custom-scrollbar px-3 py-2 space-y-5">
+          <div>
+            <div className="px-2.5 mb-1.5 text-[11px] font-medium uppercase tracking-wider text-white/30">{t('navSectionOverview')}</div>
+            <button
+              onClick={() => setActiveTaskId(null)}
+              className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-[13px] font-medium bg-[#6E6BF2]/[0.14] text-[#F5F5F7] transition-colors"
+            >
+              <Home className="w-4 h-4 text-[#817FF5]" />
+              {t('navHome')}
             </button>
-            <div className="relative group z-50">
-               <button className="p-2 hover:bg-black/5 rounded-lg transition-colors flex items-center gap-1.5 text-[#64748b] hover:text-[#111827]">
-                 <Globe className="w-4 h-4" />
-                 <span className="text-xs font-mono uppercase font-bold tracking-wider">{lang}</span>
-               </button>
-               <div className="absolute right-0 top-full pt-2 w-32 hidden group-hover:block">
-                 <div className="glass rounded-xl shadow-xl overflow-hidden">
-                   {['zh', 'en', 'ja', 'ko'].map(l => (
-                     <button key={l} onClick={() => changeLanguage(l as Language)} className={`w-full text-left px-4 py-2 text-xs hover:bg-brand-600/10 transition-colors ${lang === l ? 'text-brand-600 font-bold' : 'text-[#64748b]'}`}>
-                        {l === 'zh' ? '中文' : l === 'en' ? 'English' : l === 'ja' ? '日本語' : '한국어'}
-                     </button>
-                   ))}
-                 </div>
-               </div>
+          </div>
+          <div>
+            <div className="px-2.5 mb-1.5 text-[11px] font-medium uppercase tracking-wider text-white/30">{t('navSectionCreate')}</div>
+            <div className="space-y-0.5">
+              <button
+                onClick={() => {
+                  if (tasks.length > 0) {
+                    setActiveTaskId(tasks[0].id);
+                  } else {
+                    setNewProjectName('');
+                    setIsNewProjectModalOpen(true);
+                  }
+                }}
+                className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-[13px] text-white/55 hover:text-[#F5F5F7] hover:bg-white/[0.05] transition-colors"
+              >
+                <Layers className="w-4 h-4" />
+                {t('navCanvas')}
+              </button>
+              <button
+                onClick={handleEnterAgentMode}
+                className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-[13px] text-white/55 hover:text-[#F5F5F7] hover:bg-white/[0.05] transition-colors"
+              >
+                <Bot className="w-4 h-4" />
+                {t('navAgent')}
+              </button>
+            </div>
+          </div>
+          <div>
+            <div className="px-2.5 mb-1.5 text-[11px] font-medium uppercase tracking-wider text-white/30">{t('navSectionResources')}</div>
+            <div className="space-y-0.5">
+              <button
+                onClick={() => document.getElementById('project-workshop')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-[13px] text-white/55 hover:text-[#F5F5F7] hover:bg-white/[0.05] transition-colors"
+              >
+                <FolderOpen className="w-4 h-4" />
+                {t('workshopTitle')}
+              </button>
+              <button
+                onClick={() => { if (tasks.length > 0) handleOpenStudio(tasks[0].id); }}
+                disabled={tasks.length === 0}
+                className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-[13px] transition-colors ${tasks.length === 0 ? 'text-white/25 cursor-not-allowed' : 'text-white/55 hover:text-[#F5F5F7] hover:bg-white/[0.05]'}`}
+              >
+                <Clapperboard className="w-4 h-4" />
+                {t('studioTitle')}
+              </button>
+            </div>
+          </div>
+        </nav>
+
+        {/* 底部：用量占位卡 + 设置 + 语言 */}
+        <div className="border-t border-white/[0.07] p-3 space-y-0.5">
+          <div className="mb-2 px-3 py-2.5 rounded-xl bg-[#131316] border border-white/[0.07]">
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="text-white/45 font-medium">{t('sidebarPlan')}</span>
+              <span className="font-mono text-white/50">{tasks.length} {tasks.length > 1 ? t('projectsCount') : t('projectCount')}</span>
+            </div>
+            <div className="mt-2 h-1 rounded-full bg-white/[0.08] overflow-hidden">
+              <div className="h-full rounded-full bg-[#6E6BF2] transition-all duration-500" style={{ width: `${Math.min(100, Math.max(6, tasks.length * 20))}%` }} />
+            </div>
+          </div>
+          <button
+            onClick={() => setIsSettingsOpen(true)}
+            className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-[13px] text-white/55 hover:text-[#F5F5F7] hover:bg-white/[0.05] transition-colors"
+          >
+            <Settings className="w-4 h-4" />
+            {t('apiSettings')}
+          </button>
+          <div className="relative group">
+            <button className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-[13px] text-white/55 hover:text-[#F5F5F7] hover:bg-white/[0.05] transition-colors">
+              <Globe className="w-4 h-4" />
+              <span className="flex-1 text-left">{lang === 'zh' ? '中文' : lang === 'en' ? 'English' : lang === 'ja' ? '日本語' : '한국어'}</span>
+              <span className="text-[10px] font-mono uppercase text-white/30">{lang}</span>
+            </button>
+            <div className="absolute left-0 bottom-full pb-1.5 w-full hidden group-hover:block z-50">
+              <div className="rounded-xl overflow-hidden bg-[#1A1A1F] border border-white/[0.07] shadow-2xl shadow-black/50">
+                {['zh', 'en', 'ja', 'ko'].map(l => (
+                  <button key={l} onClick={() => changeLanguage(l as Language)} className={`w-full text-left px-3.5 py-2 text-xs transition-colors hover:bg-white/[0.06] ${lang === l ? 'text-[#817FF5] font-semibold' : 'text-white/55'}`}>
+                    {l === 'zh' ? '中文' : l === 'en' ? 'English' : l === 'ja' ? '日本語' : '한국어'}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         </div>
+      </aside>
+      )}
+
+      {/* ── 内容区：首页左移 240px 让位侧边栏；画布/工作室全屏 ── */}
+      <div className={!activeTask ? 'pl-60' : ''}>
+      {!activeTask && (
+      <header className="sticky top-0 z-30 h-14 flex items-center gap-3 px-6 bg-[#0A0A0B]/85 backdrop-blur-md border-b border-white/[0.07]">
+        <div className="relative flex-1 max-w-md">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30 pointer-events-none" />
+          <input
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder={t('searchPlaceholder')}
+            className="w-full h-9 pl-9 pr-3 rounded-lg bg-[#1A1A1F] border border-white/[0.07] text-[13px] text-[#F5F5F7] placeholder:text-white/30 focus:outline-none focus:border-[#6E6BF2]/60 focus:ring-2 focus:ring-[#6E6BF2]/20 transition-all"
+          />
+        </div>
+        <div className="flex-1" />
+        <button
+          title={t('help')}
+          className="w-8 h-8 rounded-full flex items-center justify-center text-white/40 hover:text-[#F5F5F7] hover:bg-white/[0.06] transition-colors"
+        >
+          <HelpCircle className="w-4 h-4" />
+        </button>
+        <div
+          className="w-7 h-7 rounded-full flex-shrink-0 border border-white/10"
+          style={{ background: 'linear-gradient(135deg, #6E6BF2, #E8738C)' }}
+          title={t('appTitle')}
+        />
       </header>
       )}
 
-      <main className={`relative z-10 ${!activeTask ? 'pt-0 pb-0' : 'fixed inset-0 z-10'}`}>
+      <main className={`relative z-10 ${!activeTask ? '' : 'fixed inset-0 z-10'}`}>
         {!activeTask ? (
           <div key="project-list" className="page-transition-enter">
           {/* 工作室入口：项目卡"去工作室成片"按钮（首页不放横幅）；画布页入口在 CanvasToolbar */}
@@ -815,12 +914,13 @@ function AppContent() {
             }}
             onImportProject={handleImportProject}
             onExportAll={exportAllProjects}
-            onSelectTask={(id) => { setActiveTaskId(id); setPageKey(k => k + 1); }}
+            onSelectTask={(id) => setActiveTaskId(id)}
             onDeleteTask={deleteTask}
             onExportTask={exportProject}
             onOpenStudio={(id) => handleOpenStudio(id)}
             importFileInputRef={importFileInputRef}
             setImportFileInputRef={setImportFileInputRef}
+            searchQuery={searchQuery}
             t={t}
             lang={lang}
           />
@@ -923,38 +1023,18 @@ function AppContent() {
           </div>
         )}
       </main>
-
-      {viewingSegment && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-fade-in">
-           <div className="glass rounded-2xl shadow-2xl w-full max-w-2xl h-[80vh] flex flex-col animate-scale-in">
-              <div className="p-4 border-b border-[#e8edf3] flex justify-between items-center">
-                  <div className="flex items-center gap-2">
-                    <BookOpen className="w-5 h-5 text-brand-400" />
-                    <h2 className="text-lg font-bold">{viewingSegment.name}</h2>
-                  </div>
-                  <button onClick={() => setViewingSegment(null)} className="p-1.5 hover:bg-black/5 rounded-lg transition-colors text-[#64748b] hover:text-[#111827]">
-                    <XCircle className="w-5 h-5" />
-                  </button>
-              </div>
-              <div className="flex-1 p-6 overflow-y-auto">
-                 <p className="whitespace-pre-wrap text-[#374151] text-sm leading-relaxed">
-                    {viewingSegment.content}
-                 </p>
-              </div>
-           </div>
-        </div>
-      )}
+      </div>
 
       {/* New Project Modal */}
       {isNewProjectModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={() => setIsNewProjectModalOpen(false)}>
-          <div className="bg-white border border-[#e8edf3] rounded-2xl shadow-2xl w-full max-w-md p-6 animate-scale-in" onClick={(e) => e.stopPropagation()}>
-            <h2 className="text-lg font-bold text-[#111827] mb-4">{t('newProject')}</h2>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setIsNewProjectModalOpen(false)}>
+          <div className="bg-[#131316] border border-white/[0.07] rounded-2xl shadow-2xl shadow-black/60 w-full max-w-md p-6 animate-scale-in" onClick={(e) => e.stopPropagation()}>
+            <h2 className="text-[15px] font-semibold text-[#F5F5F7] mb-4">{t('newProject')}</h2>
             <input
               value={newProjectName}
               onChange={(e) => setNewProjectName(e.target.value)}
               placeholder={t('projectNamePlaceholder')}
-              className="w-full bg-[#f8fafc] border border-[#e8edf3] rounded-xl px-4 py-3 text-sm text-[#111827] focus:outline-none focus:border-brand-600/50 focus:ring-1 focus:ring-brand-600/20 transition-all placeholder:text-[#94a3b8]"
+              className="w-full bg-white/[0.06] border border-transparent rounded-xl px-4 py-3 text-sm text-[#F5F5F7] focus:outline-none focus:border-[#6E6BF2]/50 focus:ring-2 focus:ring-[#6E6BF2]/25 transition-all placeholder:text-white/30"
               autoFocus
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && newProjectName.trim()) {
@@ -976,7 +1056,6 @@ function AppContent() {
                   };
                   setTasks(prev => [newTask, ...prev]);
                   setActiveTaskId(newTask.id);
-                  setPageKey(k => k + 1);
                   setIsNewProjectModalOpen(false);
                 }
               }}
@@ -984,7 +1063,7 @@ function AppContent() {
             <div className="flex justify-end gap-3 mt-5">
               <button
                 onClick={() => setIsNewProjectModalOpen(false)}
-                className="px-4 py-2 text-[#64748b] hover:text-[#111827] rounded-lg text-sm font-medium transition-colors"
+                className="px-4 py-2 bg-[#1A1A1F] border border-white/[0.07] text-white/60 hover:text-[#F5F5F7] rounded-full text-sm font-medium transition-colors"
               >
                 {t('cancel')}
               </button>
@@ -1009,14 +1088,13 @@ function AppContent() {
                   };
                   setTasks(prev => [newTask, ...prev]);
                   setActiveTaskId(newTask.id);
-                  setPageKey(k => k + 1);
                   setIsNewProjectModalOpen(false);
                 }}
                 disabled={!newProjectName.trim()}
-                className={`px-5 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-all ${
+                className={`btn-press px-5 py-2 rounded-full text-sm font-semibold flex items-center gap-2 transition-all ${
                   newProjectName.trim()
-                    ? 'bg-brand-600 text-white shadow-lg shadow-brand-600/20 hover:shadow-brand-600/30'
-                    : 'bg-black/[0.04] text-[#94a3b8] cursor-not-allowed'
+                    ? 'bg-[#6E6BF2] hover:bg-[#817FF5] text-white shadow-lg shadow-[#6E6BF2]/25'
+                    : 'bg-white/[0.06] text-white/25 cursor-not-allowed'
                 }`}
               >
                 {t('createProject')}
@@ -1104,15 +1182,15 @@ function AppContent() {
           {toasts.map(toast => (
             <div
               key={toast.id}
-              className={`glass rounded-xl px-4 py-3 flex items-center gap-3 min-w-[280px] max-w-[400px] ${toast.exiting ? 'toast-exit' : 'toast-enter'} ${
-                toast.type === 'success' ? 'border border-emerald-500/20' : toast.type === 'error' ? 'border border-red-500/20' : toast.type === 'warning' ? 'border border-amber-500/20' : 'border border-brand-500/20'
+              className={`glass rounded-xl px-4 py-3 flex items-center gap-3 min-w-[280px] max-w-[400px] shadow-2xl shadow-black/40 ${toast.exiting ? 'toast-exit' : 'toast-enter'} ${
+                toast.type === 'success' ? 'border border-[#3ECF8E]/25' : toast.type === 'error' ? 'border border-[#F26161]/25' : toast.type === 'warning' ? 'border border-[#F5B544]/25' : 'border border-[#6E6BF2]/30'
               }`}
             >
-              {toast.type === 'success' && <CheckCircle className="w-5 h-5 text-emerald-600 flex-shrink-0" />}
-              {toast.type === 'error' && <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0" />}
-              {toast.type === 'warning' && <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0" />}
-              {toast.type === 'info' && <Info className="w-5 h-5 text-brand-600 flex-shrink-0" />}
-              <span className="text-sm text-[#111827]">{toast.message}</span>
+              {toast.type === 'success' && <CheckCircle className="w-5 h-5 text-[#3ECF8E] flex-shrink-0" />}
+              {toast.type === 'error' && <AlertCircle className="w-5 h-5 text-[#F26161] flex-shrink-0" />}
+              {toast.type === 'warning' && <AlertTriangle className="w-5 h-5 text-[#F5B544] flex-shrink-0" />}
+              {toast.type === 'info' && <Info className="w-5 h-5 text-[#817FF5] flex-shrink-0" />}
+              <span className="text-sm text-[#F5F5F7]">{toast.message}</span>
             </div>
           ))}
         </div>
@@ -1144,7 +1222,7 @@ function AppContent() {
             const distance = 60 + Math.random() * 80;
             const dx = Math.cos(angle) * distance;
             const dy = Math.sin(angle) * distance;
-            const colors = ['#111827', '#374151', '#16a34a', '#2563eb', '#60a5fa'];
+            const colors = ['#6E6BF2', '#817FF5', '#3ECF8E', '#A5A3F8', '#F5B544'];
             return (
               <div
                 key={`${celebration.id}-${i}`}

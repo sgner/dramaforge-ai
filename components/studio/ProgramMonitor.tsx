@@ -1,11 +1,12 @@
 /**
  * ProgramMonitor — 剪辑台节目监视器：按播放头预览时间线序列。
  *
- * 黑底 16:9 预览区是剪辑台的视觉主角：四周留呼吸空间，rounded-2xl + 内阴影
- * 模拟屏幕纵深；图片 clip 显示 <img>，视频 clip 显示 <video>，
- * clip 切换时 currentTime = playTime - clipStart，play/pause 与序列播放态同步。
- * 传输控制（上一镜头 / 播放暂停 / 下一镜头）+ mm:ss 时间码合并为一条
- * 悬浮玻璃胶囊，居中悬浮在监视器底部内侧。
+ * 纯黑视口是剪辑台的视觉主角：四周留呼吸空间，图片 clip 显示 <img>，
+ * 视频 clip 显示 <video>，clip 切换时 currentTime = playTime - clipStart，
+ * play/pause 与序列播放态同步。
+ * 底部内侧悬浮一条 glass 播放胶囊（⏮ ▶ ⏭ + mono 时间码，玻璃拟态）；
+ * 带 testid 的走带控制已迁至 TransportBar（监视器与时间线之间的独立一行），
+ * 胶囊保留为同一播放模型的可视化副本（无 testid，行为一致）。
  * 空格键播放/暂停由剪辑台全局快捷键（use-timeline-shortcuts）统一处理，本组件不再监听。
  */
 import React, { useEffect, useRef } from 'react';
@@ -52,11 +53,11 @@ export const ProgramMonitor: React.FC<ProgramMonitorProps> = ({ items, playback 
   return (
     <section
       data-testid="studio-monitor"
-      className="flex-1 min-w-0 flex flex-col outline-none"
+      className="flex-1 min-w-0 flex flex-col outline-none bg-[#0A0A0B]"
     >
-      {/* 预览区：监视器为主角，四周留呼吸空间 */}
-      <div className="flex-1 min-h-0 flex items-center justify-center px-6 py-6">
-        <div className="relative w-full max-w-[720px] aspect-video bg-black rounded-2xl shadow-[inset_0_1px_0_rgba(255,255,255,0.04),inset_0_-24px_48px_rgba(0,0,0,0.6)] overflow-hidden flex items-center justify-center">
+      {/* 预览区：纯黑视口，四周留呼吸空间 */}
+      <div className="flex-1 min-h-0 flex items-center justify-center px-6 py-5">
+        <div className="relative w-full max-w-[760px] aspect-video bg-black rounded-xl border border-white/[0.07] overflow-hidden flex items-center justify-center">
           {current ? (
             currentIsVideo ? (
               <video
@@ -79,46 +80,43 @@ export const ProgramMonitor: React.FC<ProgramMonitorProps> = ({ items, playback 
               <div className="w-14 h-14 rounded-2xl bg-white/[0.06] p-4 flex items-center justify-center">
                 <Clapperboard className="w-6 h-6 text-white/45" />
               </div>
-              <div className="text-[15px] font-semibold text-white/90">
+              <div className="text-[15px] font-semibold text-[#F5F5F7]">
                 {t('studioStageTimeline')}
               </div>
               <p className="text-xs text-white/45 max-w-[260px]">{t('studioTlMonitorEmpty')}</p>
             </div>
           )}
 
-          {/* 浮动传输控制条：播放控制 + 时间码合并为一条悬浮玻璃胶囊 */}
-          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 backdrop-blur-xl bg-white/[0.08] rounded-full px-4 py-2">
+          {/* 浮动播放胶囊：glass 拟态（走带栏的可视化副本，无 testid） */}
+          <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex items-center gap-1.5 backdrop-blur-xl bg-black/50 border border-white/[0.1] rounded-full px-3 py-1.5 shadow-[0_8px_24px_rgba(0,0,0,0.45)]">
             <button
-              data-testid="studio-prev-btn"
+              type="button"
               title={t('studioTlPrevClip')}
               onClick={() => playback.stepClip(-1)}
               disabled={items.length === 0}
-              className="w-8 h-8 rounded-full bg-white/[0.08] hover:bg-white/[0.14] text-white/70 hover:text-white/90 flex items-center justify-center transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+              className="w-6 h-6 rounded-full text-white/60 hover:bg-white/[0.12] hover:text-white/90 flex items-center justify-center transition-all disabled:opacity-30 disabled:cursor-not-allowed"
             >
-              <SkipBack className="w-3.5 h-3.5" />
+              <SkipBack className="w-3 h-3" />
             </button>
             <button
-              data-testid="studio-play-btn"
+              type="button"
               title={playing ? t('studioTlPause') : t('studioTlPlay')}
               onClick={playback.toggle}
               disabled={items.length === 0}
-              className="w-11 h-11 rounded-full bg-[#0A84FF] text-white hover:bg-[#0A84FF]/90 active:scale-[0.98] flex items-center justify-center transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+              className="w-8 h-8 rounded-full bg-[#6E6BF2] text-white hover:bg-[#817FF5] active:scale-[0.98] flex items-center justify-center transition-all disabled:opacity-30 disabled:cursor-not-allowed"
             >
-              {playing ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+              {playing ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5 ml-px" />}
             </button>
             <button
-              data-testid="studio-next-btn"
+              type="button"
               title={t('studioTlNextClip')}
               onClick={() => playback.stepClip(1)}
               disabled={items.length === 0}
-              className="w-8 h-8 rounded-full bg-white/[0.08] hover:bg-white/[0.14] text-white/70 hover:text-white/90 flex items-center justify-center transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+              className="w-6 h-6 rounded-full text-white/60 hover:bg-white/[0.12] hover:text-white/90 flex items-center justify-center transition-all disabled:opacity-30 disabled:cursor-not-allowed"
             >
-              <SkipForward className="w-3.5 h-3.5" />
+              <SkipForward className="w-3 h-3" />
             </button>
-            <span
-              data-testid="studio-timecode"
-              className="ml-2 text-xs font-mono text-white/70 tabular-nums"
-            >
+            <span className="ml-1 text-[11px] font-mono text-white/65 tabular-nums">
               {formatSec(playTime)} / {formatSec(total)}
             </span>
           </div>

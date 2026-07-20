@@ -9,25 +9,25 @@
 
 /* The overlay sits beside InfiniteCanvas, so it cannot inherit the canvas-root theme scope. */
 .agent-mode-overlay.theme-dark {
-  --page: #0f141d;
-  --grid: rgba(148, 163, 184, .18);
-  --panel: rgba(23, 29, 41, .92);
-  --card: #171d29;
-  --card-solid: #171d29;
-  --soft: #111722;
-  --soft-2: #202838;
-  --line: #2a3444;
-  --line-2: rgba(148, 163, 184, .22);
-  --line-strong: rgba(255, 255, 255, .1);
-  --text: #e5e9f0;
-  --muted: #8f9aab;
-  --faint: #657286;
-  --shadow: rgba(0, 0, 0, .28);
-  --strong: #d8dee9;
-  --strong-text: #10141d;
-  --accent: #f5f6f8;
-  --accent-soft: rgba(245, 246, 248, .16);
-  --bg: #0e1014;
+  --page: #0A0A0B;
+  --grid: rgba(255, 255, 255, .06);
+  --panel: rgba(19, 19, 22, .92);
+  --card: #131316;
+  --card-solid: #131316;
+  --soft: #1A1A1F;
+  --soft-2: #232329;
+  --line: rgba(255, 255, 255, .07);
+  --line-2: rgba(255, 255, 255, .14);
+  --line-strong: rgba(255, 255, 255, .18);
+  --text: #F5F5F7;
+  --muted: rgba(255, 255, 255, .45);
+  --faint: rgba(255, 255, 255, .30);
+  --shadow: rgba(0, 0, 0, .4);
+  --strong: #F5F5F7;
+  --strong-text: #0A0A0B;
+  --accent: #6E6BF2;
+  --accent-soft: rgba(110, 107, 242, .18);
+  --bg: #0A0A0B;
   color: var(--text);
 }
 

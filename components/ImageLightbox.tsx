@@ -13,13 +13,13 @@ export const ImageLightbox: React.FC<Props> = ({ src, onClose, alt }) => {
   return (
     <div
       className="fixed inset-0 z-[100] flex items-center justify-center animate-in fade-in duration-200"
-      style={{ background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(8px)' }}
+      style={{ background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(10px)' }}
       onClick={onClose}
     >
       <button
         onClick={onClose}
-        className="absolute top-6 right-6 p-2.5 rounded-full text-white transition-all hover:rotate-90 duration-300"
-        style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)' }}
+        className="absolute top-6 right-6 p-2.5 rounded-full text-white/70 hover:text-white transition-all hover:rotate-90 duration-300"
+        style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)' }}
       >
         <X className="w-6 h-6" />
       </button>

@@ -554,7 +554,7 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
   connections: [],
   viewport: { x: -1800, y: -1000, scale: 1 },
   selected: new Set(),
-  theme: 'light',
+  theme: 'dark',
   undoStack: [],
   clipboard: [],
   assetPanelOpen: false,

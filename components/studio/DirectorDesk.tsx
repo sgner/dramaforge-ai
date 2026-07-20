@@ -275,17 +275,17 @@ export const DirectorDesk: React.FC<DirectorDeskProps> = ({
       case 'approved':
         return { text: t('studioReviewApproved'), cls: appleBadgeSuccess };
       case 'rejected':
-        return { text: t('studioReviewRejected'), cls: 'bg-[#FF453A]/15 text-[#FF453A] border-[#FF453A]/30' };
+        return { text: t('studioReviewRejected'), cls: 'bg-[#F26161]/15 text-[#F26161] border-[#F26161]/30' };
       case 'locked':
-        return { text: t('studioReviewLocked'), cls: 'bg-[#0A84FF]/15 text-[#0A84FF] border-[#0A84FF]/30' };
+        return { text: t('studioReviewLocked'), cls: 'bg-[#6E6BF2]/15 text-[#6E6BF2] border-[#6E6BF2]/30' };
       default:
         return { text: t('studioReviewPending'), cls: appleBadgeNeutral };
     }
   };
 
   const criticMeta = (status: StudioShotOut['critic_status']) => {
-    if (status === 'approved') return { text: t('studioCriticPass'), cls: 'text-[#30D158]' };
-    if (status === 'max_rounds_exceeded') return { text: t('studioCriticFail'), cls: 'text-[#FFD60E]' };
+    if (status === 'approved') return { text: t('studioCriticPass'), cls: 'text-[#3ECF8E]' };
+    if (status === 'max_rounds_exceeded') return { text: t('studioCriticFail'), cls: 'text-[#F5B544]' };
     return null;
   };
 
@@ -353,7 +353,7 @@ export const DirectorDesk: React.FC<DirectorDeskProps> = ({
             {(!row.asset || rejected) && (
               <span
                 data-testid={`studio-dir-go-workshop-${shot.id}`}
-                className="text-[10px] text-[#FFD60E]/90"
+                className="text-[10px] text-[#F5B544]/90"
               >
                 {t('studioDirGoWorkshop')}
               </span>
@@ -366,7 +366,7 @@ export const DirectorDesk: React.FC<DirectorDeskProps> = ({
               data-testid={`studio-dir-approve-${shot.id}`}
               disabled={busy}
               onClick={() => handleReview(row, 'approve')}
-              className={`${actionBtnCls} bg-[#30D158] text-white hover:bg-[#30D158]/90`}
+              className={`${actionBtnCls} bg-[#3ECF8E]/15 text-[#3ECF8E] hover:bg-[#3ECF8E]/25`}
             >
               {t('studioReviewApprove')}
             </button>
@@ -374,7 +374,7 @@ export const DirectorDesk: React.FC<DirectorDeskProps> = ({
               data-testid={`studio-dir-reject-${shot.id}`}
               disabled={busy}
               onClick={() => handleReview(row, 'reject')}
-              className={`${actionBtnCls} bg-transparent border border-[#FF453A]/30 text-[#FF453A] hover:bg-[#FF453A]/10`}
+              className={`${actionBtnCls} bg-transparent border border-[#F26161]/30 text-[#F26161] hover:bg-[#F26161]/10`}
             >
               {t('studioReviewReject')}
             </button>
@@ -449,10 +449,10 @@ export const DirectorDesk: React.FC<DirectorDeskProps> = ({
           </select>
         </div>
         {imageProviders.length === 0 ? (
-          <p className="text-xs text-[#FFD60E] pb-2">{t('studioNoImageProviders')}</p>
+          <p className="text-xs text-[#F5B544] pb-2">{t('studioNoImageProviders')}</p>
         ) : (
           !regenReady && (
-            <p className="text-xs text-[#FFD60E] pb-2" data-testid="studio-gen-settings-hint">
+            <p className="text-xs text-[#F5B544] pb-2" data-testid="studio-gen-settings-hint">
               {t('studioGenSettingsHint')}
             </p>
           )
@@ -464,7 +464,7 @@ export const DirectorDesk: React.FC<DirectorDeskProps> = ({
         className="flex flex-wrap items-center gap-3 px-1"
         data-testid="studio-dir-summary"
       >
-        <Clapperboard className="w-4 h-4 text-[#0A84FF]" />
+        <Clapperboard className="w-4 h-4 text-[#6E6BF2]" />
         <span className="text-sm text-white/80" data-testid="studio-dir-summary-text">
           {t('studioDirSummary')
             .replace('{total}', String(totalCount))
@@ -473,7 +473,7 @@ export const DirectorDesk: React.FC<DirectorDeskProps> = ({
             .replace('{pending}', String(pendingCount))}
         </span>
         <div className="flex-1" />
-        {loading && <Loader2 className="w-4 h-4 text-[#0A84FF] animate-spin" />}
+        {loading && <Loader2 className="w-4 h-4 text-[#6E6BF2] animate-spin" />}
         <button
           data-testid="studio-dir-sync"
           onClick={() => void load()}
@@ -487,7 +487,7 @@ export const DirectorDesk: React.FC<DirectorDeskProps> = ({
           data-testid="studio-send-timeline"
           onClick={handleSend}
           disabled={sendable.length === 0}
-          className="px-4 py-1.5 rounded-full text-xs font-medium bg-[#0A84FF] text-white hover:bg-[#0A84FF]/90 active:scale-[0.98] transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
+          className="px-4 py-1.5 rounded-full text-xs font-medium bg-[#6E6BF2] text-white hover:bg-[#6E6BF2]/90 active:scale-[0.98] transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
         >
           <Scissors className="w-3.5 h-3.5" />
           {t('studioDirSendTimeline')}
@@ -497,7 +497,7 @@ export const DirectorDesk: React.FC<DirectorDeskProps> = ({
       {error && (
         <div
           data-testid="studio-dir-error"
-          className="flex items-center gap-2 text-sm text-[#FF453A] bg-[#FF453A]/10 border border-[#FF453A]/30 rounded-xl px-4 py-2.5"
+          className="flex items-center gap-2 text-sm text-[#F26161] bg-[#F26161]/10 border border-[#F26161]/30 rounded-xl px-4 py-2.5"
         >
           <AlertCircle className="w-4 h-4 flex-shrink-0" />
           {error}

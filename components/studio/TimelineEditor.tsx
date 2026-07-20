@@ -1,19 +1,21 @@
 /**
- * TimelineEditor — 剪辑台时间线：秒刻度标尺 + playhead + 轨道区。
+ * TimelineEditor — 剪辑台时间线：秒刻度标尺 + 红色 playhead + 多轨轨道区（Runway 图2 形态）。
  *
  * 标尺：秒刻度（密度随 pxPerSec），点击/拖动 seek（原生 pointer events）。
- * playhead：brand 色竖线 + 顶部把手，随 playTime 移动。
- * V1 视频轨：clip 块（宽 = sec × pxPerSec，缩略图底 + 名称 + 时长标），
- *   点击选中（再次点击取消），右缘拖动调时长（步进 0.5s，clamp 1~15s）。
- * A1 音轨 / 字幕轨：灰显占位轨（即将支持）。
+ * playhead：红色竖线 + 顶部圆点把手，随 playTime 移动。
+ * V1 视频轨：clip 块按资产类型着色（视频 #8B7CF6 / 图像素材 #E8738C），
+ *   宽 = sec × pxPerSec，点击选中（再次点击取消，accent 描边），
+ *   右缘拖动调时长（步进 0.5s，clamp 1~15s）。
+ * A1 音轨（绿 #4CC38A）/ 字幕轨（黄 #E5C77E）：着色占位轨（即将支持）。
  * 顶部缩放控制：pxPerSec 受控（状态在 StudioPanel，供全局快捷键 +/- 共用），默认 24，范围 6~120。
  */
 import React, { useRef } from 'react';
-import { Minus, Plus } from 'lucide-react';
+import { Film, Image as ImageIcon, Minus, Plus } from 'lucide-react';
 import { useI18n } from '../../i18n';
-import { TimelineItem } from './types';
+import { isVideoAsset, TimelineItem } from './types';
 import { SequencePlayback } from './use-sequence-playback';
 import { formatSec } from './timecode';
+import { PLAYHEAD_RED, TRACK_COLORS } from './theme';
 
 export const MIN_PX_PER_SEC = 6;
 export const MAX_PX_PER_SEC = 120;
@@ -103,14 +105,26 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
   const zoomBy = (dir: -1 | 1) =>
     onPxPerSecChange(Math.min(MAX_PX_PER_SEC, Math.max(MIN_PX_PER_SEC, pxPerSec + dir * PX_PER_SEC_STEP)));
 
+  /** 轨道标签：色点 + 名称。 */
+  const trackLabel = (color: string, text: string, dim = false) => (
+    <span
+      className={`flex items-center gap-1.5 text-[10px] font-mono ${
+        dim ? 'text-white/30' : 'text-white/50'
+      }`}
+    >
+      <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: color }} />
+      {text}
+    </span>
+  );
+
   return (
     <div
-      className="h-[200px] flex-shrink-0 border-t border-white/[0.05] flex flex-col"
+      className="h-52 flex-shrink-0 border-t border-white/[0.07] bg-[#0A0A0B] flex flex-col"
       data-testid="studio-timeline-editor"
     >
       {/* 缩放控制：右移的玻璃胶囊组 */}
       <div className="flex items-center justify-end px-3 h-9 flex-shrink-0">
-        <div className="flex items-center gap-1.5 backdrop-blur-xl bg-white/[0.06] rounded-full px-2.5 py-1">
+        <div className="flex items-center gap-1.5 bg-white/[0.05] border border-white/[0.07] rounded-full px-2.5 py-1">
           <span className="text-[11px] font-medium text-white/45 pr-1">
             {t('studioTlZoom')}
           </span>
@@ -131,7 +145,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
             data-testid="studio-tl-zoom"
             title={t('studioTlZoom')}
             onChange={(e) => onPxPerSecChange(Number(e.target.value))}
-            className="w-24 accent-[#0A84FF]"
+            className="w-24 accent-[#6E6BF2]"
           />
           <button
             data-testid="studio-tl-zoom-in"
@@ -145,34 +159,34 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
       </div>
 
       <div className="flex-1 min-h-0 flex">
-        {/* 轨道标签列：无盒子，56px 内小字标签垂直居中 */}
-        <div className="w-14 flex-shrink-0 flex flex-col text-[11px] font-medium text-white/45">
+        {/* 轨道标签列：色点 + 小字 mono 标签 */}
+        <div className="w-14 flex-shrink-0 flex flex-col items-center border-r border-white/[0.05]">
           <div className="h-6" />
-          <div className="h-16 flex items-center justify-center">
-            {t('studioTlTrackVideo')}
+          <div className="h-16 flex items-center">
+            {trackLabel(TRACK_COLORS.video, t('studioTlTrackVideo'))}
           </div>
-          <div className="h-8 flex items-center justify-center text-white/25">
-            {t('studioTlTrackAudio')}
+          <div className="h-8 flex items-center">
+            {trackLabel(TRACK_COLORS.audio, t('studioTlTrackAudio'), true)}
           </div>
-          <div className="h-8 flex items-center justify-center text-white/25">
-            {t('studioTlTrackSubtitle')}
+          <div className="h-8 flex items-center">
+            {trackLabel(TRACK_COLORS.subtitle, t('studioTlTrackSubtitle'), true)}
           </div>
         </div>
 
         {/* 标尺 + 轨道（横向滚动） */}
         <div className="flex-1 min-w-0 overflow-x-auto">
           <div className="relative" style={{ width: displayTotal * pxPerSec }}>
-            {/* 标尺：主线 white/20，数字 10px white/35 */}
+            {/* 标尺：主线 white/15，数字 10px white/35 */}
             <div
               ref={rulerRef}
               data-testid="studio-tl-ruler"
               onPointerDown={handleRulerPointerDown}
-              className="relative h-6 border-b border-white/[0.05] cursor-pointer select-none"
+              className="relative h-6 border-b border-white/[0.07] cursor-pointer select-none"
             >
               {ticks.map((s) => (
                 <div
                   key={s}
-                  className="absolute top-0 bottom-0 border-l border-white/20"
+                  className="absolute top-0 bottom-0 border-l border-white/15"
                   style={{ left: s * pxPerSec }}
                 >
                   <span className="absolute top-0.5 left-1 text-[10px] font-mono text-white/35">
@@ -182,37 +196,49 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
               ))}
             </div>
 
-            {/* V1 视频轨 */}
+            {/* V1 视频轨：clip 块按资产类型着色 */}
             <div
               data-testid="studio-track-v1"
-              className="relative h-16 border-b border-white/[0.05] flex items-center px-0.5"
+              className="relative h-16 border-b border-white/[0.07] flex items-center px-0.5"
             >
               {items.map((it, i) => {
                 const selected = i === selectedIndex;
+                const video = isVideoAsset(it.asset);
+                const color = video ? TRACK_COLORS.video : TRACK_COLORS.image;
                 return (
                   <div
                     key={it.asset.id}
                     data-testid={`studio-tl-clip-${i}`}
                     onClick={() => onSelect(selected ? -1 : i)}
-                    className={`relative h-[60px] flex-shrink-0 rounded-lg overflow-hidden cursor-pointer transition-shadow ${
+                    className={`relative h-[56px] flex-shrink-0 rounded-md overflow-hidden cursor-pointer border transition-shadow ${
                       selected
-                        ? 'ring-2 ring-[#0A84FF] shadow-[0_0_16px_rgba(10,132,255,0.35)]'
-                        : 'hover:ring-1 hover:ring-white/30'
+                        ? 'ring-2 ring-[#6E6BF2] shadow-[0_0_16px_rgba(110,107,242,0.35)]'
+                        : 'hover:brightness-125'
                     }`}
-                    style={{ width: it.sec * pxPerSec }}
+                    style={{
+                      width: it.sec * pxPerSec,
+                      backgroundColor: `${color}2E`,
+                      borderColor: `${color}80`,
+                    }}
                   >
-                    {/* 缩略图铺底 */}
-                    <img
-                      src={it.asset.url!}
-                      alt={it.asset.title || it.asset.name}
-                      className="absolute inset-0 w-full h-full object-cover bg-black/40 pointer-events-none"
+                    {/* 左侧色条 */}
+                    <div
+                      className="absolute left-0 top-0 bottom-0 w-[3px] pointer-events-none"
+                      style={{ backgroundColor: color }}
                     />
-                    {/* 底部渐变蒙层：名称 + 时长白字压在上面 */}
-                    <div className="absolute inset-x-0 bottom-0 px-1.5 pt-4 pb-1 bg-gradient-to-t from-black/70 to-transparent pointer-events-none">
-                      <div className="text-[10px] font-medium text-white truncate">
-                        {it.asset.title || it.asset.name}
+                    {/* 名称 + 时长/字幕 */}
+                    <div className="absolute inset-x-0 top-0 bottom-0 pl-2.5 pr-2 py-1 flex flex-col justify-between pointer-events-none">
+                      <div className="flex items-center gap-1 min-w-0">
+                        {video ? (
+                          <Film className="w-2.5 h-2.5 flex-shrink-0" style={{ color }} />
+                        ) : (
+                          <ImageIcon className="w-2.5 h-2.5 flex-shrink-0" style={{ color }} />
+                        )}
+                        <div className="text-[10px] font-medium text-white/90 truncate">
+                          {it.asset.title || it.asset.name}
+                        </div>
                       </div>
-                      <div className="text-[9px] font-mono text-white/60">
+                      <div className="text-[9px] font-mono text-white/55 truncate">
                         {it.sec}s
                         {it.caption && (
                           <span className="ml-1 font-sans text-white/45">{it.caption}</span>
@@ -223,38 +249,41 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
                     <div
                       data-testid={`studio-tl-resize-${i}`}
                       onPointerDown={(e) => handleResizePointerDown(e, i)}
-                      className="absolute top-0 right-0 bottom-0 w-2 cursor-ew-resize hover:bg-[#0A84FF]/40"
+                      className="absolute top-0 right-0 bottom-0 w-2 cursor-ew-resize hover:bg-[#6E6BF2]/40"
                     />
                   </div>
                 );
               })}
             </div>
 
-            {/* A1 音轨 / 字幕轨（灰显占位）：极淡虚线框 */}
-            <div className="h-8 border-b border-white/[0.05] flex items-stretch py-1">
+            {/* A1 音轨 / 字幕轨（着色占位）：淡色块 */}
+            <div className="h-8 border-b border-white/[0.07] flex items-stretch py-1">
               <div
                 data-testid="studio-track-audio"
-                className="flex-1 rounded-md border border-dashed border-white/[0.06] flex items-center justify-center text-[10px] text-white/25"
+                className="flex-1 rounded-md border border-[#4CC38A]/25 bg-[#4CC38A]/10 flex items-center justify-center text-[10px] text-[#4CC38A]/70"
               >
                 {t('studioTlTrackAudio')} · {t('studioTlComingSoon')}
               </div>
             </div>
-            <div className="h-8 border-b border-white/[0.05] flex items-stretch py-1">
+            <div className="h-8 border-b border-white/[0.07] flex items-stretch py-1">
               <div
                 data-testid="studio-track-subtitle"
-                className="flex-1 rounded-md border border-dashed border-white/[0.06] flex items-center justify-center text-[10px] text-white/25"
+                className="flex-1 rounded-md border border-[#E5C77E]/25 bg-[#E5C77E]/10 flex items-center justify-center text-[10px] text-[#E5C77E]/70"
               >
                 {t('studioTlTrackSubtitle')} · {t('studioTlComingSoon')}
               </div>
             </div>
 
-            {/* playhead：蓝细线 + 顶部小圆角把手 */}
+            {/* playhead：红细线 + 顶部圆点把手 */}
             <div
               data-testid="studio-playhead"
-              className="absolute top-0 bottom-0 w-px bg-[#0A84FF] pointer-events-none"
-              style={{ left: playback.playTime * pxPerSec }}
+              className="absolute top-0 bottom-0 w-px pointer-events-none"
+              style={{ left: playback.playTime * pxPerSec, backgroundColor: PLAYHEAD_RED }}
             >
-              <div className="absolute -top-0 -left-[4px] w-[9px] h-3 rounded-[3px] bg-[#0A84FF]" />
+              <div
+                className="absolute top-0 -left-[4.5px] w-2.5 h-2.5 rounded-full"
+                style={{ backgroundColor: PLAYHEAD_RED }}
+              />
             </div>
           </div>
         </div>

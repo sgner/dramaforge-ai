@@ -4,3 +4,15 @@
 .studio-font {
   font-family: "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Segoe UI", sans-serif;
 }
+
+/* ── 全局暗色选区（Runway 蓝紫 accent）── */
+::selection {
+  background: rgba(110, 107, 242, 0.35);
+  color: #F5F5F7;
+}
+
+/* ── 全局暗色滚动条（Firefox）── */
+html {
+  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+  scrollbar-width: thin;
+}

@@ -1,8 +1,9 @@
-import React from 'react';
-import { Plus, Download, UploadCloud, ArrowRight, Film, Sparkles, Diamond, Frame, Play } from 'lucide-react';
-import { DramaTask } from '../types';
+import React, { useMemo, useState } from 'react';
+import { Plus, Download, UploadCloud, Film } from 'lucide-react';
+import { DramaTask, TaskStatus } from '../types';
 import { TaskCard } from './TaskCard';
-import { PipelineStream } from './StreamingPreview';
+
+type WorkshopTab = 'all' | 'active' | 'done';
 
 export const ProjectList = ({
   tasks,
@@ -15,6 +16,7 @@ export const ProjectList = ({
   onOpenStudio,
   importFileInputRef,
   setImportFileInputRef,
+  searchQuery = '',
   t,
   lang
 }: {
@@ -28,136 +30,140 @@ export const ProjectList = ({
   onOpenStudio: (id: string) => void;
   importFileInputRef: HTMLInputElement | null;
   setImportFileInputRef: (ref: HTMLInputElement | null) => void;
+  /** 顶栏搜索框的过滤词（客户端名称过滤，纯展示层）。 */
+  searchQuery?: string;
   t: any;
   lang: string;
 }) => {
+  const [activeTab, setActiveTab] = useState<WorkshopTab>('all');
   const hasProjects = tasks.length > 0;
 
+  const visibleTasks = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return tasks.filter((task) => {
+      if (q && !task.name.toLowerCase().includes(q)) return false;
+      if (activeTab === 'active') {
+        return task.status !== TaskStatus.IDLE && task.status !== TaskStatus.COMPLETED && task.status !== TaskStatus.FAILED;
+      }
+      if (activeTab === 'done') {
+        return task.status === TaskStatus.COMPLETED;
+      }
+      return true;
+    });
+  }, [tasks, searchQuery, activeTab]);
+
+  const tabs: { id: WorkshopTab; label: string }[] = [
+    { id: 'all', label: t('tabAll') },
+    { id: 'active', label: t('tabInProgress') },
+    { id: 'done', label: t('tabCompleted') },
+  ];
+
+  if (!hasProjects) {
+    /* ─── 空状态：暗色居中（brief §3） ─── */
+    return (
+      <div className="min-h-[calc(100vh-3.5rem)] flex flex-col items-center justify-center px-8 text-center page-transition-enter">
+        <input type="file" accept=".json" ref={(ref) => setImportFileInputRef(ref)} onChange={onImportProject} className="hidden" />
+        <div
+          className="w-16 h-16 rounded-2xl flex items-center justify-center mb-6 animate-fade-in-up opacity-0"
+          style={{ animationDelay: '0.05s', background: 'rgba(110,107,242,0.14)', border: '1px solid rgba(110,107,242,0.35)' }}
+        >
+          <Film className="w-7 h-7 text-[#817FF5]" />
+        </div>
+        <h1 className="text-2xl font-semibold text-[#F5F5F7] tracking-tight mb-2 animate-fade-in-up opacity-0" style={{ animationDelay: '0.15s' }}>
+          {t('noProjects')}
+        </h1>
+        <p className="text-sm text-white/45 leading-relaxed max-w-md mb-8 animate-fade-in-up opacity-0" style={{ animationDelay: '0.25s' }}>
+          {t('noProjectsDesc')}
+        </p>
+        <div className="flex items-center gap-3 animate-fade-in-up opacity-0" style={{ animationDelay: '0.35s' }}>
+          <button
+            onClick={() => importFileInputRef?.click()}
+            className="px-4 py-2.5 bg-[#1A1A1F] hover:bg-white/[0.08] border border-white/[0.07] text-white/60 hover:text-[#F5F5F7] rounded-full font-medium flex items-center gap-2 transition-all text-sm"
+          >
+            <UploadCloud className="w-4 h-4" />
+            <span>{t('importProject') || 'Import'}</span>
+          </button>
+          <button
+            onClick={onNewTask}
+            className="btn-press group inline-flex items-center gap-2 px-6 py-2.5 bg-[#6E6BF2] hover:bg-[#817FF5] text-white rounded-full font-semibold transition-all shadow-lg shadow-[#6E6BF2]/25 text-sm"
+          >
+            <Plus className="w-4 h-4 group-hover:rotate-90 transition-transform duration-300" />
+            <span>{t('newProject')}</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div>
-      {hasProjects ? (
-        <>
-          {/* ─── Compact Hero ─── */}
-          <div className="relative overflow-hidden border-b border-[#e8edf3]" style={{ height: '280px' }}>
-            <div className="absolute inset-0 overflow-hidden pointer-events-none">
-              <div className="absolute inset-0" style={{ background: 'radial-gradient(ellipse 60% 80% at 70% 50%, rgba(17,24,39,0.10), transparent)' }} />
-              <div className="absolute right-0 top-0 bottom-0 w-[50%] opacity-30">
-                <PipelineStream localeKey={lang} />
-              </div>
-            </div>
+    <div id="project-workshop" className="px-8 lg:px-10 pb-12 pt-8 page-transition-enter">
+      {/* ─── 页头：大标题 + tab 下划线 + 右侧动作（brief §3） ─── */}
+      <div className="flex items-end justify-between gap-4 mb-2">
+        <div>
+          <h1 className="text-[28px] font-semibold text-[#F5F5F7] tracking-tight leading-tight">{t('workshopTitle')}</h1>
+          <p className="text-xs text-white/40 mt-1.5" data-testid="projects-workshop-hint">
+            {t('projectsWorkshopHint')}
+          </p>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <input type="file" accept=".json" ref={(ref) => setImportFileInputRef(ref)} onChange={onImportProject} className="hidden" />
+          <button
+            onClick={() => importFileInputRef?.click()}
+            className="px-3.5 py-2 bg-[#1A1A1F] hover:bg-white/[0.08] border border-white/[0.07] text-white/60 hover:text-[#F5F5F7] rounded-full font-medium flex items-center gap-1.5 transition-all text-xs"
+          >
+            <UploadCloud className="w-3.5 h-3.5" />
+            <span>{t('importProject') || 'Import'}</span>
+          </button>
+          <button
+            onClick={onExportAll}
+            className="px-3.5 py-2 bg-[#1A1A1F] hover:bg-white/[0.08] border border-white/[0.07] text-white/60 hover:text-[#F5F5F7] rounded-full font-medium flex items-center gap-1.5 transition-all text-xs"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>{t('exportAll') || 'Export All'}</span>
+          </button>
+          <button
+            onClick={onNewTask}
+            className="btn-press group inline-flex items-center gap-1.5 px-4 py-2 bg-[#6E6BF2] hover:bg-[#817FF5] text-white rounded-full font-semibold transition-all shadow-lg shadow-[#6E6BF2]/25 text-xs"
+          >
+            <Plus className="w-3.5 h-3.5 group-hover:rotate-90 transition-transform duration-300" />
+            <span>{t('newProject')}</span>
+          </button>
+        </div>
+      </div>
 
-            <div className="relative z-10 flex items-end h-full px-8 lg:px-12 pb-10">
-              <div className="flex items-end justify-between w-full">
-                <div>
-                  <div className="flex items-center gap-2 mb-3">
-                    <div className="h-px w-8 bg-gradient-to-r from-brand-500/60 to-transparent"></div>
-                    <span className="text-[10px] font-mono uppercase tracking-[0.25em] text-brand-400/70 font-semibold">{t('heroTagline')}</span>
-                  </div>
-                  <h1 className="text-3xl lg:text-4xl font-bold text-[#111827] leading-tight tracking-tight">
-                    {t('heroTitle1')} {t('heroTitle2')} <span className="gradient-text">{t('heroTitleHighlight')}</span>
-                  </h1>
-                </div>
+      {/* ─── Tab 下划线 ─── */}
+      <div className="flex items-center gap-6 border-b border-white/[0.07] mb-6">
+        {tabs.map((tab) => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            className={`relative pb-2.5 pt-3 text-[13px] transition-colors ${
+              activeTab === tab.id ? 'text-[#F5F5F7] font-medium' : 'text-white/40 hover:text-white/70'
+            }`}
+          >
+            {tab.label}
+            {activeTab === tab.id && (
+              <span className="absolute left-0 right-0 -bottom-px h-[2px] rounded-full bg-[#6E6BF2]" />
+            )}
+          </button>
+        ))}
+        <div className="flex-1" />
+        <span className="pb-2.5 text-[11px] font-mono text-white/35">
+          {visibleTasks.length} {visibleTasks.length > 1 ? t('projectsCount') : t('projectCount')}
+        </span>
+      </div>
 
-                <div className="flex items-center gap-2">
-                  <input type="file" accept=".json" ref={(ref) => setImportFileInputRef(ref)} onChange={onImportProject} className="hidden" />
-                  <button onClick={() => importFileInputRef?.click()} className="px-3 py-2 bg-black/[0.04] hover:bg-black/[0.06] text-[#64748b] hover:text-[#111827] rounded-lg font-medium flex items-center gap-1.5 transition-all text-xs">
-                    <UploadCloud className="w-3.5 h-3.5" />
-                    <span>{t('importProject') || 'Import'}</span>
-                  </button>
-                  <button onClick={onExportAll} className="px-3 py-2 bg-black/[0.04] hover:bg-black/[0.06] text-[#64748b] hover:text-[#111827] rounded-lg font-medium flex items-center gap-1.5 transition-all text-xs">
-                    <Download className="w-3.5 h-3.5" />
-                    <span>{t('exportAll') || 'Export All'}</span>
-                  </button>
-                  <button onClick={onNewTask} className="group inline-flex items-center gap-2 px-5 py-2.5 bg-brand-600 hover:bg-brand-500 text-white rounded-xl font-semibold transition-all shadow-lg shadow-brand-600/20 hover:shadow-brand-600/30 hover:-translate-y-0.5 btn-press">
-                    <Plus className="w-4 h-4 group-hover:rotate-90 transition-transform duration-300" />
-                    <span className="text-xs tracking-wide">{t('newProject')}</span>
-                  </button>
-                </div>
-              </div>
+      {/* ─── 项目卡网格 ─── */}
+      {visibleTasks.length > 0 ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+          {visibleTasks.map((task, idx) => (
+            <div key={task.id} className="animate-fade-in-up opacity-0" style={{ animationDelay: `${0.05 + idx * 0.06}s` }}>
+              <TaskCard task={task} onClick={() => onSelectTask(task.id)} onDelete={() => onDeleteTask(task.id)} onExport={() => onExportTask(task.id)} onOpenStudio={() => onOpenStudio(task.id)} t={t} />
             </div>
-          </div>
-
-          {/* ─── Projects Grid ─── */}
-          <div className="relative px-8 lg:px-12 pb-12 pt-8">
-            <div className="flex items-center justify-between mb-6">
-              <div>
-                <h3 className="text-xl font-bold text-[#111827] tracking-tight">{t('workshopTitle')}</h3>
-                <p className="text-xs text-[#94a3b8] mt-1" data-testid="projects-workshop-hint">
-                  {t('projectsWorkshopHint')}
-                </p>
-              </div>
-              <span className="text-xs font-mono text-[#94a3b8]">{tasks.length} {tasks.length > 1 ? t('projectsCount') : t('projectCount')}</span>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-              {tasks.map((task, idx) => (
-                <div key={task.id} className="animate-fade-in-up opacity-0" style={{ animationDelay: `${0.1 + idx * 0.08}s` }}>
-                  <TaskCard task={task} onClick={() => onSelectTask(task.id)} onDelete={() => onDeleteTask(task.id)} onExport={() => onExportTask(task.id)} onOpenStudio={() => onOpenStudio(task.id)} t={t} />
-                </div>
-              ))}
-            </div>
-          </div>
-        </>
+          ))}
+        </div>
       ) : (
-        <>
-          {/* ─── Empty State Hero ─── */}
-          <div className="relative overflow-hidden" style={{ height: 'calc(100vh - 4rem)' }}>
-            <div className="absolute inset-0 overflow-hidden pointer-events-none">
-              <div className="absolute inset-0" style={{ background: 'radial-gradient(ellipse 70% 60% at 70% 50%, rgba(17,24,39,0.12), transparent)' }} />
-              <div className="absolute right-0 top-0 bottom-0 w-[55%] opacity-40">
-                <PipelineStream localeKey={lang} />
-              </div>
-            </div>
-
-            <div className="relative z-10 flex flex-col justify-center px-8 lg:px-12 h-full">
-              <div className="max-w-xl">
-                <div className="flex items-center gap-3 mb-6 animate-fade-in-up opacity-0" style={{ animationDelay: '0.1s' }}>
-                  <div className="h-px flex-1 max-w-[60px] bg-gradient-to-r from-brand-500/60 to-transparent"></div>
-                  <span className="text-[10px] font-mono uppercase tracking-[0.25em] text-brand-400/70 font-semibold">{t('heroTagline')}</span>
-                </div>
-
-                <h1 className="text-5xl lg:text-6xl xl:text-7xl font-bold text-[#111827] leading-[1.05] mb-6 animate-fade-in-up opacity-0 tracking-tight" style={{ animationDelay: '0.2s' }}>
-                  {t('heroTitle1')}<br />
-                  {t('heroTitle2')} <span className="gradient-text">{t('heroTitleHighlight')}</span>
-                </h1>
-
-                <p className="text-[#64748b] text-lg leading-relaxed max-w-md mb-8 animate-fade-in-up opacity-0" style={{ animationDelay: '0.35s' }}>
-                  {t('heroDesc')}
-                </p>
-
-                <div className="flex flex-wrap gap-2 mb-10 animate-fade-in-up opacity-0" style={{ animationDelay: '0.5s' }}>
-                  {[
-                    { label: t('featScriptGen'), icon: Sparkles },
-                    { label: t('featCharDesign'), icon: Diamond },
-                    { label: t('featStoryboard'), icon: Frame },
-                    { label: t('featVideoRender'), icon: Play },
-                  ].map((feat) => (
-                    <div key={feat.label} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-black/[0.04] border border-[#e8edf3] text-xs text-[#64748b]">
-                      <feat.icon className="w-3 h-3 text-brand-400/60" />
-                      {feat.label}
-                    </div>
-                  ))}
-                </div>
-
-                <div className="flex items-center gap-3 animate-fade-in-up opacity-0" style={{ animationDelay: '0.65s' }}>
-                  <input type="file" accept=".json" ref={(ref) => setImportFileInputRef(ref)} onChange={onImportProject} className="hidden" />
-                  <button onClick={() => importFileInputRef?.click()} className="px-4 py-2.5 bg-black/[0.04] hover:bg-black/[0.06] text-[#64748b] hover:text-[#111827] rounded-xl font-medium flex items-center gap-2 transition-all text-sm">
-                    <UploadCloud className="w-4 h-4" />
-                    <span>{t('importProject') || 'Import'}</span>
-                  </button>
-                  <button onClick={onExportAll} className="px-4 py-2.5 bg-black/[0.04] hover:bg-black/[0.06] text-[#64748b] hover:text-[#111827] rounded-xl font-medium flex items-center gap-2 transition-all text-sm">
-                    <Download className="w-4 h-4" />
-                    <span>{t('exportAll') || 'Export All'}</span>
-                  </button>
-                  <button onClick={onNewTask} className="group inline-flex items-center gap-2.5 px-7 py-3 bg-brand-600 hover:bg-brand-500 text-white rounded-2xl font-semibold transition-all shadow-lg shadow-brand-600/20 hover:shadow-brand-600/30 hover:-translate-y-0.5 btn-press">
-                    <Plus className="w-5 h-5 group-hover:rotate-90 transition-transform duration-300" />
-                    <span className="tracking-wide text-sm">{t('newProject')}</span>
-                    <ArrowRight className="w-4 h-4 opacity-0 group-hover:opacity-100 group-hover:translate-x-1 transition-all" />
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </>
+        <div className="py-16 text-center text-sm text-white/35">{t('noProjects')}</div>
       )}
     </div>
   );

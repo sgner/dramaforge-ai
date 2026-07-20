@@ -25,21 +25,29 @@
           theme: {
             extend: {
               colors: {
+                // Runway 暗色 token 集（brief §1）
+                ink: '#0A0A0B',
+                panel: {
+                  DEFAULT: '#131316',
+                  2: '#1A1A1F',
+                },
+                line: 'rgba(255,255,255,0.07)',
+                // 保留 brand-* 名称，映射到新暗色值，减少改动面
                 brand: {
-                  950: '#ffffff',
-                  900: '#f8fafc',
-                  800: '#f1f5f9',
-                  700: '#e8edf3',
-                  600: '#111827',
-                  500: '#374151',
-                  400: '#64748b',
-                  300: '#94a3b8',
+                  950: '#050506',
+                  900: '#0A0A0B',
+                  800: '#131316',
+                  700: '#1A1A1F',
+                  600: '#6E6BF2',
+                  500: '#817FF5',
+                  400: 'rgba(255,255,255,0.45)',
+                  300: 'rgba(255,255,255,0.28)',
                 },
                 accent: {
-                  600: '#1e40af',
-                  500: '#2563eb',
-                  400: '#3b82f6',
-                  300: '#60a5fa',
+                  600: '#5B58E0',
+                  500: '#6E6BF2',
+                  400: '#817FF5',
+                  300: '#A5A3F8',
                 }
               },
               fontFamily: {
@@ -94,31 +102,38 @@
     </script>
     <style>
       :root {
-        --bg: #f8fafc;
-        --bg-soft: #ffffff;
-        --surface: #ffffff;
-        --surface-2: #f1f5f9;
-        --border: #e8edf3;
-        --border-light: #cbd5e1;
-        --text: #111827;
-        --text-muted: #64748b;
-        --text-faint: #94a3b8;
-        --accent: #111827;
-        --accent-light: #374151;
-        --accent-soft: rgba(17, 24, 39, 0.06);
-        --success: #16a34a;
-        --warning: #f59e0b;
-        --danger: #dc2626;
+        /* Runway 暗色设计令牌（brief §1） */
+        --bg: #0A0A0B;
+        --bg-soft: #131316;
+        --surface: #131316;
+        --surface-2: #1A1A1F;
+        --border: rgba(255, 255, 255, 0.07);
+        --border-light: rgba(255, 255, 255, 0.12);
+        --text: #F5F5F7;
+        --text-muted: rgba(255, 255, 255, 0.45);
+        --text-faint: rgba(255, 255, 255, 0.28);
+        --accent: #6E6BF2;
+        --accent-light: #817FF5;
+        --accent-soft: rgba(110, 107, 242, 0.14);
+        --success: #3ECF8E;
+        --warning: #F5B544;
+        --danger: #F26161;
         --ease: cubic-bezier(0.16, 1, 0.3, 1);
+        color-scheme: dark;
       }
 
       * {
         box-sizing: border-box;
       }
 
+      /* 首屏兜底必须暗色：Tailwind CDN 异步加载前的 fallback 渲染不能白闪 */
+      html {
+        background-color: #0A0A0B;
+      }
+
       body {
-        background-color: var(--bg);
-        color: var(--text);
+        background-color: #0A0A0B;
+        color: #F5F5F7;
         font-family: 'Inter', system-ui, sans-serif;
         -webkit-font-smoothing: antialiased;
         -moz-osx-font-smoothing: grayscale;
@@ -132,34 +147,34 @@
         background: transparent;
       }
       ::-webkit-scrollbar-thumb {
-        background: rgba(17, 24, 39, 0.12);
+        background: rgba(255, 255, 255, 0.12);
         border-radius: 4px;
       }
       ::-webkit-scrollbar-thumb:hover {
-        background: rgba(17, 24, 39, 0.25);
+        background: rgba(255, 255, 255, 0.25);
       }
 
       /* ── Glass ── */
       .glass {
-        background: rgba(255, 255, 255, 0.8);
+        background: rgba(19, 19, 22, 0.82);
         backdrop-filter: blur(16px) saturate(1.2);
         -webkit-backdrop-filter: blur(16px) saturate(1.2);
-        border: 1px solid rgba(17, 24, 39, 0.06);
+        border: 1px solid rgba(255, 255, 255, 0.07);
       }
       .glass-hover:hover {
-        background: rgba(255, 255, 255, 0.95);
-        border-color: rgba(17, 24, 39, 0.12);
+        background: rgba(26, 26, 31, 0.95);
+        border-color: rgba(255, 255, 255, 0.14);
       }
 
       /* ── Gradient text ── */
       .gradient-text {
-        background: linear-gradient(135deg, #111827, #374151, #111827);
+        background: linear-gradient(135deg, #F5F5F7, #A5A3F8, #F5F5F7);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         background-clip: text;
       }
       .gradient-text-animated {
-        background: linear-gradient(135deg, #111827, #374151, #111827);
+        background: linear-gradient(135deg, #F5F5F7, #A5A3F8, #F5F5F7);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         background-clip: text;
@@ -178,7 +193,7 @@
         transition: box-shadow 0.3s var(--ease), border-color 0.3s var(--ease), transform 0.3s var(--ease);
       }
       .card-glow:hover {
-        box-shadow: 0 0 0 1px rgba(17, 24, 39, 0.08), 0 12px 40px rgba(0, 0, 0, 0.08);
+        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.10), 0 12px 40px rgba(0, 0, 0, 0.45);
       }
 
       .hover-lift {
@@ -186,7 +201,7 @@
       }
       .hover-lift:hover {
         transform: translateY(-2px);
-        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.08);
+        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
       }
 
       /* ── Status dots ── */
@@ -198,10 +213,10 @@
         margin-right: 6px;
         flex-shrink: 0;
       }
-      .status-dot-idle { background: #94a3b8; }
-      .status-dot-processing { background: #2563eb; animation: statusPulse 1.5s ease-in-out infinite; }
-      .status-dot-completed { background: #16a34a; }
-      .status-dot-failed { background: #dc2626; }
+      .status-dot-idle { background: rgba(255, 255, 255, 0.35); }
+      .status-dot-processing { background: #6E6BF2; animation: statusPulse 1.5s ease-in-out infinite; }
+      .status-dot-completed { background: #3ECF8E; }
+      .status-dot-failed { background: #F26161; }
       @keyframes statusPulse {
         0%, 100% { opacity: 1; transform: scale(1); }
         50% { opacity: 0.5; transform: scale(1.4); }
@@ -209,7 +224,7 @@
 
       /* ── Shimmer ── */
       .shimmer-bg {
-        background: linear-gradient(90deg, transparent 0%, rgba(17, 24, 39, 0.04) 50%, transparent 100%);
+        background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.05) 50%, transparent 100%);
         background-size: 200% 100%;
         animation: shimmer 3s linear infinite;
       }
@@ -219,7 +234,7 @@
       }
 
       .skeleton {
-        background: linear-gradient(90deg, rgba(17, 24, 39, 0.04) 25%, rgba(17, 24, 39, 0.08) 50%, rgba(17, 24, 39, 0.04) 75%);
+        background: linear-gradient(90deg, rgba(255, 255, 255, 0.04) 25%, rgba(255, 255, 255, 0.09) 50%, rgba(255, 255, 255, 0.04) 75%);
         background-size: 200% 100%;
         animation: shimmer 1.5s ease-in-out infinite;
         border-radius: 8px;
@@ -255,11 +270,11 @@
         background: transparent;
       }
       .custom-scrollbar::-webkit-scrollbar-thumb {
-        background: rgba(17, 24, 39, 0.1);
+        background: rgba(255, 255, 255, 0.12);
         border-radius: 3px;
       }
       .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-        background: rgba(17, 24, 39, 0.2);
+        background: rgba(255, 255, 255, 0.22);
       }
 
       /* ── Toast ── */
@@ -321,7 +336,7 @@
         top: 0;
         bottom: 0;
         width: 2px;
-        background: linear-gradient(to bottom, rgba(17, 24, 39, 0.3), rgba(17, 24, 39, 0.06), transparent);
+        background: linear-gradient(to bottom, rgba(110, 107, 242, 0.5), rgba(255, 255, 255, 0.08), transparent);
         border-radius: 1px;
       }
 
@@ -346,7 +361,7 @@
         display: inline-block;
         width: 2px;
         height: 1em;
-        background: #111827;
+        background: #F5F5F7;
         animation: typingBlink 0.8s step-end infinite;
         vertical-align: text-bottom;
         margin-left: 1px;
@@ -374,7 +389,7 @@
       .celebration-ring {
         position: absolute;
         border-radius: 50%;
-        border: 2px solid rgba(17, 24, 39, 0.4);
+        border: 2px solid rgba(110, 107, 242, 0.5);
         pointer-events: none;
         animation: celebrationRing 1s var(--ease) forwards;
       }
@@ -395,7 +410,7 @@
       /* ── Tree connector ── */
       .tree-connector {
         position: absolute;
-        background-color: rgba(17, 24, 39, 0.08);
+        background-color: rgba(255, 255, 255, 0.08);
         z-index: 0;
       }
 
