@@ -57,15 +57,17 @@ export const ErrorRecoveryCard: React.FC = () => {
     padding: 0,
   };
 
+  // 颜色全部走 canvas.css / agent.css 的主题 token（var(--*)），
+  // 让卡片在 .theme-dark（暗色）与 :root（浅色）下都正确适配。
   const cardStyle: React.CSSProperties = {
-    background: '#ffffff',
-    color: '#10141d',
-    border: '1px solid #10141d',
+    background: 'var(--panel)',
+    color: 'var(--text)',
+    border: '1px solid var(--line-strong)',
     borderRadius: 12,
     padding: 12,
     width: '100%',
     boxSizing: 'border-box',
-    boxShadow: 'none',
+    boxShadow: '0 18px 48px var(--shadow)',
     fontFamily: 'ui-sans-serif, system-ui, sans-serif',
     fontSize: 13,
     pointerEvents: 'auto',
@@ -74,16 +76,16 @@ export const ErrorRecoveryCard: React.FC = () => {
   return (
     <div data-testid="error-recovery-card" role="region" aria-label="工具失败恢复" style={overlayStyle}>
       <div style={cardStyle}>
-        <h3 style={{ margin: '0 0 12px 0', color: '#10141d', fontSize: 18, fontWeight: 800 }}>⚠ 工具执行失败</h3>
+        <h3 style={{ margin: '0 0 12px 0', color: 'var(--text)', fontSize: 18, fontWeight: 800 }}>⚠ 工具执行失败</h3>
         <div data-testid="erc-tool" style={{ marginBottom: 6 }}>
-          工具: <code style={{ background: '#f1f5f9', padding: '2px 6px', borderRadius: 4 }}>{pending.tool}</code>
+          工具: <code style={{ background: 'var(--soft-2)', color: 'var(--text)', padding: '2px 6px', borderRadius: 4 }}>{pending.tool}</code>
         </div>
-        <div data-testid="erc-error" style={{ marginBottom: 16, color: '#64748b' }}>
+        <div data-testid="erc-error" style={{ marginBottom: 16, color: 'var(--muted)' }}>
           错误: {pending.error}
         </div>
 
         <div role="radiogroup" style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
-          <label style={{ cursor: 'pointer', color: '#10141d' }}>
+          <label style={{ cursor: 'pointer', color: 'var(--text)' }}>
             <input
               type="radio"
               name="erc-action"
@@ -94,7 +96,7 @@ export const ErrorRecoveryCard: React.FC = () => {
             />
             重试（用相同参数重新执行）
           </label>
-          <label style={{ cursor: 'pointer', color: '#10141d' }}>
+          <label style={{ cursor: 'pointer', color: 'var(--text)' }}>
             <input
               type="radio"
               name="erc-action"
@@ -105,7 +107,7 @@ export const ErrorRecoveryCard: React.FC = () => {
             />
             换模型
           </label>
-          <label style={{ cursor: 'pointer', color: '#10141d' }}>
+          <label style={{ cursor: 'pointer', color: 'var(--text)' }}>
             <input
               type="radio"
               name="erc-action"
@@ -127,7 +129,9 @@ export const ErrorRecoveryCard: React.FC = () => {
               width: '100%',
               padding: 8,
               borderRadius: 6,
-              border: '1px solid #10141d',
+              border: '1px solid var(--line-2)',
+              background: 'var(--bg)',
+              color: 'var(--text)',
               marginBottom: 16,
               fontSize: 13,
             }}
@@ -141,7 +145,7 @@ export const ErrorRecoveryCard: React.FC = () => {
           </select>
         )}
 
-        {submitError && <div role="alert" style={{ marginBottom: 10, color: '#10141d', fontSize: 12, fontWeight: 700 }}>{submitError}</div>}
+        {submitError && <div role="alert" style={{ marginBottom: 10, color: 'var(--danger)', fontSize: 12, fontWeight: 700 }}>{submitError}</div>}
 
         <button
           data-testid="erc-confirm"
@@ -153,8 +157,8 @@ export const ErrorRecoveryCard: React.FC = () => {
             padding: '10px 16px',
             borderRadius: 6,
             border: 0,
-            background: '#10141d',
-            color: '#ffffff',
+            background: 'var(--text)',
+            color: 'var(--panel)',
             cursor: submitting ? 'wait' : 'pointer',
             fontSize: 14,
             fontWeight: 600,
