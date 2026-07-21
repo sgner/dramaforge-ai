@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Plus, Download, UploadCloud, Film } from 'lucide-react';
+import { Plus, Download, UploadCloud } from 'lucide-react';
 import { DramaTask, TaskStatus } from '../types';
 import { TaskCard } from './TaskCard';
 
@@ -17,6 +17,7 @@ export const ProjectList = ({
   importFileInputRef,
   setImportFileInputRef,
   searchQuery = '',
+  onQuickCreate,
   t,
   lang
 }: {
@@ -32,10 +33,13 @@ export const ProjectList = ({
   setImportFileInputRef: (ref: HTMLInputElement | null) => void;
   /** 顶栏搜索框的过滤词（客户端名称过滤，纯展示层）。 */
   searchQuery?: string;
+  /** 空状态 Suno 式 prompt bar 的快速创建（传入项目名）。 */
+  onQuickCreate?: (name: string) => void;
   t: any;
   lang: string;
 }) => {
   const [activeTab, setActiveTab] = useState<WorkshopTab>('all');
+  const [quickName, setQuickName] = useState('');
   const hasProjects = tasks.length > 0;
 
   const visibleTasks = useMemo(() => {
@@ -59,38 +63,60 @@ export const ProjectList = ({
   ];
 
   if (!hasProjects) {
-    /* ─── 空状态：暗色居中（brief §3） ─── */
+    /* ─── 空状态：Suno 式沉浸首屏 —— 居中大标题 + prompt bar + 渐变 Create ─── */
+    const quickCreate = () => {
+      const name = quickName.trim();
+      if (!name) return;
+      if (onQuickCreate) {
+        onQuickCreate(name);
+      } else {
+        onNewTask();
+      }
+    };
     return (
-      <div className="min-h-[calc(100vh-3.5rem)] flex flex-col items-center justify-center px-8 text-center page-transition-enter">
+      <div className="min-h-[calc(100vh-3.5rem)] flex flex-col items-center justify-center px-8 text-center">
         <input type="file" accept=".json" ref={(ref) => setImportFileInputRef(ref)} onChange={onImportProject} className="hidden" />
-        <div
-          className="w-16 h-16 rounded-2xl flex items-center justify-center mb-6 animate-fade-in-up opacity-0"
-          style={{ animationDelay: '0.05s', background: 'rgba(255,92,57,0.12)', border: '1px solid rgba(255,138,107,0.35)' }}
-        >
-          <Film className="w-7 h-7 text-[#FF8A6B]" />
+
+        <div className="mb-7 px-4 py-1.5 rounded-full border border-white/[0.10] bg-white/[0.04] backdrop-blur-xl text-[11px] font-medium tracking-[0.22em] uppercase text-white/55 animate-fade-in-up opacity-0" style={{ animationDelay: '0.05s' }}>
+          {t('heroTagline')}
         </div>
-        <h1 className="text-2xl font-semibold text-[#F5F5F7] tracking-tight mb-2 animate-fade-in-up opacity-0" style={{ animationDelay: '0.15s' }}>
-          {t('noProjects')}
+
+        <h1 className="text-[52px] md:text-[64px] leading-[1.04] font-semibold tracking-[-0.03em] text-white animate-fade-in-up opacity-0" style={{ animationDelay: '0.15s' }}>
+          {t('heroTitle1')}<br />
+          {t('heroTitle2')}{' '}<span className="warm-gradient-text">{t('heroTitleHighlight')}</span>
         </h1>
-        <p className="text-sm text-white/45 leading-relaxed max-w-md mb-8 animate-fade-in-up opacity-0" style={{ animationDelay: '0.25s' }}>
-          {t('noProjectsDesc')}
+
+        <p className="mt-6 text-[15px] leading-relaxed text-white/50 max-w-lg animate-fade-in-up opacity-0" style={{ animationDelay: '0.25s' }}>
+          {t('heroDesc')}
         </p>
-        <div className="flex items-center gap-3 animate-fade-in-up opacity-0" style={{ animationDelay: '0.35s' }}>
+
+        {/* Suno prompt bar */}
+        <div className="mt-11 w-full max-w-xl flex items-center gap-2 rounded-2xl border border-white/[0.10] bg-white/[0.05] backdrop-blur-2xl p-2 pl-5 shadow-[0_24px_64px_-24px_rgba(0,0,0,0.7)] animate-fade-in-up opacity-0" style={{ animationDelay: '0.35s' }}>
+          <input
+            value={quickName}
+            onChange={(e) => setQuickName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') quickCreate(); }}
+            placeholder={t('projectNamePlaceholder')}
+            autoFocus
+            className="flex-1 h-11 bg-transparent text-[15px] text-white placeholder:text-white/35 focus:outline-none"
+          />
           <button
-            onClick={() => importFileInputRef?.click()}
-            className="px-4 py-2.5 bg-white/[0.045] hover:bg-white/[0.09] border border-white/[0.06] backdrop-blur-xl text-white/60 hover:text-[#F5F5F7] rounded-full font-medium flex items-center gap-2 transition-all text-sm"
+            onClick={quickCreate}
+            disabled={!quickName.trim()}
+            className="cta-primary btn-press h-11 px-6 rounded-xl font-semibold text-sm flex items-center gap-2 flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none"
           >
-            <UploadCloud className="w-4 h-4" />
-            <span>{t('importProject') || 'Import'}</span>
-          </button>
-          <button
-            onClick={onNewTask}
-            className="btn-press cta-primary group inline-flex items-center gap-2 px-6 py-2.5 rounded-full font-semibold text-sm"
-          >
-            <Plus className="w-4 h-4 group-hover:rotate-90 transition-transform duration-300" />
-            <span>{t('newProject')}</span>
+            <Plus className="w-4 h-4" />
+            <span>{t('createProject')}</span>
           </button>
         </div>
+
+        <button
+          onClick={() => importFileInputRef?.click()}
+          className="mt-6 flex items-center gap-1.5 text-[13px] text-white/40 hover:text-white/75 transition-colors animate-fade-in-up opacity-0" style={{ animationDelay: '0.45s' }}
+        >
+          <UploadCloud className="w-3.5 h-3.5" />
+          <span>{t('importProject') || 'Import'}</span>
+        </button>
       </div>
     );
   }

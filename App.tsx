@@ -706,6 +706,31 @@ function AppContent() {
 
   const currentShotInTask = activeTask?.bigShots.find(s => s.id === selectedShotConfig?.id);
 
+  /** 统一的新建项目入口：弹窗按钮 / 回车 / 空状态 quick-create 共用。 */
+  const createProjectByName = (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const newTask: DramaTask = {
+      id: genId(),
+      name: trimmed,
+      style: ArtStyle.REALISTIC,
+      language: 'zh',
+      mode: 'auto',
+      sourceType: 'idea',
+      createdAt: Date.now(),
+      status: TaskStatus.IDLE,
+      stepStatus: 'idle',
+      progress: 0,
+      rawNovelText: '',
+      originalIdea: undefined,
+      characters: [],
+      bigShots: [],
+    };
+    setTasks(prev => [newTask, ...prev]);
+    setActiveTaskId(newTask.id);
+    setIsNewProjectModalOpen(false);
+  };
+
   const getStepLabelKey = (step: TaskStatus, sourceType?: 'novel' | 'idea') => {
       if (step === TaskStatus.PREPROCESSING) return sourceType === 'idea' ? 'step_expansion' : 'step_structuring';
       return step;
@@ -931,6 +956,7 @@ function AppContent() {
             importFileInputRef={importFileInputRef}
             setImportFileInputRef={setImportFileInputRef}
             searchQuery={searchQuery}
+            onQuickCreate={(name) => createProjectByName(name)}
             t={t}
             lang={lang}
           />
@@ -1047,27 +1073,7 @@ function AppContent() {
               className="w-full bg-white/[0.06] border border-transparent rounded-xl px-4 py-3 text-sm text-[#F5F5F7] focus:outline-none focus:border-[#FF6B4A]/50 focus:ring-2 focus:ring-[#FF6B4A]/25 transition-all placeholder:text-white/30"
               autoFocus
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && newProjectName.trim()) {
-                  const newTask: DramaTask = {
-                    id: genId(),
-                    name: newProjectName.trim(),
-                    style: ArtStyle.REALISTIC,
-                    language: 'zh',
-                    mode: 'auto',
-                    sourceType: 'idea',
-                    createdAt: Date.now(),
-                    status: TaskStatus.IDLE,
-                    stepStatus: 'idle',
-                    progress: 0,
-                    rawNovelText: '',
-                    originalIdea: undefined,
-                    characters: [],
-                    bigShots: [],
-                  };
-                  setTasks(prev => [newTask, ...prev]);
-                  setActiveTaskId(newTask.id);
-                  setIsNewProjectModalOpen(false);
-                }
+                if (e.key === 'Enter') createProjectByName(newProjectName);
               }}
             />
             <div className="flex justify-end gap-3 mt-5">
@@ -1078,28 +1084,7 @@ function AppContent() {
                 {t('cancel')}
               </button>
               <button
-                onClick={() => {
-                  if (!newProjectName.trim()) return;
-                  const newTask: DramaTask = {
-                    id: genId(),
-                    name: newProjectName.trim(),
-                    style: ArtStyle.REALISTIC,
-                    language: 'zh',
-                    mode: 'auto',
-                    sourceType: 'idea',
-                    createdAt: Date.now(),
-                    status: TaskStatus.IDLE,
-                    stepStatus: 'idle',
-                    progress: 0,
-                    rawNovelText: '',
-                    originalIdea: undefined,
-                    characters: [],
-                    bigShots: [],
-                  };
-                  setTasks(prev => [newTask, ...prev]);
-                  setActiveTaskId(newTask.id);
-                  setIsNewProjectModalOpen(false);
-                }}
+                onClick={() => createProjectByName(newProjectName)}
                 disabled={!newProjectName.trim()}
                 className={`btn-press px-5 py-2 rounded-full text-sm font-semibold flex items-center gap-2 transition-all ${
                   newProjectName.trim()

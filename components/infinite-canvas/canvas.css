@@ -17,8 +17,8 @@
   --shadow: rgba(15,23,42,.08);
   --strong: #111827;
   --strong-text: #fff;
-  --accent: #6E6BF2;
-  --accent-soft: #e5e4fd;
+  --accent: #E85A38;
+  --accent-soft: #FDE8E1;
   --bg: #ffffff;
   --success: #16a34a;
   --warning: #f59e0b;
@@ -44,8 +44,8 @@
   --shadow: rgba(0,0,0,.4);
   --strong: #F5F5F7;
   --strong-text: #0A0A0B;
-  --accent: #6E6BF2;
-  --accent-soft: rgba(110,107,242,.18);
+  --accent: #FF6B4A;
+  --accent-soft: rgba(255,107,74,.16);
   --bg: #0A0A0B;
 }
 
@@ -4211,11 +4211,11 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity: 0 !imp
   background: var(--accent);
   border-color: var(--accent);
   color: #fff;
-  box-shadow: 0 8px 18px rgba(0,0,0,.24);
+  box-shadow: 0 8px 18px rgba(255,92,57,.24);
 }
 .theme-dark .api-recommend-btn:hover {
-  background: #8381f6;
-  border-color: #8381f6;
+  background: #FF8A6B;
+  border-color: #FF8A6B;
   color: #fff;
 }
 
@@ -4796,13 +4796,13 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity: 0 !imp
   background: var(--accent);
   color: #fff;
   border-color: var(--accent);
-  box-shadow: 0 8px 18px rgba(110,107,242,.24);
+  box-shadow: 0 8px 18px rgba(255,92,57,.26);
 }
 .theme-dark .api-save-btn:hover {
-  background: #8381f6;
+  background: #FF8A6B;
   color: #fff;
-  border-color: #8381f6;
-  box-shadow: 0 10px 22px rgba(110,107,242,.32);
+  border-color: #FF8A6B;
+  box-shadow: 0 10px 22px rgba(255,92,57,.34);
 }
 .theme-dark .api-save-btn.is-saved {
   background: var(--accent);
@@ -4816,8 +4816,8 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity: 0 !imp
   border-color: var(--accent);
 }
 .theme-dark .api-action-btn.api-primary-btn:hover {
-  background: #8381f6;
-  border-color: #8381f6;
+  background: #FF8A6B;
+  border-color: #FF8A6B;
 }
 
 /* Step Grid */
