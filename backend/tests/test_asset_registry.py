@@ -359,3 +359,36 @@ class TestAssetReusePreview:
         from app.agent.tools.image_tools import _check_existing_assets
         result = await _check_existing_assets(ctx, name="林尘", asset_kind="character")
         assert result is None
+
+
+class TestBackwardCompat:
+    def test_old_assets_without_story_entity_id_searchable(self, db_session):
+        """旧资产（story_entity_id=NULL）仍可被搜索。"""
+        from app.models import Asset
+        db_session.add(Asset(
+            id="old1", project_id="p1", kind="image",
+            asset_kind="character", name="旧角色",
+        ))
+        db_session.commit()
+
+        from app.agent.tools.asset_registry_helpers import search_assets
+        results = search_assets(db_session, "p1", "旧角色")
+        assert len(results) == 1
+        # 搜索后应自动生成 story_entity_id
+        assert results[0]["story_entity_id"] is not None
+
+    def test_migration_adds_columns_without_breaking(self, db_session):
+        """迁移后现有 Asset CRUD 仍正常工作。"""
+        from app.models import Asset
+        a = Asset(
+            id="m1", project_id="p1", kind="image",
+            asset_kind="character", name="迁移测试",
+        )
+        db_session.add(a)
+        db_session.commit()
+        # 能读回来
+        found = db_session.query(Asset).filter(Asset.id == "m1").first()
+        assert found is not None
+        assert found.name == "迁移测试"
+        # 新字段有默认值
+        assert found.story_entity_id is None  # 未调 _ensure_story_entity 前
