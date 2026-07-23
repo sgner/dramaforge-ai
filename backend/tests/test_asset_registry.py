@@ -7,6 +7,8 @@ from sqlalchemy.pool import StaticPool
 from app.database import Base
 from app.models import Asset, _ensure_story_entity
 from app.agent.tools.asset_registry_helpers import search_assets, group_by_entity
+from app.agent.tools.asset_registry_tools import SearchProjectAssetsTool
+from app.agent.tools.base import ToolContext
 
 
 @pytest.fixture
@@ -170,3 +172,49 @@ class TestGroupByEntity:
         result = group_by_entity(assets)
         assert result["total_entities"] == 2
         assert result["total_assets"] == 2
+
+
+class TestSearchProjectAssetsTool:
+    def test_metadata(self):
+        t = SearchProjectAssetsTool()
+        assert t.name == "search_project_assets"
+        assert t.category == "asset"
+        assert t.requires_approval is False
+        assert {"query"} <= {p.name for p in t.parameters}
+
+    @pytest.mark.asyncio
+    async def test_returns_grouped_results(self, db_session):
+        """工具返回按 entity 聚合的结果。"""
+        from app.models import Asset
+        db_session.add(Asset(
+            id="a1", project_id="p1", kind="image",
+            asset_kind="character", name="林尘",
+        ))
+        db_session.commit()
+
+        ctx = ToolContext(task_id="t1", project_id="p1", db=db_session)
+        result = await SearchProjectAssetsTool().call(ctx, {"query": "林尘"})
+        assert "entities" in result
+        assert result["total_assets"] == 1
+        assert result["entities"][0]["story_entity_name"] == "林尘"
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_when_no_match(self, db_session):
+        ctx = ToolContext(task_id="t1", project_id="p1", db=db_session)
+        result = await SearchProjectAssetsTool().call(ctx, {"query": "不存在"})
+        assert result["total_assets"] == 0
+        assert result["entities"] == []
+
+    @pytest.mark.asyncio
+    async def test_filters_by_asset_kind(self, db_session):
+        from app.models import Asset
+        db_session.add(Asset(id="a1", project_id="p1", kind="image", asset_kind="character", name="林尘"))
+        db_session.add(Asset(id="a2", project_id="p1", kind="image", asset_kind="prop", name="林尘"))
+        db_session.commit()
+
+        ctx = ToolContext(task_id="t1", project_id="p1", db=db_session)
+        result = await SearchProjectAssetsTool().call(ctx, {
+            "query": "林尘", "asset_kind": "character",
+        })
+        assert result["total_assets"] == 1
+        assert result["entities"][0]["asset_kind"] == "character"

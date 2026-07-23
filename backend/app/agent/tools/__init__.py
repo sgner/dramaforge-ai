@@ -6,9 +6,9 @@
 - image (4): generate_character_portrait, generate_prop_image, generate_scene_image, generate_storyboard_image
 - video (1): generate_video
 - audio (2): generate_voiceover, generate_bgm
-- asset (4): save_asset, get_artifacts, read_text_asset, update_text_asset
+- asset (5): save_asset, get_artifacts, read_text_asset, update_text_asset, search_project_assets
 
-总计 24 个。
+总计 25 个。
 """
 from .base import (
     BaseTool,
@@ -50,6 +50,7 @@ from .asset_tools import (
     UpdateTextAssetTool,
 )
 from .asset_intelligence_tools import InspectAssetTool, PrepareCharacterAssetTool
+from .asset_registry_tools import SearchProjectAssetsTool
 
 
 # 全部工具的元组，便于注册
@@ -84,6 +85,7 @@ ALL_TOOLS: tuple[type[BaseTool], ...] = (
     UpdateTextAssetTool,
     InspectAssetTool,
     PrepareCharacterAssetTool,
+    SearchProjectAssetsTool,
 )
 
 
@@ -156,6 +158,7 @@ __all__ = [
     "UpdateTextAssetTool",
     "InspectAssetTool",
     "PrepareCharacterAssetTool",
+    "SearchProjectAssetsTool",
     "ALL_TOOLS",
     "build_default_registry",
     "list_tool_metadata",
