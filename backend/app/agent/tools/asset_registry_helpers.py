@@ -96,3 +96,26 @@ def group_by_entity(assets: list[dict]) -> dict:
         "total_entities": len(entities),
         "total_assets": len(assets),
     }
+
+
+def collect_canvas_references(
+    db: Session,
+    project_id: str,
+    target_node_id: str | None = None,
+) -> list[str]:
+    """从画布连线收集 asset_ref，返回 asset_id 列表。"""
+    from ...models import Connection
+    from sqlalchemy import select
+
+    stmt = select(Connection).where(Connection.project_id == project_id)
+    if target_node_id:
+        stmt = stmt.where(Connection.to_node == target_node_id)
+
+    connections = db.execute(stmt).scalars().all()
+    asset_ids: list[str] = []
+    for conn in connections:
+        data = conn.data if isinstance(conn.data, dict) else {}
+        asset_ref = data.get("asset_ref")
+        if asset_ref and asset_ref not in asset_ids:
+            asset_ids.append(asset_ref)
+    return asset_ids
