@@ -136,3 +136,54 @@ def rebuild_assets_from_nodes(project_id: str, db: Session = Depends(get_db)):
         created += 1
     db.commit()
     return {"ok": True, "created": created}
+
+
+@router.get("/search")
+def search_assets_api(
+    project_id: str = Query(...),
+    q: str = Query(..., min_length=1),
+    asset_kind: Optional[str] = None,
+    include_unidentified: bool = False,
+    db: Session = Depends(get_db),
+):
+    """项目资产搜索（供前端资产面板 + agent 工具共用）。
+
+    返回按 story_entity 聚合的结果，结构与 SearchProjectAssetsTool 一致。
+    """
+    from app.agent.tools.asset_registry_helpers import search_assets, group_by_entity
+    results = search_assets(
+        db, project_id, q,
+        asset_kind=asset_kind,
+        include_unidentified=include_unidentified,
+    )
+    return group_by_entity(results)
+
+
+@router.post("/{asset_id}/identify")
+def identify_asset(
+    asset_id: str,
+    payload: schemas.AssetIdentifyRequest,
+    db: Session = Depends(get_db),
+):
+    """手动标识上传资产。
+
+    前端资产面板对未标识资产（asset_kind=NULL 且 inspection_status=pending）
+    调用此端点补充 asset_kind / name，并生成 story_entity_id，标记为 ready。
+    """
+    asset = db.query(models.Asset).filter(models.Asset.id == asset_id).first()
+    if not asset:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    asset.asset_kind = payload.asset_kind
+    asset.name = payload.name
+    if payload.story_entity_name:
+        asset.story_entity_name = payload.story_entity_name
+    models._ensure_story_entity(asset)
+    asset.inspection_status = "ready"
+    db.commit()
+    return {
+        "id": asset.id,
+        "asset_kind": asset.asset_kind,
+        "name": asset.name,
+        "inspection_status": asset.inspection_status,
+        "story_entity_id": asset.story_entity_id,
+    }

@@ -1,11 +1,14 @@
 """资产复用层测试。"""
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base
 from app.models import Asset, _ensure_story_entity
+from app.routers.assets import identify_asset, router as assets_router, search_assets_api
+from app.schemas import AssetIdentifyRequest
 from app.agent.tools.asset_registry_helpers import search_assets, group_by_entity
 from app.agent.tools.asset_registry_tools import SearchProjectAssetsTool
 from app.agent.tools.base import ToolContext
@@ -218,3 +221,88 @@ class TestSearchProjectAssetsTool:
         })
         assert result["total_assets"] == 1
         assert result["entities"][0]["asset_kind"] == "character"
+
+
+def _find_route(path: str, method: str):
+    """从 assets_router 中按 path+method 找路由对象（path 不含 /api/assets 前缀）。"""
+    for route in assets_router.routes:
+        if getattr(route, "path", None) == path and method in (getattr(route, "methods", set()) or set()):
+            return route
+    return None
+
+
+class TestSearchAssetsAPI:
+    """GET /api/assets/search 端点测试。
+
+    直接调用路由处理函数（FastAPI 路由到的同一个函数）验证行为，避开
+    TestClient——本机 WinError 10055（系统套接字缓冲区耗尽）导致 anyio
+    blocking portal 无法创建。这等价于 ASGI 层调用：处理函数签名、依赖
+    注入后的 db session 与真实请求一致。路由注册 + Query 校验声明由
+    test_search_empty_query_returns_422 单独覆盖。
+    """
+
+    def test_search_returns_results(self, db_session):
+        """API 搜索返回聚合结果。"""
+        db_session.add(Asset(
+            id="a1", project_id="p1", kind="image",
+            asset_kind="character", name="林尘",
+        ))
+        db_session.commit()
+
+        result = search_assets_api(project_id="p1", q="林尘", db=db_session)
+        assert result["total_assets"] == 1
+        assert result["entities"][0]["story_entity_name"] == "林尘"
+
+    def test_search_empty_query_returns_422(self):
+        """q 为空串时 Query(min_length=1) 校验失败返回 422。
+
+        校验发生在 ASGI 层（请求体进入处理函数前），无法通过直接调用函数触发，
+        故改为检查路由声明：确认 q 参数 required 且 min_length=1，这是 FastAPI
+        产生 422 的根因。
+        """
+        route = _find_route("/search", "GET")
+        assert route is not None, "GET /api/assets/search 路由未注册"
+        q_param = next(p for p in route.dependant.query_params if p.name == "q")
+        # min_length 存于 field_info.metadata 的 MinLen 约束里
+        min_len = next(
+            (getattr(m, "min_length", None) for m in q_param.field_info.metadata if hasattr(m, "min_length")),
+            None,
+        )
+        assert min_len == 1, f"q 的 min_length 应为 1（空串触发 422），实际 {min_len}"
+        assert q_param.field_info.is_required(), "q 应为必填"
+
+
+class TestIdentifyAssetAPI:
+    """POST /api/assets/{asset_id}/identify 端点测试。
+
+    同 TestSearchAssetsAPI，直接调用路由处理函数验证行为。
+    """
+
+    def test_identify_updates_asset(self, db_session):
+        """手动标识上传资产：写入 asset_kind/name，生成 story_entity_id，标记 ready。"""
+        db_session.add(Asset(
+            id="a1", project_id="p1", kind="image",
+            name="upload1", inspection_status="pending",
+        ))
+        db_session.commit()
+
+        payload = AssetIdentifyRequest(asset_kind="character", name="林尘")
+        result = identify_asset("a1", payload, db=db_session)
+
+        assert result["asset_kind"] == "character"
+        assert result["name"] == "林尘"
+        assert result["inspection_status"] == "ready"
+        assert result["story_entity_id"] is not None
+
+        # 验证 DB 真的持久化了
+        db_asset = db_session.get(Asset, "a1")
+        assert db_asset.asset_kind == "character"
+        assert db_asset.inspection_status == "ready"
+        assert db_asset.story_entity_id is not None
+
+    def test_identify_404_for_missing_asset(self, db_session):
+        """标识不存在的资产返回 404。"""
+        payload = AssetIdentifyRequest(asset_kind="character", name="林尘")
+        with pytest.raises(HTTPException) as exc_info:
+            identify_asset("nonexistent", payload, db=db_session)
+        assert exc_info.value.status_code == 404

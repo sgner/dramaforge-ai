@@ -399,6 +399,13 @@ class AssetUpdate(BaseModel):
     usage_count: Optional[int] = None
 
 
+class AssetIdentifyRequest(BaseModel):
+    """手动标识上传资产的请求体（前端资产面板调用）。"""
+    asset_kind: str
+    name: str
+    story_entity_name: Optional[str] = None
+
+
 # ============ DramaTask ============
 class DramaTaskOut(BaseModel):
     """DramaTask 全量数据。data 字段是完整 JSON 对象。"""
