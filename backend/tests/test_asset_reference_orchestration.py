@@ -98,8 +98,13 @@ class TestCollectCanvasReferences:
 
 
 class TestGenerateToolCanvasRefs:
-    @pytest.mark.asyncio
-    async def test_collect_canvas_refs_for_ctx(self, db_session):
+    def test_collect_canvas_refs_for_ctx(self, db_session):
+        """手动驱动协程执行 _collect_canvas_refs_for_ctx。
+
+        避免依赖 asyncio event loop / socketpair —— 在 Windows socket 资源
+        耗尽（WinError 10055）环境下 pytest-asyncio 创建事件循环会失败。
+        _collect_canvas_refs_for_ctx 内部无真实 await，手动驱动协程即可。
+        """
         from app.models import Connection
         db_session.add(Connection(
             id="c1", project_id="p1", from_node="n1", to_node="n2",
@@ -109,5 +114,42 @@ class TestGenerateToolCanvasRefs:
 
         ctx = ToolContext(task_id="t1", project_id="p1", db=db_session)
         from app.agent.tools.image_tools import _collect_canvas_refs_for_ctx
-        refs = await _collect_canvas_refs_for_ctx(ctx)
+        coro = _collect_canvas_refs_for_ctx(ctx)
+        # 手动驱动协程直到完成（无需 event loop）
+        try:
+            coro.send(None)
+        except StopIteration as exc:
+            refs = exc.value
+        else:
+            refs = []
+            coro.close()
         assert "canvas-asset-1" in refs
+
+
+class TestBackwardCompat:
+    def test_old_connections_without_data_field(self, db_session):
+        """旧连线（data 列为 NULL）仍能被 collect_canvas_references 处理。"""
+        db_session.add(Connection(
+            id="c1", project_id="p1", from_node="n1", to_node="n2",
+            # data 不设置（模拟旧数据，data 列为 NULL）
+        ))
+        db_session.commit()
+        result = collect_canvas_references(db_session, "p1")
+        assert result == []
+
+    def test_connection_batch_upsert_accepts_empty_data(self):
+        """批量保存端点接受空 data 的连线。"""
+        from app.schemas import ConnectionBatchUpsert
+        batch = ConnectionBatchUpsert(connections=[
+            ConnectionOut(id="c1", from_node="n1", to_node="n2"),
+        ])
+        assert batch.connections[0].data == {}
+
+    def test_connection_out_extra_ignore_keeps_old_shape(self):
+        """旧请求（无 data 字段）通过 extra=ignore 仍能构造。"""
+        conn = ConnectionOut(
+            id="c1", from_node="n1", to_node="n2",
+            from_port="out", to_port="in",
+        )
+        assert conn.data == {}
+        assert conn.from_port == "out"
