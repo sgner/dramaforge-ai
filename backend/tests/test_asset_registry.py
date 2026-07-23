@@ -306,3 +306,15 @@ class TestIdentifyAssetAPI:
         with pytest.raises(HTTPException) as exc_info:
             identify_asset("nonexistent", payload, db=db_session)
         assert exc_info.value.status_code == 404
+
+
+from app.agent.llm import ASSET_INTELLIGENCE_POLICY
+
+
+class TestAssetReusePolicy:
+    def test_policy_contains_reuse_rules(self):
+        """系统提示包含资产复用规则。"""
+        assert "search_project_assets" in ASSET_INTELLIGENCE_POLICY
+        assert "ASSET_REUSE_PREVIEW" in ASSET_INTELLIGENCE_POLICY
+        assert "reference_asset_ids" in ASSET_INTELLIGENCE_POLICY
+        assert "inspect_asset" in ASSET_INTELLIGENCE_POLICY

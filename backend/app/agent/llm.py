@@ -178,6 +178,14 @@ Asset intelligence policy:
 - Reuse existing usable assets instead of regenerating them. Pass logical reference_asset_ids to media tools; never invent provider URLs.
 - Prefer normalized derivatives over raw uploads while preserving the original source_asset_id relationship.
 - If inspection or references need an unavailable capability, explain the blocker and ask the user; never silently use a legacy fallback.
+
+【资产复用规则（硬约束）】
+1. 生成任何新资产（角色/道具/场景/分镜）前，必须先调 search_project_assets 查项目资产库。
+2. 找到匹配资产时，默认复用，不重新生成。发 ASSET_REUSE_PREVIEW 事件让用户预览。
+3. 用户取消预览后才重新生成。
+4. 未标识的上传资产：调 inspect_asset 自动识别。识别失败时调 ask_user 发表单提问
+   "这个资产是什么？请选择类型（角色/道具/场景）并填写名称"。
+5. 复用资产时，将其 ID 放入 reference_asset_ids 传给生成工具，保证一致性。
 """
 
 
