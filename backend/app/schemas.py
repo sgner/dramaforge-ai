@@ -78,6 +78,7 @@ class ConnectionOut(BaseModel):
     to_node: str = ""
     from_port: str = "out"
     to_port: str = "in"
+    data: Dict[str, Any] = Field(default_factory=dict)
 
     class Config:
         from_attributes = True

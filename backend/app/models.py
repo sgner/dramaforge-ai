@@ -82,6 +82,7 @@ class Connection(Base):
     to_node = Column(String, nullable=False)
     from_port = Column(String, default="out")
     to_port = Column(String, default="in")
+    data = Column(JSON, default=dict)
 
     project = relationship("Project", back_populates="connections")
 
