@@ -106,6 +106,32 @@ def _resolve_reference_urls(ctx: ToolContext, params: dict, media_kind: str = "i
     return [item["url"] for item in resolve_asset_references(ctx.db, ctx.project_id, asset_ids, media_kind=media_kind)]
 
 
+async def _check_existing_assets(
+    ctx: ToolContext,
+    *,
+    name: str | None = None,
+    asset_kind: str | None = None,
+) -> list[dict] | None:
+    """生成前检查项目资产库是否已有可复用资产。
+
+    有匹配时发 asset_reuse_preview 事件并返回资产列表。
+    无匹配时返回 None。
+    """
+    if not ctx.db or not ctx.project_id or not name:
+        return None
+    from .asset_registry_helpers import search_assets
+    results = search_assets(ctx.db, ctx.project_id, name, asset_kind=asset_kind)
+    if not results:
+        return None
+    if ctx.emit:
+        ctx.emit("asset_reuse_preview", {
+            "tool": "asset_check",
+            "matched_assets": results,
+            "action": "will_reuse",
+        })
+    return results
+
+
 def _format_face_anchor(face: dict | None) -> str:
     """把 V3.0 B.3 faceAnchor（8 字段）拼成自然语言描述段。
 
@@ -1257,6 +1283,14 @@ class GenerateCharacterPortraitTool(BaseTool):
         return None
 
     async def execute(self, ctx: ToolContext, params: dict) -> dict:
+        # 前置检查：是否已有可复用资产
+        character = params.get("character") or {}
+        char_name = character.get("name") if isinstance(character, dict) else None
+        if char_name:
+            existing = await _check_existing_assets(ctx, name=char_name, asset_kind="character")
+            if existing:
+                ref_ids = [a["id"] for a in existing]
+                params.setdefault("reference_asset_ids", []).extend(ref_ids)
         svc = _resolve_service(ctx)
         char = params["character"]
         source_prompt = f"{_build_character_prompt(char, style=params.get('style') or 'cinematic')}. {CHARACTER_DESIGN_SHEET_PROMPT}"
@@ -1326,6 +1360,14 @@ class GeneratePropImageTool(BaseTool):
         return None
 
     async def execute(self, ctx: ToolContext, params: dict) -> dict:
+        # 前置检查：是否已有可复用资产
+        prop = params.get("prop") or {}
+        prop_name = prop.get("name") if isinstance(prop, dict) else None
+        if prop_name:
+            existing = await _check_existing_assets(ctx, name=prop_name, asset_kind="prop")
+            if existing:
+                ref_ids = [a["id"] for a in existing]
+                params.setdefault("reference_asset_ids", []).extend(ref_ids)
         svc = _resolve_service(ctx)
         prop = params["prop"]
         source_prompt = _build_prop_prompt(prop)
@@ -1397,6 +1439,14 @@ class GenerateSceneImageTool(BaseTool):
         return None
 
     async def execute(self, ctx: ToolContext, params: dict) -> dict:
+        # 前置检查：是否已有可复用资产
+        scene = params.get("scene") or {}
+        scene_name = scene.get("name") if isinstance(scene, dict) else None
+        if scene_name:
+            existing = await _check_existing_assets(ctx, name=scene_name, asset_kind="scene")
+            if existing:
+                ref_ids = [a["id"] for a in existing]
+                params.setdefault("reference_asset_ids", []).extend(ref_ids)
         svc = _resolve_service(ctx)
         scene = params["scene"]
         source_prompt = _build_scene_prompt(scene)
@@ -1455,6 +1505,20 @@ class GenerateStoryboardImageTool(BaseTool):
         return None
 
     async def execute(self, ctx: ToolContext, params: dict) -> dict:
+        # 前置检查：是否已有可复用场景资产（分镜继承场景视觉签名）
+        shot = params.get("shot") or {}
+        scene = params.get("scene") if "scene" in params else shot.get("scene")
+        if isinstance(scene, dict):
+            scene_name = scene.get("name") or scene.get("title")
+        elif isinstance(scene, str):
+            scene_name = scene
+        else:
+            scene_name = None
+        if scene_name:
+            existing = await _check_existing_assets(ctx, name=scene_name, asset_kind="scene")
+            if existing:
+                ref_ids = [a["id"] for a in existing]
+                params.setdefault("reference_asset_ids", []).extend(ref_ids)
         svc = _resolve_service(ctx)
         shot = params["shot"]
         scene = params.get("scene") if "scene" in params else shot.get("scene")

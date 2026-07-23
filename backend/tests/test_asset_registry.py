@@ -318,3 +318,44 @@ class TestAssetReusePolicy:
         assert "ASSET_REUSE_PREVIEW" in ASSET_INTELLIGENCE_POLICY
         assert "reference_asset_ids" in ASSET_INTELLIGENCE_POLICY
         assert "inspect_asset" in ASSET_INTELLIGENCE_POLICY
+
+
+class TestAssetReusePreview:
+    @pytest.mark.asyncio
+    async def test_check_existing_assets_emits_event(self, db_session):
+        """_check_existing_assets 在有已有资产时发 asset_reuse_preview 事件。"""
+        from app.models import Asset
+        db_session.add(Asset(
+            id="a1", project_id="p1", kind="image",
+            asset_kind="character", name="林尘",
+        ))
+        db_session.commit()
+
+        emitted: list[tuple[str, dict]] = []
+        ctx = ToolContext(
+            task_id="t1", project_id="p1", db=db_session,
+            emit=lambda event_type, payload: emitted.append((event_type, payload)),
+        )
+        from app.agent.tools.image_tools import _check_existing_assets
+        result = await _check_existing_assets(ctx, name="林尘", asset_kind="character")
+        assert result is not None
+        assert len(result) >= 1
+        events = [e for e in emitted if e[0] == "asset_reuse_preview"]
+        assert len(events) == 1
+        assert events[0][1]["action"] == "will_reuse"
+
+    @pytest.mark.asyncio
+    async def test_check_returns_none_when_no_existing(self, db_session):
+        """无已有资产时返回 None。"""
+        ctx = ToolContext(task_id="t1", project_id="p1", db=db_session)
+        from app.agent.tools.image_tools import _check_existing_assets
+        result = await _check_existing_assets(ctx, name="不存在", asset_kind="character")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_check_returns_none_when_no_db(self, db_session):
+        """无 db 上下文时返回 None。"""
+        ctx = ToolContext(task_id="t1")
+        from app.agent.tools.image_tools import _check_existing_assets
+        result = await _check_existing_assets(ctx, name="林尘", asset_kind="character")
+        assert result is None
