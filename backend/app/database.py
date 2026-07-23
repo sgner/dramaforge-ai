@@ -43,6 +43,19 @@ def init_db():
     _migrate_asset_intelligence_columns()
     _migrate_performance_indexes()
     _migrate_agent_conversation_columns()
+    _migrate_connection_data_column()
+
+
+def _migrate_connection_data_column():
+    """Add data column to connections for asset reference orchestration.
+
+    连线 data 字段携带 asset_ref 语义，用于画布连线传递资产引用。
+    """
+    existing = {column["name"] for column in inspect(engine).get_columns("connections")}
+    if "data" in existing:
+        return
+    with engine.begin() as connection:
+        connection.execute(text('ALTER TABLE connections ADD COLUMN "data" JSON'))
 
 
 def _migrate_performance_indexes():
