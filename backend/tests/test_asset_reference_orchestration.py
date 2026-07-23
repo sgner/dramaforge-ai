@@ -8,6 +8,7 @@ from app.database import Base
 from app.schemas import ConnectionOut
 from app.models import Connection
 from app.agent.tools.asset_registry_helpers import collect_canvas_references
+from app.agent.tools.base import ToolContext
 
 
 @pytest.fixture
@@ -94,3 +95,19 @@ class TestCollectCanvasReferences:
     def test_returns_empty_when_no_connections(self, db_session):
         result = collect_canvas_references(db_session, "p1")
         assert result == []
+
+
+class TestGenerateToolCanvasRefs:
+    @pytest.mark.asyncio
+    async def test_collect_canvas_refs_for_ctx(self, db_session):
+        from app.models import Connection
+        db_session.add(Connection(
+            id="c1", project_id="p1", from_node="n1", to_node="n2",
+            data={"asset_ref": "canvas-asset-1"},
+        ))
+        db_session.commit()
+
+        ctx = ToolContext(task_id="t1", project_id="p1", db=db_session)
+        from app.agent.tools.image_tools import _collect_canvas_refs_for_ctx
+        refs = await _collect_canvas_refs_for_ctx(ctx)
+        assert "canvas-asset-1" in refs

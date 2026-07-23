@@ -132,6 +132,14 @@ async def _check_existing_assets(
     return results
 
 
+async def _collect_canvas_refs_for_ctx(ctx: ToolContext) -> list[str]:
+    """从画布连线收集 asset_ref，供生成工具使用。"""
+    if not ctx.db or not ctx.project_id:
+        return []
+    from .asset_registry_helpers import collect_canvas_references
+    return collect_canvas_references(ctx.db, ctx.project_id)
+
+
 def _format_face_anchor(face: dict | None) -> str:
     """把 V3.0 B.3 faceAnchor（8 字段）拼成自然语言描述段。
 
@@ -1291,6 +1299,10 @@ class GenerateCharacterPortraitTool(BaseTool):
             if existing:
                 ref_ids = [a["id"] for a in existing]
                 params.setdefault("reference_asset_ids", []).extend(ref_ids)
+        # 从画布连线收集 asset_ref
+        canvas_refs = await _collect_canvas_refs_for_ctx(ctx)
+        if canvas_refs:
+            params.setdefault("reference_asset_ids", []).extend(canvas_refs)
         svc = _resolve_service(ctx)
         char = params["character"]
         source_prompt = f"{_build_character_prompt(char, style=params.get('style') or 'cinematic')}. {CHARACTER_DESIGN_SHEET_PROMPT}"
@@ -1368,6 +1380,10 @@ class GeneratePropImageTool(BaseTool):
             if existing:
                 ref_ids = [a["id"] for a in existing]
                 params.setdefault("reference_asset_ids", []).extend(ref_ids)
+        # 从画布连线收集 asset_ref
+        canvas_refs = await _collect_canvas_refs_for_ctx(ctx)
+        if canvas_refs:
+            params.setdefault("reference_asset_ids", []).extend(canvas_refs)
         svc = _resolve_service(ctx)
         prop = params["prop"]
         source_prompt = _build_prop_prompt(prop)
@@ -1447,6 +1463,10 @@ class GenerateSceneImageTool(BaseTool):
             if existing:
                 ref_ids = [a["id"] for a in existing]
                 params.setdefault("reference_asset_ids", []).extend(ref_ids)
+        # 从画布连线收集 asset_ref
+        canvas_refs = await _collect_canvas_refs_for_ctx(ctx)
+        if canvas_refs:
+            params.setdefault("reference_asset_ids", []).extend(canvas_refs)
         svc = _resolve_service(ctx)
         scene = params["scene"]
         source_prompt = _build_scene_prompt(scene)
@@ -1519,6 +1539,10 @@ class GenerateStoryboardImageTool(BaseTool):
             if existing:
                 ref_ids = [a["id"] for a in existing]
                 params.setdefault("reference_asset_ids", []).extend(ref_ids)
+        # 从画布连线收集 asset_ref
+        canvas_refs = await _collect_canvas_refs_for_ctx(ctx)
+        if canvas_refs:
+            params.setdefault("reference_asset_ids", []).extend(canvas_refs)
         svc = _resolve_service(ctx)
         shot = params["shot"]
         scene = params.get("scene") if "scene" in params else shot.get("scene")
