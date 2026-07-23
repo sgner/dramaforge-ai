@@ -119,9 +119,25 @@ class Asset(Base):
     visual_identity = Column(JSON, default=dict)
     reference_capabilities = Column(JSON, default=dict)
     usage_count = Column(Integer, nullable=False, default=0)
+    story_entity_id = Column(String, nullable=True, index=True)
+    story_entity_name = Column(String, nullable=True)
     created_at = Column(DateTime, default=_now)
 
     project = relationship("Project", back_populates="assets")
+
+
+def _ensure_story_entity(asset: Asset) -> None:
+    """资产有 name 但没 story_entity_id 时，用 name 生成确定性 ID。
+
+    同一项目内同一 asset_kind + 同一 name 的资产共享同一 entity_id。
+    """
+    if asset.story_entity_id or not asset.name:
+        return
+    import hashlib
+    asset.story_entity_id = hashlib.sha256(
+        f"{asset.project_id}:{asset.asset_kind}:{asset.name}".encode()
+    ).hexdigest()[:16]
+    asset.story_entity_name = asset.name
 
 
 # ========================
