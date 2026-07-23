@@ -139,11 +139,28 @@ function fromCanvasNode(n: CanvasNode): NodeOut {
 }
 
 function toConnection(c: ConnectionOut): Connection {
-  return { id: c.id, from: c.from_node, to: c.to_node, fromPort: c.from_port, toPort: c.to_port };
+  return { id: c.id, from: c.from_node, to: c.to_node, fromPort: c.from_port, toPort: c.to_port, data: c.data || {} };
 }
 
 function fromConnection(c: Connection): ConnectionOut {
-  return { id: c.id, from_node: c.from, to_node: c.to, from_port: c.fromPort, to_port: c.toPort };
+  return { id: c.id, from_node: c.from, to_node: c.to, from_port: c.fromPort, to_port: c.toPort, data: c.data || {} };
+}
+
+/**
+ * 根据源节点构造连线的 data 字段。
+ * 若源节点是资产节点（带 _assetKind），自动填充 asset_ref / role / from_asset_kind，
+ * 供后端 collect_canvas_references() 收集资产引用关系；否则返回空对象。
+ * 注：节点 id 即资产 id（见 rebuildTaskAssetsFromNodes / addAssetNodeToGroup / addAgentNodes）。
+ */
+function buildConnectionData(fromNodeId: string, nodes: CanvasNode[]): Record<string, any> {
+  const fromNode = nodes.find((n) => n.id === fromNodeId) as { _assetKind?: string } | undefined;
+  const assetKind = fromNode?._assetKind;
+  if (!assetKind) return {};
+  return {
+    asset_ref: fromNodeId,
+    role: 'reference',
+    from_asset_kind: assetKind,
+  };
 }
 
 function toTaskAssetRef(a: AssetOut): TaskAssetRef {
@@ -623,7 +640,10 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
       if (!from || !to || from === to || s.connections.some((connection) => connection.from === from && connection.to === to)) {
         return s;
       }
-      return { connections: [...s.connections, { id: uid('c'), from, to }] };
+      // 从源节点提取 asset_id / asset_kind 自动填充 data.asset_ref，
+      // 供后端 collect_canvas_references() 收集资产引用关系。
+      // 非资产节点（pipeline/group/prompt 等）data 为空对象，不影响现有行为。
+      return { connections: [...s.connections, { id: uid('c'), from, to, data: buildConnectionData(from, s.nodes) }] };
     }),
 
   removeConnection: (id) =>
@@ -2048,9 +2068,11 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
         .map((edge, index) => {
           const from = assetNodeByKey.get(edge.fromKey);
           if (!from || from === edge.toId) return null;
-          return { id: `agent-ref-${projectId}-${index}-${from}-${edge.toId}`, from, to: edge.toId };
+          // agent 参考边的 from 都是资产节点（character/prop/scene/...），同样填充 asset_ref，
+          // 与 addConnection 路径保持一致，供后端 collect_canvas_references() 收集。
+          return { id: `agent-ref-${projectId}-${index}-${from}-${edge.toId}`, from, to: edge.toId, data: buildConnectionData(from, newAgentNodes) };
         })
-        .filter((edge): edge is { id: string; from: string; to: string } => !!edge)
+        .filter((edge): edge is { id: string; from: string; to: string; data: Record<string, any> } => !!edge)
         .filter((edge, index, all) => all.findIndex((candidate) => candidate.from === edge.from && candidate.to === edge.to) === index);
 
       return {

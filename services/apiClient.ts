@@ -50,6 +50,13 @@ export interface ConnectionOut {
   to_node: string;
   from_port: string;
   to_port: string;
+  /**
+   * 连线附加数据（后端 Connection.data 列）。
+   * 前端创建连线时若源节点是资产节点，会写入：
+   *   { asset_ref, role: 'reference', from_asset_kind }
+   * 后端 collect_canvas_references() 从此字段提取 asset_ref。
+   */
+  data?: Record<string, any>;
 }
 
 export interface AssetOut {

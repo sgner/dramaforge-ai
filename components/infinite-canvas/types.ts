@@ -116,6 +116,16 @@ export interface Connection {
   id: string;
   from: string;
   to: string;
+  /** 源端口（与后端 from_port 对应；toConnection 已透传，旧连线可能为空） */
+  fromPort?: string;
+  /** 目标端口（与后端 to_port 对应；toConnection 已透传，旧连线可能为空） */
+  toPort?: string;
+  /**
+   * 连线附加数据。创建连线时若源节点是资产节点，会自动填充：
+   *   { asset_ref, role: 'reference', from_asset_kind }
+   * 供后端 collect_canvas_references() 收集资产引用关系。
+   */
+  data?: Record<string, any>;
 }
 
 export interface PortPoint {
