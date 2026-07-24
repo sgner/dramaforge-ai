@@ -111,6 +111,10 @@ def _migrate_asset_intelligence_columns():
         "visual_identity": "JSON",
         "reference_capabilities": "JSON",
         "usage_count": "INTEGER NOT NULL DEFAULT 0",
+        # 资产复用层 (子项目 1) 新增字段：按 name 聚合到 story_entity。
+        # 旧资产 story_entity_id=NULL，由 _ensure_story_entity() 懒生成。
+        "story_entity_id": "VARCHAR",
+        "story_entity_name": "VARCHAR",
     }
     existing = {column["name"] for column in inspect(engine).get_columns("assets")}
     missing = [(name, definition) for name, definition in required.items() if name not in existing]
