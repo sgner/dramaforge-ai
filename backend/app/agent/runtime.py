@@ -366,7 +366,7 @@ class AgentRuntime:
         observation, status = await self._execute_tool(tool_name, tool_params)
         if asset_event:
             result_payload = observation.get("result") if isinstance(observation, dict) else None
-            await self._emit(asset_event[1], {
+            finished_payload = {
                 "asset_id": (result_payload or {}).get("asset_id") if isinstance(result_payload, dict) else tool_params.get("asset_id"),
                 "source_asset_id": (result_payload or {}).get("source_asset_id") if isinstance(result_payload, dict) else None,
                 "success": status == "success",
@@ -374,7 +374,17 @@ class AgentRuntime:
                 "text": "上传资产检查完成" if tool_name == "inspect_asset" and status == "success" else (
                     "标准化角色资产已创建" if tool_name == "prepare_character_asset" and status == "success" else "资产处理失败"
                 ),
-            })
+            }
+            # 检查结论（分类/置信度/缺失标准/建议动作）随事件下发，
+            # 前端 ThoughtStream 据此渲染结构化摘要（Task 5.1.2）。
+            if tool_name == "inspect_asset" and isinstance(result_payload, dict):
+                finished_payload.update({
+                    "asset_type": result_payload.get("asset_type"),
+                    "confidence": result_payload.get("confidence"),
+                    "missing_fields": result_payload.get("missing_fields"),
+                    "recommended_action": result_payload.get("recommended_action"),
+                })
+            await self._emit(asset_event[1], finished_payload)
 
         if media_asset:
             result = observation.get("result") if isinstance(observation, dict) else None

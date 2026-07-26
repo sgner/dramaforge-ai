@@ -441,11 +441,11 @@ media_recovery_finished { asset_id, success, error, result_asset_id }
 - Modify: `components/infinite-canvas/use-canvas-store.ts`
 - Test: `tests/agent/asset-progress.test.tsx`
 
-- [ ] Render “正在识别上传资产”.
-- [ ] Render classification, confidence, and missing standards.
-- [ ] Render “正在生成标准角色三视图”.
-- [ ] Render original → normalized relationship.
-- [ ] Keep the canvas node as an asset node, never a process/timeline node.
+- [x] Render “正在识别上传资产”.
+- [x] Render classification, confidence, and missing standards.
+- [x] Render “正在生成标准角色三视图”.
+- [x] Render original → normalized relationship.
+- [x] Keep the canvas node as an asset node, never a process/timeline node.
 
 ### Task 5.2: Add reference visibility and manual override
 
@@ -456,10 +456,10 @@ media_recovery_finished { asset_id, success, error, result_asset_id }
 - Modify: `services/apiClient.ts`
 - Test: `tests/agent/asset-progress.test.tsx`
 
-- [ ] Show the assets used by the latest generation: names, roles, and source/normalized status.
-- [ ] Allow the user to remove or add a reference asset before a user-triggered retry.
-- [ ] If confidence is low, expose “确认这是角色 / 道具 / 场景 / 其他” with free text available.
-- [ ] Persist user corrections to the inspection record.
+- [x] Show the assets used by the latest generation: names, roles, and source/normalized status.
+- [x] Allow the user to remove or add a reference asset before a user-triggered retry.（通过画布连线编辑：asset_ref 即参考资产，retryFailedAsset 从连线取参考图）
+- [x] If confidence is low, expose “确认这是角色 / 道具 / 场景 / 其他” with free text available.
+- [x] Persist user corrections to the inspection record.
 
 ### Task 5.3: Verify task/project isolation
 
@@ -469,10 +469,10 @@ media_recovery_finished { asset_id, success, error, result_asset_id }
 - Modify: `components/infinite-canvas/use-canvas-store.ts`
 - Test: `tests/agent/project-isolation.test.tsx`
 
-- [ ] Clear task event projections when switching projects.
-- [ ] Load only assets where `project_id` matches the active project.
-- [ ] Do not reuse a previous project’s pending question, recovery event, artifact, or pet status.
-- [ ] Test project A running recovery, switch to project B, and verify project B is clean.
+- [x] Clear task event projections when switching projects.
+- [x] Load only assets where `project_id` matches the active project.
+- [x] Do not reuse a previous project’s pending question, recovery event, artifact, or pet status.
+- [x] Test project A running recovery, switch to project B, and verify project B is clean.
 
 ---
 

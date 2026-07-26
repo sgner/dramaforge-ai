@@ -1992,6 +1992,11 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
               if (key) pendingReferenceEdges.push({ fromKey: key, toId: imgNodeId });
             });
           }
+          // 标准化派生关系：原始上传图 → 标准化衍生图连线（任意资产桶，Task 5.1.4）。
+          const sourceAssetId = (item as any).source_asset_id || (item as any).sourceAssetId || extra.source_asset_id;
+          if (typeof sourceAssetId === 'string' && sourceAssetId.trim()) {
+            pendingReferenceEdges.push({ fromKey: sourceAssetId.trim(), toId: imgNodeId });
+          }
           // 文本资产：body 可能放在 item.body（agent emit 的新格式）、
           // item.extra.body（兼容旧字段），或 item.url（最老版本兼容）。
           // TextReader 读 asset.body，这里必须从 item 里提取并写入 body 字段。

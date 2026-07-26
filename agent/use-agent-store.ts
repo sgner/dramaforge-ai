@@ -967,26 +967,40 @@ export const useAgentStore = create<AgentState>((set, get) => {
             }],
             currentActivity: '正在检查上传资产…',
           };
-        case 'asset_inspection_finished':
+        case 'asset_inspection_finished': {
+          // 结构化摘要：分类 · 置信度 · 缺失标准 · 建议动作（Task 5.1.2）。
+          // 后端 payload 带 asset_type/confidence/missing_fields/recommended_action。
+          const confidencePct = typeof p.confidence === 'number' ? Math.round(p.confidence * 100) : null;
+          const summaryParts: string[] = [];
+          if (p.asset_type) summaryParts.push(p.asset_type);
+          if (confidencePct !== null) summaryParts.push(`置信度 ${confidencePct}%`);
+          if (Array.isArray(p.missing_fields) && p.missing_fields.length > 0) {
+            summaryParts.push(`缺失 ${p.missing_fields.join('、')}`);
+          }
+          if (p.recommended_action) summaryParts.push(`建议 ${p.recommended_action}`);
+          const inspectionText = summaryParts.length > 0
+            ? `上传资产检查完成：${summaryParts.join(' · ')}`
+            : (p.text || '上传资产检查完成');
           return {
             thoughts: [...state.thoughts, {
               ...event,
               payload: {
                 ...p,
-                text: p.text || '上传资产检查完成',
+                text: inspectionText,
               },
             }],
           };
+        }
         case 'asset_normalization_started':
           return {
             thoughts: [...state.thoughts, {
               ...event,
               payload: {
                 ...p,
-                text: p.text || '正在生成标准化资产',
+                text: p.text || '正在生成标准角色设计图（三视图）',
               },
             }],
-            currentActivity: '正在生成标准化资产…',
+            currentActivity: '正在生成标准角色设计图（三视图）…',
           };
         case 'asset_normalization_finished':
           return {

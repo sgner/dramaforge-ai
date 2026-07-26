@@ -59,6 +59,14 @@ const KIND_LABEL: Record<TaskAssetKind, string> = {
   script: 'canvasPanelAssetsScript',
 };
 
+// 未标识上传资产的手动确认入口（Task 5.2.3）：四类 + 自由输入名称。
+const IDENTIFY_KIND_LABEL: Record<string, string> = {
+  character: 'canvasPanelAssetsCharacter',
+  prop: 'canvasPanelAssetsProp',
+  scene: 'canvasPanelAssetsScene',
+  other: 'canvasPanelAssetsOther',
+};
+
 const TEXT_KINDS: TaskAssetKind[] = ['novel', 'script'];
 
 export const CanvasAssetPanel: React.FC<CanvasAssetPanelProps> = ({ open, onClose, onAddToCanvas }) => {
@@ -66,6 +74,10 @@ export const CanvasAssetPanel: React.FC<CanvasAssetPanelProps> = ({ open, onClos
   const [category, setCategory] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [localAssets, setLocalAssets] = useState<AssetItem[]>([]);
+  const [identifyingId, setIdentifyingId] = useState<string | null>(null);
+  const [identifyName, setIdentifyName] = useState('');
+  const [identifyKind, setIdentifyKind] = useState<string | null>(null);
+  const [identifySubmitting, setIdentifySubmitting] = useState(false);
 
   const taskAssets = useCanvasStore((s) => s.taskAssets);
   const retryFailedAsset = useCanvasStore((s) => s.retryFailedAsset);
@@ -175,16 +187,101 @@ export const CanvasAssetPanel: React.FC<CanvasAssetPanelProps> = ({ open, onClos
   const renderImageMeta = (item: AssetItem) => {
     const derivedFromLabel = item.derivedFrom?.length ? item.derivedFrom.join(', ') : '';
     if (!item.providerName && !item.modelId && !item.prompt && !item.status && !item.referenceRole && !item.sourceAssetId && !derivedFromLabel) return null;
+    // 派生关系显示源资产名而不是裸 id（Task 5.1.4）；找不到源资产时回退 id。
+    const sourceAsset = item.sourceAssetId
+      ? allItems.find((a) => a.id === item.sourceAssetId)
+      : undefined;
+    const sourceLabel = item.sourceAssetId
+      ? `源自 ${sourceAsset?.name || item.sourceAssetId}`
+      : '';
     return (
       <div className="canvas-asset-img-meta">
         <span className="asset-meta-item asset-meta-name" title={item.name}>{item.name}</span>
         {item.status && <span className="asset-meta-item" title={item.status}>{item.status}</span>}
         {typeof item.version === 'number' && <span className="asset-meta-item" title={`v${item.version}`}>v{item.version}</span>}
         {item.referenceRole && <span className="asset-meta-item" title={item.referenceRole}>{item.referenceRole}</span>}
-        {item.sourceAssetId && <span className="asset-meta-item" title={item.sourceAssetId}>{item.sourceAssetId}</span>}
+        {sourceLabel && <span className="asset-meta-item" title={item.sourceAssetId}>{sourceLabel}</span>}
         {derivedFromLabel && !item.sourceAssetId && <span className="asset-meta-item" title={derivedFromLabel}>{derivedFromLabel}</span>}
         {item.providerName && <span className="asset-meta-item" title={item.providerName}>{item.providerName}</span>}
         {item.modelId && <span className="asset-meta-item" title={item.modelId}>{item.modelId}</span>}
+      </div>
+    );
+  };
+
+  const renderIdentifyBlock = (item: AssetItem) => {
+    if (item.inspectionStatus !== 'pending') return null;
+    const submit = async () => {
+      if (!identifyKind || identifySubmitting) return;
+      setIdentifySubmitting(true);
+      try {
+        // 用户更正持久化到检查记录（Task 5.2.4）：后端把 asset_kind/name/
+        // story_entity 写库并把 inspection_status 置为 ready。
+        const result = await apiClient.identifyAsset(item.id, {
+          asset_kind: identifyKind,
+          name: identifyName.trim() || item.name,
+        });
+        setTaskAssets(taskAssets.map((a) => a.id === item.id ? {
+          ...a,
+          kind: result.asset_kind as TaskAssetKind,
+          name: result.name,
+          inspectionStatus: result.inspection_status,
+        } : a));
+        setIdentifyingId(null);
+      } finally {
+        setIdentifySubmitting(false);
+      }
+    };
+    if (identifyingId !== item.id) {
+      return (
+        <button
+          type="button"
+          data-testid={`identify-open-${item.id}`}
+          className="canvas-asset-identify-open"
+          onClick={(e) => {
+            e.stopPropagation();
+            setIdentifyingId(item.id);
+            setIdentifyName(item.name);
+            setIdentifyKind(null);
+          }}
+        >
+          {t('canvasPanelIdentifyOpen')}
+        </button>
+      );
+    }
+    return (
+      <div className="canvas-asset-identify" onClick={(e) => e.stopPropagation()}>
+        <div className="canvas-asset-identify-kinds">
+          {Object.keys(IDENTIFY_KIND_LABEL).map((kind) => (
+            <button
+              key={kind}
+              type="button"
+              data-testid={`identify-kind-${kind}`}
+              className={identifyKind === kind ? 'is-active' : ''}
+              onClick={() => setIdentifyKind(kind)}
+            >
+              {t(IDENTIFY_KIND_LABEL[kind])}
+            </button>
+          ))}
+        </div>
+        <input
+          data-testid="identify-name-input"
+          value={identifyName}
+          placeholder={item.name}
+          onChange={(e) => setIdentifyName(e.target.value)}
+        />
+        <div className="canvas-asset-identify-actions">
+          <button
+            type="button"
+            data-testid="identify-submit"
+            disabled={!identifyKind || identifySubmitting}
+            onClick={submit}
+          >
+            {identifySubmitting ? '…' : t('canvasPanelIdentifyConfirm')}
+          </button>
+          <button type="button" data-testid="identify-cancel" onClick={() => setIdentifyingId(null)}>
+            {t('canvasPanelIdentifyCancel')}
+          </button>
+        </div>
       </div>
     );
   };
@@ -340,6 +437,7 @@ export const CanvasAssetPanel: React.FC<CanvasAssetPanelProps> = ({ open, onClos
             >
               {item.url ? <img src={item.url} alt={item.name} draggable={false} /> : <div className="canvas-asset-empty" style={{ minHeight: 80 }}>{item.name}</div>}
               {renderImageMeta(item)}
+              {renderIdentifyBlock(item)}
               {item.tags && item.tags.length > 0 && (
                 <div className="asset-item-tags">
                   {item.tags.slice(0, 2).map((tag) => (

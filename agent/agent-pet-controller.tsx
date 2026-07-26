@@ -170,11 +170,22 @@ export const AgentPetController: React.FC<AgentPetControllerProps> = ({
   const latestMedia = allArtifacts
     .filter((item: any) => item && (item.prompt || item.model_id || item.modelId))
     .slice(-1)[0] as any;
-  // 最近一次生成引用的资产名（reference_asset_ids → 项目资产名），
-  // 让用户能核对"这次生成参考了谁"。
+  // 最近一次生成引用的资产（reference_asset_ids → 名字 + 角色 + 来源状态），
+  // 让用户能核对"这次生成参考了谁、用的是原图还是标准化图"。
+  const REF_KIND_LABELS: Record<string, string> = {
+    character: '角色', prop: '道具', scene: '场景', shot: '分镜', storyboard: '分镜',
+  };
   const latestMediaRefIds: string[] = (latestMedia?.extra?.reference_asset_ids || latestMedia?.reference_asset_ids || []) as string[];
-  const latestMediaRefNames = latestMediaRefIds
-    .map((id) => (allArtifacts.find((a: any) => a?.id === id) as any)?.name)
+  const latestMediaRefLabels = latestMediaRefIds
+    .map((id) => {
+      const asset = allArtifacts.find((a: any) => a?.id === id) as any;
+      if (!asset?.name) return null;
+      const bits: string[] = [];
+      const kindLabel = REF_KIND_LABELS[asset.asset_kind] || asset.asset_kind;
+      if (kindLabel) bits.push(kindLabel);
+      bits.push(asset.source_asset_id ? '标准化' : '原始');
+      return `${asset.name}（${bits.join('·')}）`;
+    })
     .filter(Boolean);
   const togglePanel = (event: React.MouseEvent) => {
     event.stopPropagation();
@@ -226,8 +237,8 @@ export const AgentPetController: React.FC<AgentPetControllerProps> = ({
           {(latestMedia.provider_name || latestMedia.provider_id || latestMedia.providerId || latestMedia.model_id || latestMedia.modelId) && <div data-testid="agent-pet-media-model" className="agent-pet-media-model">
             {latestMedia.provider_name || latestMedia.provider_id || latestMedia.providerId || ''}{(latestMedia.model_id || latestMedia.modelId) ? ` · ${latestMedia.model_id || latestMedia.modelId}` : ''}
           </div>}
-          {latestMediaRefNames.length > 0 && <div data-testid="agent-pet-media-refs" className="agent-pet-media-refs">
-            参考：{latestMediaRefNames.join('、')}
+          {latestMediaRefLabels.length > 0 && <div data-testid="agent-pet-media-refs" className="agent-pet-media-refs">
+            参考：{latestMediaRefLabels.join('、')}
           </div>}
         </div>}
         {onGoalChange && onSubmit && <div className="agent-pet-goal">
