@@ -425,3 +425,74 @@ class TestAssetUsageEndpoint:
             db.query(Asset).filter(Asset.id == asset_id).delete()
             db.commit()
             db.close()
+
+
+class TestGenerateVideoReferenceInheritance:
+    @pytest.mark.asyncio
+    async def test_video_inherits_scene_character_refs_from_shot_text(self, db_session):
+        """generate_video 按 shot 文本继承项目已生成的场景/角色/道具引用。"""
+        from app.agent.tools.video_tools import GenerateVideoTool
+        db_session.add(Asset(id="char-1", project_id="p1", kind="image", asset_kind="character", name="林尘", url="https://example.com/char.png"))
+        db_session.add(Asset(id="scene-1", project_id="p1", kind="image", asset_kind="scene", name="咖啡店", url="https://example.com/cafe.png"))
+        db_session.commit()
+        artifacts = {
+            "character": [{"id": "char-1", "name": "林尘", "url": "https://example.com/char.png"}],
+            "scene": [{"id": "scene-1", "name": "咖啡店", "url": "https://example.com/cafe.png"}],
+        }
+        svc = _RecordingMediaService()
+        ctx = ToolContext(
+            task_id="t1", project_id="p1", db=db_session,
+            llm_client=_PromptLLM(), media_service=svc, artifacts=artifacts,
+        )
+        result = await GenerateVideoTool().call(ctx, {
+            "shot": {"scene": "咖啡店", "action": "林尘坐下", "duration_sec": 5},
+        })
+        assert set(result["reference_asset_ids"]) == {"char-1", "scene-1"}
+        ref_urls = svc.requests[0].reference_urls
+        assert "https://example.com/char.png" in ref_urls
+        assert "https://example.com/cafe.png" in ref_urls
+
+    @pytest.mark.asyncio
+    async def test_video_skips_failed_or_generating_artifacts(self, db_session):
+        """失败/生成中的资产不作为引用继承。"""
+        from app.agent.tools.video_tools import GenerateVideoTool
+        db_session.add(Asset(id="char-1", project_id="p1", kind="image", asset_kind="character", name="林尘", url="https://example.com/char.png"))
+        db_session.commit()
+        artifacts = {
+            "character": [
+                {"id": "char-1", "name": "林尘", "url": "https://example.com/char.png", "failed": True},
+                {"id": "char-2", "name": "林尘", "url": "https://example.com/char2.png", "generating": True},
+            ],
+        }
+        svc = _RecordingMediaService()
+        ctx = ToolContext(
+            task_id="t1", project_id="p1", db=db_session,
+            llm_client=_PromptLLM(), media_service=svc, artifacts=artifacts,
+        )
+        result = await GenerateVideoTool().call(ctx, {
+            "shot": {"scene": "咖啡店", "action": "林尘坐下", "duration_sec": 5},
+        })
+        assert result["reference_asset_ids"] == []
+
+    @pytest.mark.asyncio
+    async def test_video_inherited_refs_merge_with_canvas_refs(self, db_session):
+        """继承引用与画布连线引用合并，不互相覆盖。"""
+        from app.agent.tools.video_tools import GenerateVideoTool
+        _seed_canvas_ref(db_session, asset_id="canvas-1", url="https://example.com/canvas.png")
+        db_session.add(Asset(id="char-1", project_id="p1", kind="image", asset_kind="character", name="林尘", url="https://example.com/char.png"))
+        db_session.commit()
+        artifacts = {
+            "character": [{"id": "char-1", "name": "林尘", "url": "https://example.com/char.png"}],
+        }
+        svc = _RecordingMediaService()
+        ctx = ToolContext(
+            task_id="t1", project_id="p1", db=db_session,
+            llm_client=_PromptLLM(), media_service=svc, artifacts=artifacts,
+        )
+        result = await GenerateVideoTool().call(ctx, {
+            "shot": {"scene": "咖啡店", "action": "林尘坐下", "duration_sec": 5},
+        })
+        assert set(result["reference_asset_ids"]) == {"canvas-1", "char-1"}
+        ref_urls = svc.requests[0].reference_urls
+        assert "https://example.com/canvas.png" in ref_urls
+        assert "https://example.com/char.png" in ref_urls

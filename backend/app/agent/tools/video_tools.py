@@ -15,12 +15,25 @@ from __future__ import annotations
 
 from ..media_service import MediaRequest, MediaService, get_default_media_service
 from ..asset_references import resolve_asset_references
-from ..prompt_engineering import optimize_generation_prompt, sanitize_structured_field
+from ..prompt_engineering import optimize_generation_prompt, resolve_reference_ids_by_text, sanitize_structured_field
 from .base import BaseTool, ToolContext, ToolParameter
 
 
 def _resolve_service(ctx: ToolContext) -> MediaService:
     return ctx.media_service or get_default_media_service()
+
+
+def _shot_reference_text(shot: dict) -> str:
+    """把 shot 的场景/角色/道具/动作拼成文本，供按名解析参考资产。"""
+    parts: list[str] = []
+    for key in ("scene", "action", "content"):
+        value = shot.get(key)
+        if isinstance(value, str):
+            parts.append(value)
+    for key in ("characters", "charactersInvolved", "props", "propsInvolved"):
+        for item in shot.get(key) or []:
+            parts.append(str(item.get("name") if isinstance(item, dict) else item))
+    return "\n".join(p for p in parts if p)
 
 
 def _resolve_reference_urls(ctx: ToolContext, params: dict) -> list[str]:
@@ -177,6 +190,14 @@ class GenerateVideoTool(BaseTool):
             canvas_refs = collect_canvas_references(ctx.db, ctx.project_id)
             if canvas_refs:
                 params.setdefault("reference_asset_ids", []).extend(canvas_refs)
+        # 继承分镜引用：按 shot 文本（场景/角色/道具/动作）解析项目已生成的
+        # 场景/角色/道具资产，使视频与对应分镜共用同一批参考资产。
+        if ctx.artifacts:
+            inherited = resolve_reference_ids_by_text(
+                ctx.artifacts, _shot_reference_text(params.get("shot") or {}),
+            )
+            if inherited:
+                params.setdefault("reference_asset_ids", []).extend(inherited)
         svc = _resolve_service(ctx)
         shot = params["shot"]
         ref_ids = list(params.get("reference_asset_ids") or [])
@@ -218,6 +239,7 @@ class GenerateVideoTool(BaseTool):
             "shot_index": shot.get("index"),
             "duration_sec": req.duration_sec,
             "kind": "shot_video",
+            "reference_asset_ids": ref_ids,
             "cost_usd": result.cost_usd,
             "elapsed_sec": result.elapsed_sec,
             "prompt": prompt,
