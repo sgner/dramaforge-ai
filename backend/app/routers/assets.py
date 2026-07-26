@@ -57,6 +57,7 @@ def create_asset(payload: schemas.AssetCreate, db: Session = Depends(get_db)):
         visual_identity=payload.visual_identity,
         reference_capabilities=payload.reference_capabilities,
         usage_count=payload.usage_count,
+        voice_id=payload.voice_id,
     )
     db.add(asset)
     db.commit()

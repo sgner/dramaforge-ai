@@ -13,7 +13,10 @@ class GenerateVoiceoverTool(BaseTool):
     """文本转语音（旁白 / 角色对白）。"""
 
     name = "generate_voiceover"
-    description = "把文本转为语音。voice 决定音色（male_calm / female_warm / child / elder 等）。"
+    description = (
+        "把文本转为语音。voice 决定音色（male_calm / female_warm / child / elder 等）。"
+        "传 character_asset_id 时默认继承该角色资产的声音画像（voice_id），显式 voice 优先。"
+    )
     category = "audio"
     requires_approval = True
     estimated_cost_usd = 0.02
@@ -22,6 +25,7 @@ class GenerateVoiceoverTool(BaseTool):
     parameters = [
         ToolParameter(name="text", type="string", description="要朗读的文本", required=True),
         ToolParameter(name="voice", type="string", description="音色 id", required=False, default="female_warm"),
+        ToolParameter(name="character_asset_id", type="string", description="可选：角色资产 id，音色从该资产的声音画像继承", required=False),
         ToolParameter(name="model_id", type="string", description="可选：指定 TTS 模型", required=False),
     ]
 
@@ -32,18 +36,42 @@ class GenerateVoiceoverTool(BaseTool):
 
     async def execute(self, ctx: ToolContext, params: dict) -> dict:
         svc = _resolve_service(ctx)
+        voice = params.get("voice")
+        character_name: str | None = None
+        character_asset_id = params.get("character_asset_id")
+        if character_asset_id:
+            if not ctx.db or not ctx.project_id:
+                raise ValueError("character_asset_id require a project-scoped database context")
+            from ...models import Asset
+            character = ctx.db.query(Asset).filter(
+                Asset.id == character_asset_id,
+                Asset.project_id == ctx.project_id,
+            ).first()
+            if character is None:
+                raise ValueError(f"character asset '{character_asset_id}' not found in project '{ctx.project_id}'")
+            character_name = character.name or None
+            if not voice:
+                voice = character.voice_id
+        voice = voice or "female_warm"
         req = MediaRequest(
             kind="audio",
             prompt=str(params["text"]),
-            voice=params.get("voice") or "female_warm",
+            voice=voice,
             model_id=params.get("model_id"),
-            extra={"asset_kind": "voiceover", "voice": params.get("voice")},
+            extra={
+                "asset_kind": "voiceover",
+                "voice": voice,
+                "character_asset_id": character_asset_id,
+                "character": character_name,
+            },
         )
         result = await svc.generate(req)
         return {
             "url": result.url,
             "text": params["text"],
             "voice": req.voice,
+            "character_asset_id": character_asset_id,
+            "character": character_name,
             "kind": "voiceover",
             "cost_usd": result.cost_usd,
             "elapsed_sec": result.elapsed_sec,

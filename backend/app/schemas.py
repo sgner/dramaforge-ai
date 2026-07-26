@@ -112,6 +112,8 @@ class AssetOut(BaseModel):
     visual_identity: Dict[str, Any] = Field(default_factory=dict)
     reference_capabilities: Dict[str, Any] = Field(default_factory=dict)
     usage_count: int = 0
+    # 角色声音画像：资产级音色绑定（TTS 默认音色）
+    voice_id: Optional[str] = None
     # 文本资产正文（小说/脚本）— 来自 extra.body
     body: Optional[str] = None
     # 文本资产统计：words / scenes / chapters
@@ -195,6 +197,7 @@ class AssetOut(BaseModel):
             visual_identity=a.visual_identity or {},
             reference_capabilities=a.reference_capabilities or {},
             usage_count=a.usage_count or 0,
+            voice_id=getattr(a, "voice_id", None),
             body=extra.get("body") or a.url,  # 兼容：旧数据 url 即 body
             text_stats=extra.get("text_stats") or {},
             extra=extra,
@@ -338,6 +341,8 @@ class AssetCreate(BaseModel):
     visual_identity: Dict[str, Any] = Field(default_factory=dict)
     reference_capabilities: Dict[str, Any] = Field(default_factory=dict)
     usage_count: int = 0
+    # 角色声音画像：资产级音色绑定（TTS 默认音色）
+    voice_id: Optional[str] = None
     # 文本资产正文（novel/script 用）— 持久化到 extra.body
     # exclude=True 让 model_dump() 不输出这两个字段（已被 _move_text_fields_to_extra
     # 移到 extra），避免 `Asset(**payload.model_dump())` 报
@@ -398,6 +403,7 @@ class AssetUpdate(BaseModel):
     visual_identity: Optional[Dict[str, Any]] = None
     reference_capabilities: Optional[Dict[str, Any]] = None
     usage_count: Optional[int] = None
+    voice_id: Optional[str] = None
 
 
 class AssetIdentifyRequest(BaseModel):

@@ -120,6 +120,8 @@ class Asset(Base):
     visual_identity = Column(JSON, default=dict)
     reference_capabilities = Column(JSON, default=dict)
     usage_count = Column(Integer, nullable=False, default=0)
+    # 角色声音画像：资产级音色绑定（generate_voiceover 的默认音色）
+    voice_id = Column(String, nullable=True)
     story_entity_id = Column(String, nullable=True, index=True)
     story_entity_name = Column(String, nullable=True)
     created_at = Column(DateTime, default=_now)

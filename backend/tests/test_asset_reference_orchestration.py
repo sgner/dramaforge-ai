@@ -693,3 +693,105 @@ class TestMediaBatchExplicitReferenceIds:
         image_request = next(r for r in svc.requests if r.kind == "image")
         assert video_request.reference_urls == ["https://example.com/char.png"]
         assert image_request.reference_urls == []
+
+
+class TestCharacterVoiceProfile:
+    @pytest.mark.asyncio
+    async def test_voiceover_inherits_character_voice(self, db_session):
+        """角色资产的声音画像作为 generate_voiceover 的默认音色。"""
+        from app.agent.tools.audio_tools import GenerateVoiceoverTool
+        db_session.add(Asset(
+            id="char-1", project_id="p1", kind="image", asset_kind="character",
+            name="林尘", url="https://example.com/char.png", voice_id="male_calm",
+        ))
+        db_session.commit()
+        svc = _RecordingMediaService()
+        ctx = ToolContext(task_id="t1", project_id="p1", db=db_session, media_service=svc)
+        result = await GenerateVoiceoverTool().call(ctx, {
+            "text": "我回来了。",
+            "character_asset_id": "char-1",
+        })
+        assert result["voice"] == "male_calm"
+        assert result["character"] == "林尘"
+        assert svc.requests[0].voice == "male_calm"
+
+    @pytest.mark.asyncio
+    async def test_explicit_voice_wins_over_character_voice(self, db_session):
+        from app.agent.tools.audio_tools import GenerateVoiceoverTool
+        db_session.add(Asset(
+            id="char-1", project_id="p1", kind="image", asset_kind="character",
+            name="林尘", url="https://example.com/char.png", voice_id="male_calm",
+        ))
+        db_session.commit()
+        svc = _RecordingMediaService()
+        ctx = ToolContext(task_id="t1", project_id="p1", db=db_session, media_service=svc)
+        result = await GenerateVoiceoverTool().call(ctx, {
+            "text": "我回来了。",
+            "character_asset_id": "char-1",
+            "voice": "elder",
+        })
+        assert result["voice"] == "elder"
+
+    @pytest.mark.asyncio
+    async def test_character_without_voice_falls_back_to_default(self, db_session):
+        from app.agent.tools.audio_tools import GenerateVoiceoverTool
+        db_session.add(Asset(
+            id="char-1", project_id="p1", kind="image", asset_kind="character",
+            name="林尘", url="https://example.com/char.png",
+        ))
+        db_session.commit()
+        ctx = ToolContext(task_id="t1", project_id="p1", db=db_session, media_service=_RecordingMediaService())
+        result = await GenerateVoiceoverTool().call(ctx, {
+            "text": "我回来了。",
+            "character_asset_id": "char-1",
+        })
+        assert result["voice"] == "female_warm"
+
+    @pytest.mark.asyncio
+    async def test_character_from_other_project_rejected(self, db_session):
+        from app.agent.tools.audio_tools import GenerateVoiceoverTool
+        db_session.add(Asset(
+            id="char-x", project_id="p2", kind="image", asset_kind="character",
+            name="外人", url="https://example.com/x.png", voice_id="elder",
+        ))
+        db_session.commit()
+        ctx = ToolContext(task_id="t1", project_id="p1", db=db_session, media_service=_RecordingMediaService())
+        with pytest.raises(ValueError, match="not found"):
+            await GenerateVoiceoverTool().call(ctx, {
+                "text": "我回来了。",
+                "character_asset_id": "char-x",
+            })
+
+
+class TestVoiceIdSchema:
+    def test_asset_out_exposes_voice_id(self, db_session):
+        from app.schemas import AssetOut
+        db_session.add(Asset(
+            id="char-1", project_id="p1", kind="image", asset_kind="character",
+            name="林尘", url="https://example.com/char.png", voice_id="male_calm",
+        ))
+        db_session.commit()
+        asset = db_session.query(Asset).filter_by(id="char-1").one()
+        assert AssetOut.from_asset_model(asset).voice_id == "male_calm"
+
+    def test_update_asset_sets_voice_id(self):
+        import uuid as _uuid
+        from fastapi.testclient import TestClient
+        from app import app
+        from app.database import SessionLocal
+
+        asset_id = f"voice-asset-{_uuid.uuid4().hex[:8]}"
+        db = SessionLocal()
+        try:
+            db.add(Asset(id=asset_id, project_id="p-voice", kind="image", asset_kind="character", name="林尘", url="https://example.com/char.png"))
+            db.commit()
+            client = TestClient(app)
+            resp = client.patch(f"/api/assets/{asset_id}", json={"voice_id": "female_warm"})
+            assert resp.status_code == 200
+            assert resp.json()["voice_id"] == "female_warm"
+            db.expire_all()
+            assert db.query(Asset).filter_by(id=asset_id).one().voice_id == "female_warm"
+        finally:
+            db.query(Asset).filter(Asset.id == asset_id).delete()
+            db.commit()
+            db.close()

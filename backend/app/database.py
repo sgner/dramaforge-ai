@@ -115,6 +115,8 @@ def _migrate_asset_intelligence_columns():
         # 旧资产 story_entity_id=NULL，由 _ensure_story_entity() 懒生成。
         "story_entity_id": "VARCHAR",
         "story_entity_name": "VARCHAR",
+        # 角色声音画像：资产级音色绑定。
+        "voice_id": "VARCHAR",
     }
     existing = {column["name"] for column in inspect(engine).get_columns("assets")}
     missing = [(name, definition) for name, definition in required.items() if name not in existing]
