@@ -236,3 +236,70 @@ def test_repeated_call_does_not_affect_different_projects(db_session):
 
     assert second["id"] != first["id"]
     assert db_session.query(Asset).count() == 2
+
+
+@pytest.mark.asyncio
+async def test_batch_pending_asset_events_emitted_before_first_provider_call(db_session):
+    """Task 4.2：所有 pending 资产的 artifact_created 事件必须先于首个 provider 调用。
+
+    在 media service 首次 generate 时快照事件日志：此时两个 pending 资产的
+    artifact_created（generating=True）必须已经全部发出。
+    """
+    from app.agent.events import event_bus, EventType
+    from app.agent.llm import LLMResponse
+    from app.agent.media_service import MediaResult
+    from app.agent.tools.media_batch import GenerateMediaBatchTool
+    from app.agent.tools.base import ToolRegistry
+
+    class _BatchLLM:
+        def __init__(self):
+            self.calls = 0
+
+        async def generate(self, messages, tools=None, **kwargs):
+            self.calls += 1
+            return LLMResponse(
+                content=None,
+                tool_name="generate_media_batch",
+                tool_args={"jobs": [
+                    {"kind": "image", "asset_kind": "character", "name": "角色A", "prompt": "portrait A"},
+                    {"kind": "image", "asset_kind": "character", "name": "角色B", "prompt": "portrait B"},
+                ]},
+                prompt_tokens=1, completion_tokens=1, cost_usd=0.0,
+            )
+
+    class _SnapshotMediaService:
+        def __init__(self):
+            self.pending_events_at_first_call = None
+
+        async def generate(self, request):
+            if self.pending_events_at_first_call is None:
+                self.pending_events_at_first_call = [
+                    e for e in event_bus.get_replay("t-batch-order")
+                    if e.type == EventType.ARTIFACT_CREATED and e.payload.get("generating")
+                ]
+            return MediaResult(url="https://cdn.test/out.png", kind=request.kind)
+
+    event_bus.clear_log("t-batch-order")
+    registry = ToolRegistry()
+    registry.register(GenerateMediaBatchTool())
+    svc = _SnapshotMediaService()
+    # 用户已确认 deliverables → structured source 门禁直接通过，
+    # 单步内就会执行 generate_media_batch（否则 runtime 会先 ask_user 暂停）。
+    from app.agent.task_profiles import TaskProfile
+    profile = TaskProfile(
+        task_type="custom", input_mode="text", source_kind="prompt",
+        script_required=False, needs_clarification=False,
+        deliverables=["character"], asset_strategy="generate",
+        rule_pack_id="custom.v1", user_confirmed_deliverables=["character"],
+    )
+    runtime = AgentRuntime(
+        "t-batch-order", _BatchLLM(), AgentMemory(user_goal="两个角色"),
+        registry=registry, project_id="p1", db=db_session, media_service=svc,
+        profile=profile,
+    )
+
+    await runtime.step()
+
+    assert svc.pending_events_at_first_call is not None
+    assert len(svc.pending_events_at_first_call) == 2
+    assert db_session.query(Asset).filter_by(project_id="p1").count() == 2

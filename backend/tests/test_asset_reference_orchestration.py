@@ -663,3 +663,33 @@ class TestGenerateWithReferenceCheck:
         )
         assert svc.requests[0].reference_urls == ["https://x/ref.png"]
         assert "unsupported_references" not in (result.raw or {})
+
+
+class TestMediaBatchExplicitReferenceIds:
+    @pytest.mark.asyncio
+    async def test_batch_job_accepts_explicit_reference_asset_ids(self, db_session):
+        """Task 4.1.2：批量 job 显式 reference_asset_ids 被解析并传给 provider。"""
+        from app.agent.tools.media_batch import GenerateMediaBatchTool
+        db_session.add(Asset(
+            id="a1", project_id="p1", kind="image",
+            asset_kind="character", name="林尘", url="https://example.com/char.png",
+        ))
+        db_session.commit()
+        svc = _RecordingMediaService()
+        ctx = ToolContext(
+            task_id="t1", project_id="p1", db=db_session,
+            llm_client=_PromptLLM(), media_service=svc,
+        )
+        result = await GenerateMediaBatchTool().call(ctx, {
+            "jobs": [
+                {"kind": "video", "prompt": "林尘在咖啡店坐下", "reference_asset_ids": ["a1"]},
+                {"kind": "image", "prompt": "无引用任务"},
+            ],
+        })
+        assert result["succeeded"] == 2
+        assert result["results"][0]["reference_asset_ids"] == ["a1"]
+        assert result["results"][1]["reference_asset_ids"] == []
+        video_request = next(r for r in svc.requests if r.kind == "video")
+        image_request = next(r for r in svc.requests if r.kind == "image")
+        assert video_request.reference_urls == ["https://example.com/char.png"]
+        assert image_request.reference_urls == []

@@ -39,7 +39,7 @@ class GenerateMediaBatchTool(BaseTool):
         ToolParameter(
             name="jobs",
             type="array",
-            description="媒体任务列表，每项包含 kind(image/video)、prompt，可选 name、asset_kind、duration_sec、reference_urls、model_id",
+            description="媒体任务列表，每项包含 kind(image/video)、prompt，可选 name、asset_kind、duration_sec、reference_urls、reference_asset_ids、model_id",
             required=True,
         ),
     ]
@@ -75,7 +75,14 @@ class GenerateMediaBatchTool(BaseTool):
             canonical = _CANONICAL_LAYOUT_BY_KIND.get(asset_kind)
             # 分镜：按文本出现解析角色/场景/道具参考资产（角色卡名出现在
             # job name/prompt 中即引用），否则批量分镜没有任何参考图。
-            ref_ids: list[str] = list(canvas_refs)
+            # 引用优先级：job 显式 reference_asset_ids > 画布连线 > 文本解析。
+            ref_ids: list[str] = []
+            for ref_id in job.get("reference_asset_ids") or []:
+                if ref_id not in ref_ids:
+                    ref_ids.append(ref_id)
+            for ref_id in canvas_refs:
+                if ref_id not in ref_ids:
+                    ref_ids.append(ref_id)
             ref_urls = list(job.get("reference_urls") or [])
             if asset_kind == "storyboard":
                 for ref_id in resolve_reference_ids_by_text(

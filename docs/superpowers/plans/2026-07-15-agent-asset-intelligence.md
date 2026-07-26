@@ -368,8 +368,8 @@ If it is a character/prop/scene but does not meet project standards, normalize i
 Do not use a raw upload in downstream shots when a normalized derivative exists.
 ```
 
-- [ ] Include existing project assets and their inspection status in the Agent context.
-- [ ] Add `reference_asset_ids` to planned media jobs.
+- [x] Include existing project assets and their inspection status in the Agent context.
+- [x] Add `reference_asset_ids` to planned media jobs.
 - [ ] Test upload character → inspect → normalize → generate shot without an extra character generation.
 
 ### Task 4.2: Make parallel execution the default for independent jobs
@@ -380,11 +380,11 @@ Do not use a raw upload in downstream shots when a normalized derivative exists.
 - Modify: `backend/app/agent/tools/media_batch.py`
 - Test: `backend/tests/test_agent_media_batch.py`
 
-- [ ] If the plan contains two or more independent image/video jobs, the next action must be `generate_media_batch`.
-- [ ] Create every pending asset row and emit every `artifact_created` event before the first provider call.
-- [ ] Use `asyncio.gather(..., return_exceptions=True)`; preserve job order in results.
-- [ ] Never invoke an individual media tool first merely to discover that batch execution is needed.
-- [ ] Test elapsed time, pending-node event order, per-job success/failure isolation, and shared references.
+- [ ] If the plan contains two or more independent image/video jobs, the next action must be `generate_media_batch`.（目前为系统提示词级强制，无代码层兜底）
+- [x] Create every pending asset row and emit every `artifact_created` event before the first provider call.
+- [x] Use `asyncio.gather(..., return_exceptions=True)`; preserve job order in results.（以 per-job try/except 实现等价语义）
+- [ ] Never invoke an individual media tool first merely to discover that batch execution is needed.（提示词级规则）
+- [x] Test elapsed time, pending-node event order, per-job success/failure isolation, and shared references.
 
 ### Task 4.3: Add visible recovery worker semantics
 
@@ -419,11 +419,11 @@ media_recovery_finished { asset_id, success, error, result_asset_id }
 - Modify: `agent/use-agent-stream.ts`
 - Test: `backend/tests/test_agent_cancellation.py`
 
-- [ ] Track provider/recovery tasks by `task_id` and `asset_id`.
-- [ ] Cancel pending `asyncio` tasks on `stop_task`.
-- [ ] Check `AgentState.CANCELLED` before every provider call and before emitting completion events.
-- [ ] Ignore late provider responses after cancellation.
-- [ ] Test stop during batch, stop during recovery, and retry after cancellation.
+- [ ] Track provider/recovery tasks by `task_id` and `asset_id`.（task_id 级已落地，无 asset_id 粒度）
+- [x] Cancel pending `asyncio` tasks on `stop_task`.
+- [x] Check `AgentState.CANCELLED` before every provider call and before emitting completion events.
+- [x] Ignore late provider responses after cancellation.
+- [x] Test stop during batch, stop during recovery, and retry after cancellation.
 
 ---
 
