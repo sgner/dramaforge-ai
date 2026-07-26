@@ -207,6 +207,20 @@ POST /api/studio/export            任意镜头序列 → ffmpeg 合成 mp4
 - `POST /api/studio/shots/regenerate`：用镜头存的 brief + 角色卡关联一键重跑闭环；
 - 测试 5 例（backend/tests/test_story_bible.py），后端全量 732 passed。
 
+### 6.3.1 character_cards ↔ story_entity 合并（2026-07-26）
+
+两套实体系统已合并，story_entity_id 成为统一外键：
+
+- **建卡即实体**：`create_character_card` 落库即绑定 `story_entity_id/name`，同名卡共享实体；
+- **镜头记录实体关联**：`_persist_shot_asset` 写 `extra.story_entity_ids`（从角色卡复制）；
+- **影响分析下沉到实体层**：`card_impact` 双路径（card_id + entity）去重；新增
+  `GET /api/studio/entities/{story_entity_id}/impact`，道具/场景等非卡实体同享只读影响分析；
+- **identify 汇聚建卡**：`POST /api/assets/{id}/identify` 带 `extract_identity=true` 时复用角色卡
+  提取链路写 `visual_identity`；前端 identify 卡片默认勾选"提取身份指纹"；
+- 测试 12 例（test_story_bible.py / test_asset_registry.py），后端全量 850 passed。
+
+未做：Story Bible 中心 UI、场景卡、结构化字段 diff 一致性检查（仍只有 vision 抽检）。
+
 下一步：审片台（review_status + 多版本 + 人审 UI）。
 
 ### 6.4 已落地的审片台后端（本迭代）

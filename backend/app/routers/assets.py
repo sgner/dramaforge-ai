@@ -190,7 +190,7 @@ def get_asset_usage(asset_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/{asset_id}/identify")
-def identify_asset(
+async def identify_asset(
     asset_id: str,
     payload: schemas.AssetIdentifyRequest,
     db: Session = Depends(get_db),
@@ -199,6 +199,8 @@ def identify_asset(
 
     前端资产面板对未标识资产（asset_kind=NULL 且 inspection_status=pending）
     调用此端点补充 asset_kind / name，并生成 story_entity_id，标记为 ready。
+    asset_kind="character" 且 extract_identity=true 时，复用角色卡的身份
+    提取链路写 visual_identity（标识即建卡，Story Bible 合并）。
     """
     asset = db.query(models.Asset).filter(models.Asset.id == asset_id).first()
     if not asset:
@@ -211,6 +213,26 @@ def identify_asset(
         asset.voice_id = payload.voice_id
     models._ensure_story_entity(asset)
     asset.inspection_status = "ready"
+    if payload.extract_identity and payload.asset_kind == "character":
+        if not asset.url:
+            raise HTTPException(status_code=400, detail="extract_identity requires an asset image url")
+        from ..agent.character_cards import extract_character_identity
+        from ..agent.llm_factory import load_llm_configs, select_llm_for_task, NoLLMConfigured
+        try:
+            configs = load_llm_configs(db)
+            llm = select_llm_for_task(None, configs, None)
+        except NoLLMConfigured as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        try:
+            asset.visual_identity = await extract_character_identity(
+                db,
+                project_id=asset.project_id,
+                name=asset.name,
+                reference_asset_ids=[asset.id],
+                llm=llm,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
     db.commit()
     return {
         "id": asset.id,
@@ -219,4 +241,5 @@ def identify_asset(
         "inspection_status": asset.inspection_status,
         "story_entity_id": asset.story_entity_id,
         "voice_id": asset.voice_id,
+        "visual_identity": asset.visual_identity or {},
     }

@@ -278,7 +278,8 @@ class TestIdentifyAssetAPI:
     同 TestSearchAssetsAPI，直接调用路由处理函数验证行为。
     """
 
-    def test_identify_updates_asset(self, db_session):
+    @pytest.mark.asyncio
+    async def test_identify_updates_asset(self, db_session):
         """手动标识上传资产：写入 asset_kind/name，生成 story_entity_id，标记 ready。"""
         db_session.add(Asset(
             id="a1", project_id="p1", kind="image",
@@ -287,7 +288,7 @@ class TestIdentifyAssetAPI:
         db_session.commit()
 
         payload = AssetIdentifyRequest(asset_kind="character", name="林尘")
-        result = identify_asset("a1", payload, db=db_session)
+        result = await identify_asset("a1", payload, db=db_session)
 
         assert result["asset_kind"] == "character"
         assert result["name"] == "林尘"
@@ -300,11 +301,12 @@ class TestIdentifyAssetAPI:
         assert db_asset.inspection_status == "ready"
         assert db_asset.story_entity_id is not None
 
-    def test_identify_404_for_missing_asset(self, db_session):
+    @pytest.mark.asyncio
+    async def test_identify_404_for_missing_asset(self, db_session):
         """标识不存在的资产返回 404。"""
         payload = AssetIdentifyRequest(asset_kind="character", name="林尘")
         with pytest.raises(HTTPException) as exc_info:
-            identify_asset("nonexistent", payload, db=db_session)
+            await identify_asset("nonexistent", payload, db=db_session)
         assert exc_info.value.status_code == 404
 
 

@@ -178,10 +178,11 @@ export const api = {
     request<{ ok: boolean }>(`/assets/${assetId}`, { method: 'DELETE' }),
   rebuildAssets: (projectId: string) =>
     request<{ ok: boolean; created: number }>(`/assets/rebuild-from-nodes/${projectId}`, { method: 'POST' }),
-  identifyAsset: (assetId: string, payload: { asset_kind: string; name: string; story_entity_name?: string; voice_id?: string }) =>
+  identifyAsset: (assetId: string, payload: { asset_kind: string; name: string; story_entity_name?: string; voice_id?: string; extract_identity?: boolean }) =>
     request<{
       id: string; asset_kind: string; name: string;
       inspection_status: string; story_entity_id: string | null; voice_id?: string | null;
+      visual_identity?: Record<string, string>;
     }>(`/assets/${assetId}/identify`, { method: 'POST', body: JSON.stringify(payload) }),
 
   // ---------- Uploads ----------

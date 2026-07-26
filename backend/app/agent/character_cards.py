@@ -72,19 +72,18 @@ def _load_refs(db: Session, project_id: str, reference_asset_ids: list[str]):
     return refs
 
 
-async def create_character_card(
+async def extract_character_identity(
     db: Session,
     *,
     project_id: str,
     name: str,
     reference_asset_ids: list[str],
     llm,
-):
-    """从参考图提取身份指纹并落一张角色卡（Asset）。"""
-    from ..models import Asset
+) -> dict:
+    """从参考图提取角色身份指纹（visual_identity）。
 
-    if not name.strip():
-        raise ValueError("character name is empty")
+    create_character_card 与 identify 端点共用同一条提取链路。
+    """
     refs = _load_refs(db, project_id, reference_asset_ids)
 
     content: list[dict] = [
@@ -102,7 +101,30 @@ async def create_character_card(
         max_tokens=2048,
     )
     identity_raw = _parse_json_dict(resp.content or "")
-    identity = {k: str(identity_raw.get(k) or "") for k in IDENTITY_FIELDS}
+    return {k: str(identity_raw.get(k) or "") for k in IDENTITY_FIELDS}
+
+
+async def create_character_card(
+    db: Session,
+    *,
+    project_id: str,
+    name: str,
+    reference_asset_ids: list[str],
+    llm,
+):
+    """从参考图提取身份指纹并落一张角色卡（Asset）。"""
+    from ..models import Asset
+
+    if not name.strip():
+        raise ValueError("character name is empty")
+    refs = _load_refs(db, project_id, reference_asset_ids)
+    identity = await extract_character_identity(
+        db,
+        project_id=project_id,
+        name=name,
+        reference_asset_ids=reference_asset_ids,
+        llm=llm,
+    )
 
     card = Asset(
         id=uuid.uuid4().hex[:12],
@@ -122,6 +144,10 @@ async def create_character_card(
             "reference_asset_ids": [r.id for r in refs],
         },
     )
+    # 建卡即实体：角色卡绑定 story_entity（Story Bible 统一外键），
+    # 与 identify / search_assets 的轻量实体系统汇合。
+    from ..models import _ensure_story_entity
+    _ensure_story_entity(card)
     db.add(card)
     db.commit()
     return card
@@ -238,6 +264,43 @@ def card_impact(db: Session, project_id: str, card_id: str) -> list[dict]:
     """只读影响分析：列出项目里引用了该角色卡的所有镜头资产。
 
     依赖图来自镜头资产 extra.character_card_ids（生成时写入）。
+    角色卡绑定了 story_entity 后，同时按 extra.story_entity_ids 匹配
+    （实体层关联），两条路径命中同一镜头时去重。
+    """
+    from ..models import Asset
+
+    card = db.query(Asset).filter(Asset.id == card_id).first()
+    entity_id = card.story_entity_id if card is not None else None
+
+    rows = (
+        db.query(Asset)
+        .filter(Asset.project_id == project_id, Asset.asset_kind == "shot", Asset.failed.is_(False))
+        .order_by(Asset.created_at.asc())
+        .all()
+    )
+    impacted = []
+    for row in rows:
+        extra = row.extra or {}
+        card_ids = extra.get("character_card_ids") or []
+        entity_ids = extra.get("story_entity_ids") or []
+        if card_id in card_ids or (entity_id and entity_id in entity_ids):
+            impacted.append({
+                "asset_id": row.id,
+                "title": row.title or row.name or "",
+                "brief": extra.get("brief") or "",
+                "url": row.url,
+                "status": row.status,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            })
+    return impacted
+
+
+def entity_impact(db: Session, project_id: str, story_entity_id: str) -> list[dict]:
+    """实体级只读影响分析：列出引用该 story_entity 的所有镜头资产。
+
+    匹配两条路径：镜头 extra.story_entity_ids（工作室生成时写入）和
+    镜头自身的 story_entity_id 列（identify/搜索懒生成）。
+    道具、场景等非角色卡实体同样可用。
     """
     from ..models import Asset
 
@@ -249,8 +312,8 @@ def card_impact(db: Session, project_id: str, card_id: str) -> list[dict]:
     )
     impacted = []
     for row in rows:
-        card_ids = (row.extra or {}).get("character_card_ids") or []
-        if card_id in card_ids:
+        entity_ids = (row.extra or {}).get("story_entity_ids") or []
+        if story_entity_id in entity_ids or row.story_entity_id == story_entity_id:
             impacted.append({
                 "asset_id": row.id,
                 "title": row.title or row.name or "",

@@ -78,6 +78,7 @@ export const CanvasAssetPanel: React.FC<CanvasAssetPanelProps> = ({ open, onClos
   const [identifyName, setIdentifyName] = useState('');
   const [identifyKind, setIdentifyKind] = useState<string | null>(null);
   const [identifyVoice, setIdentifyVoice] = useState('');
+  const [identifyExtract, setIdentifyExtract] = useState(true);
   const [identifySubmitting, setIdentifySubmitting] = useState(false);
 
   const taskAssets = useCanvasStore((s) => s.taskAssets);
@@ -221,6 +222,7 @@ export const CanvasAssetPanel: React.FC<CanvasAssetPanelProps> = ({ open, onClos
           asset_kind: identifyKind,
           name: identifyName.trim() || item.name,
           ...(identifyKind === 'character' && identifyVoice ? { voice_id: identifyVoice } : {}),
+          ...(identifyKind === 'character' ? { extract_identity: identifyExtract } : {}),
         });
         setTaskAssets(taskAssets.map((a) => a.id === item.id ? {
           ...a,
@@ -283,6 +285,17 @@ export const CanvasAssetPanel: React.FC<CanvasAssetPanelProps> = ({ open, onClos
             <option value="child">{t('canvasPanelVoiceChild')}</option>
             <option value="elder">{t('canvasPanelVoiceElder')}</option>
           </select>
+        )}
+        {identifyKind === 'character' && (
+          <label className="canvas-asset-identify-extract">
+            <input
+              type="checkbox"
+              data-testid="identify-extract-identity"
+              checked={identifyExtract}
+              onChange={(e) => setIdentifyExtract(e.target.checked)}
+            />
+            {t('canvasPanelIdentifyExtractIdentity')}
+          </label>
         )}
         <div className="canvas-asset-identify-actions">
           <button

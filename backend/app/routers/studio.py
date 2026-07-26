@@ -176,6 +176,14 @@ async def get_card_impact(card_id: str, project_id: str = Query(...), db: Sessio
     return {"card_id": card_id, "impact": impact, "impacted_shots": len(impact)}
 
 
+@router.get("/entities/{story_entity_id}/impact")
+async def get_entity_impact(story_entity_id: str, project_id: str = Query(...), db: Session = Depends(get_db)):
+    """实体级只读影响分析：该 story_entity 出现在哪些镜头里（道具/场景通用）。"""
+    from ..agent.character_cards import entity_impact
+    impact = entity_impact(db, project_id, story_entity_id)
+    return {"story_entity_id": story_entity_id, "impact": impact, "impacted_shots": len(impact)}
+
+
 class ShotRegenerateIn(BaseModel):
     project_id: str
     asset_id: str

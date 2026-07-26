@@ -135,6 +135,15 @@ def _persist_shot_asset(
 ):
     from ..models import Asset
 
+    # 实体关联（Story Bible 统一外键）：从角色卡复制 story_entity_id，
+    # 使影响分析可以下沉到实体层（道具/场景/非卡资产同样可查）。
+    story_entity_ids: list[str] = []
+    if character_card_ids:
+        cards = db.query(Asset).filter(Asset.id.in_(list(character_card_ids))).all()
+        for card in cards:
+            if card.story_entity_id and card.story_entity_id not in story_entity_ids:
+                story_entity_ids.append(card.story_entity_id)
+
     asset = Asset(
         id=uuid.uuid4().hex[:12],
         project_id=project_id,
@@ -157,6 +166,7 @@ def _persist_shot_asset(
             "studio_round": round_no,
             "brief": brief,
             "character_card_ids": list(character_card_ids or []),
+            "story_entity_ids": story_entity_ids,
         },
     )
     db.add(asset)

@@ -413,6 +413,8 @@ class AssetIdentifyRequest(BaseModel):
     story_entity_name: Optional[str] = None
     # 角色声音画像：标识角色时可直接指定音色
     voice_id: Optional[str] = None
+    # 标识为角色时，用 vision LLM 提取身份指纹写 visual_identity（汇聚建卡）
+    extract_identity: bool = False
 
 
 # ============ DramaTask ============

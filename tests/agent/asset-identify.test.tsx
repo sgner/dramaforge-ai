@@ -71,6 +71,7 @@ describe('CanvasAssetPanel identify (Task 5.2.3/5.2.4)', () => {
       expect(api.identifyAsset).toHaveBeenCalledWith('up-1', {
         asset_kind: 'character',
         name: '林尘',
+        extract_identity: true,
       });
     });
     await waitFor(() => {
@@ -114,6 +115,7 @@ describe('CanvasAssetPanel identify (Task 5.2.3/5.2.4)', () => {
         asset_kind: 'character',
         name: '侧脸照',
         voice_id: 'male_calm',
+        extract_identity: true,
       });
     });
   });
