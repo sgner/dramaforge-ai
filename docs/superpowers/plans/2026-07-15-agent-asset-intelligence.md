@@ -370,7 +370,7 @@ Do not use a raw upload in downstream shots when a normalized derivative exists.
 
 - [x] Include existing project assets and their inspection status in the Agent context.
 - [x] Add `reference_asset_ids` to planned media jobs.
-- [ ] Test upload character → inspect → normalize → generate shot without an extra character generation.
+- [x] Test upload character → inspect → normalize → generate shot without an extra character generation.
 
 ### Task 4.2: Make parallel execution the default for independent jobs
 

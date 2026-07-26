@@ -209,3 +209,60 @@ class TestGate5ConsistentCharacterAcrossStoryboards:
         # 三个分镜请求都携带同一角色参考图
         for request in svc.requests:
             assert "https://example.com/char.png" in request.reference_urls
+
+
+class TestGateUploadNormalizeThenStoryboard:
+    @pytest.mark.asyncio
+    async def test_upload_inspect_normalize_then_storyboard_without_extra_character(self, db_session):
+        """Task 4.1：上传角色图 → 检查 → 标准化 → 生成分镜。
+
+        分镜直接引用标准化衍生图（原始上传图兜底），不再触发新的角色生成，
+        角色资产行数保持不变。
+        """
+        from app.agent.asset_intelligence import inspect_asset, prepare_asset
+        from app.agent.tools.image_tools import GenerateStoryboardImageTool
+
+        db_session.add(Asset(
+            id="upload-char", project_id="p1", kind="image", asset_kind="character",
+            name="林尘", url="https://example.com/upload.png",
+            origin="uploaded", inspection_status="pending", status="uploaded",
+        ))
+        db_session.commit()
+
+        class VisionLLM:
+            async def generate_structured(self, messages, **kwargs):
+                return LLMResponse(content=(
+                    '{"asset_type":"character","confidence":0.95,'
+                    '"subjects":["single_person"],"meets_standard":false,'
+                    '"missing_fields":["front_view"],'
+                    '"recommended_action":"prepare_character_asset",'
+                    '"reference_role":"character"}'
+                ))
+
+        await inspect_asset(db_session, "p1", "upload-char", VisionLLM())
+        derivative = prepare_asset(db_session, "p1", "upload-char", "character")
+        # 标准化衍生图已生成完成（模拟 provider 交付）
+        derivative.url = "https://example.com/normalized.png"
+        derivative.status = "ready"
+        db_session.commit()
+
+        character_rows_before = db_session.query(Asset).filter(
+            Asset.project_id == "p1", Asset.asset_kind == "character",
+        ).count()
+
+        svc = _RecordingMediaService()
+        result = await GenerateStoryboardImageTool().call(_ctx(db_session, svc), {
+            "shot": {"index": 1, "scene": "咖啡店", "action": "林尘坐下"},
+            "characters": [{"asset_id": "upload-char", "name": "林尘"}],
+        })
+
+        # 分镜引用解析到标准化衍生图，原始上传图作为兜底参考
+        assert result["reference_asset_ids"] == ["upload-char"]
+        ref_urls = svc.requests[0].reference_urls
+        assert ref_urls[0] == "https://example.com/normalized.png"
+        assert "https://example.com/upload.png" in ref_urls
+        # 没有产生新的角色资产行
+        character_rows_after = db_session.query(Asset).filter(
+            Asset.project_id == "p1", Asset.asset_kind == "character",
+        ).count()
+        assert character_rows_after == character_rows_before == 2
