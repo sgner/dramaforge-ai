@@ -280,6 +280,16 @@ class RetryableTool:
                         "delay_sec": delay,
                         "error": str(e),
                     })
+                    # 媒体工具的重试对前端可见（生成中 → 旁路重试中），
+                    # 与 media_recovery_started/finished 配套。
+                    if self.tool.name.startswith("generate_"):
+                        ctx.emit_event("media_recovery_progress", {
+                            "tool": self.tool.name,
+                            "status": "retrying",
+                            "attempt": attempt + 1,
+                            "max_attempts": self.max_retries,
+                            "error": str(e),
+                        })
                     await asyncio.sleep(delay)
                     continue
                 # 重试耗尽 → 尝试 fallback_model
@@ -291,6 +301,13 @@ class RetryableTool:
                         "from_model": original_model_id,
                         "to_model": fb,
                     })
+                    if self.tool.name.startswith("generate_"):
+                        ctx.emit_event("media_recovery_progress", {
+                            "tool": self.tool.name,
+                            "status": "fallback_model",
+                            "from_model": original_model_id,
+                            "to_model": fb,
+                        })
                     try:
                         return await self.tool.call(ctx, new_params)
                     except RetryableError as e2:

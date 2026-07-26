@@ -70,6 +70,7 @@ const EVENT_TYPES = [
   'tool_error',
   'tool_resumed',
   'media_recovery_started',
+  'media_recovery_progress',
   'media_recovery_finished',
   'asset_inspection_started',
   'asset_inspection_finished',

@@ -863,3 +863,37 @@ describe('useAgentStore', () => {
     expect(after.thoughts[0].payload.text).toContain('最近检查点');
   });
 });
+
+describe('media_recovery_progress', () => {
+  beforeEach(() => {
+    useAgentStore.getState().reset();
+  });
+
+  it('appends a retrying thought with attempt numbers', () => {
+    useAgentStore.getState().setTask('t-rec', 'running');
+    useAgentStore.getState().applyEvent({
+      type: 'media_recovery_progress',
+      payload: { tool: 'generate_video', status: 'retrying', attempt: 1, max_attempts: 2, error: 'provider 502' },
+      timestamp: 1,
+    });
+    const s = useAgentStore.getState();
+    expect(s.thoughts).toHaveLength(1);
+    expect(s.thoughts[0].payload.text).toContain('旁路重试中');
+    expect(s.thoughts[0].payload.text).toContain('1/2');
+    expect(s.thoughts[0].payload.text).toContain('generate_video');
+    expect(s.status).toBe('running');
+  });
+
+  it('renders fallback model switch as a thought', () => {
+    useAgentStore.getState().setTask('t-rec', 'running');
+    useAgentStore.getState().applyEvent({
+      type: 'media_recovery_progress',
+      payload: { tool: 'generate_video', status: 'fallback_model', from_model: 'm-t2v', to_model: 'm-i2v' },
+      timestamp: 1,
+    });
+    const s = useAgentStore.getState();
+    expect(s.thoughts[0].payload.text).toContain('降级模型');
+    expect(s.thoughts[0].payload.text).toContain('m-t2v');
+    expect(s.thoughts[0].payload.text).toContain('m-i2v');
+  });
+});

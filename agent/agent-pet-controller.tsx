@@ -166,10 +166,16 @@ export const AgentPetController: React.FC<AgentPetControllerProps> = ({
   const petLabelTitle = petStatusText && petStatusText.length > 12 ? petStatusText : undefined;
 
   const latestThought = thoughts[thoughts.length - 1]?.payload?.text;
-  const latestMedia = Object.values(artifacts)
-    .flat()
+  const allArtifacts = Object.values(artifacts).flat();
+  const latestMedia = allArtifacts
     .filter((item: any) => item && (item.prompt || item.model_id || item.modelId))
     .slice(-1)[0] as any;
+  // 最近一次生成引用的资产名（reference_asset_ids → 项目资产名），
+  // 让用户能核对"这次生成参考了谁"。
+  const latestMediaRefIds: string[] = (latestMedia?.extra?.reference_asset_ids || latestMedia?.reference_asset_ids || []) as string[];
+  const latestMediaRefNames = latestMediaRefIds
+    .map((id) => (allArtifacts.find((a: any) => a?.id === id) as any)?.name)
+    .filter(Boolean);
   const togglePanel = (event: React.MouseEvent) => {
     event.stopPropagation();
     setPanelOpen((open) => !open);
@@ -219,6 +225,9 @@ export const AgentPetController: React.FC<AgentPetControllerProps> = ({
           {latestMedia.prompt && <div data-testid="agent-pet-media-prompt" className="agent-pet-media-prompt" title="点击查看完整提示词">{truncatePetText(latestMedia.prompt, 180)}</div>}
           {(latestMedia.provider_name || latestMedia.provider_id || latestMedia.providerId || latestMedia.model_id || latestMedia.modelId) && <div data-testid="agent-pet-media-model" className="agent-pet-media-model">
             {latestMedia.provider_name || latestMedia.provider_id || latestMedia.providerId || ''}{(latestMedia.model_id || latestMedia.modelId) ? ` · ${latestMedia.model_id || latestMedia.modelId}` : ''}
+          </div>}
+          {latestMediaRefNames.length > 0 && <div data-testid="agent-pet-media-refs" className="agent-pet-media-refs">
+            参考：{latestMediaRefNames.join('、')}
           </div>}
         </div>}
         {onGoalChange && onSubmit && <div className="agent-pet-goal">

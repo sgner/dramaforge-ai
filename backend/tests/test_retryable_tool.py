@@ -271,3 +271,54 @@ class TestRetryableToolAttrDelegation:
         tool = _FallbackTool()
         wrapped = RetryableTool(tool)
         assert wrapped.fallback_model_id == "fallback-model-v1"
+
+
+class _GenerateFailTool(BaseTool):
+    """模拟媒体生成工具：前两次失败，第三次成功。"""
+
+    name = "generate_video"
+    description = "fails twice then succeeds"
+    category = "video"
+    parameters = []
+
+    def __init__(self):
+        super().__init__()
+        self.call_count = 0
+
+    async def execute(self, ctx, params):
+        self.call_count += 1
+        if self.call_count < 3:
+            raise RetryableError(f"provider 502 (attempt {self.call_count})")
+        return {"ok": True}
+
+
+class TestMediaRecoveryProgress:
+    """媒体工具重试/降级时发射 media_recovery_progress（Task 4.3 可见性）。"""
+
+    @pytest.mark.asyncio
+    async def test_generate_tool_retry_emits_progress(self):
+        tool = _GenerateFailTool()
+        wrapped = RetryableTool(tool, max_retries=2)
+        ctx = _make_ctx()
+        with patch("app.agent.tools.base.asyncio.sleep", new=AsyncMock()):
+            result = await wrapped.call(ctx, {})
+        assert result["ok"] is True
+        progress = [c for c in ctx.emit_event.call_args_list if c.args[0] == "media_recovery_progress"]
+        assert len(progress) == 2
+        first = progress[0].args[1]
+        assert first["status"] == "retrying"
+        assert first["attempt"] == 1
+        assert first["max_attempts"] == 2
+        assert first["tool"] == "generate_video"
+        assert progress[1].args[1]["attempt"] == 2
+
+    @pytest.mark.asyncio
+    async def test_non_generate_tool_does_not_emit_progress(self):
+        """非媒体工具重试只发 tool_retrying，不发 media_recovery_progress。"""
+        tool = _FailTwiceTool()
+        wrapped = RetryableTool(tool, max_retries=2)
+        ctx = _make_ctx()
+        with patch("app.agent.tools.base.asyncio.sleep", new=AsyncMock()):
+            await wrapped.call(ctx, {})
+        progress = [c for c in ctx.emit_event.call_args_list if c.args[0] == "media_recovery_progress"]
+        assert progress == []

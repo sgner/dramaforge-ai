@@ -39,6 +39,7 @@ class EventType(str, Enum):
     TOOL_ERROR = "tool_error"
     TOOL_RESUMED = "tool_resumed"
     MEDIA_RECOVERY_STARTED = "media_recovery_started"
+    MEDIA_RECOVERY_PROGRESS = "media_recovery_progress"
     MEDIA_RECOVERY_FINISHED = "media_recovery_finished"
     ASSET_INSPECTION_STARTED = "asset_inspection_started"
     ASSET_INSPECTION_FINISHED = "asset_inspection_finished"

@@ -162,4 +162,49 @@ describe('AgentPetController', () => {
     expect(screen.queryByTestId('agent-pet-connection-reconnecting')).toBeNull();
     expect(screen.queryByTestId('agent-pet-connection-disconnected')).toBeNull();
   });
+
+  it('shows referenced asset names for the latest generation in the expanded panel', () => {
+    useAgentStore.setState({
+      artifacts: {
+        character: [{
+          id: 'char-1',
+          asset_kind: 'character',
+          name: '林尘',
+          prompt: 'four-view portrait',
+          model_id: 'gpt-image-2',
+        }],
+        shot: [{
+          id: 'shot-1',
+          asset_kind: 'shot',
+          name: '分镜1',
+          prompt: 'storyboard with 林尘',
+          model_id: 'gpt-image-2',
+          extra: { reference_asset_ids: ['char-1'] },
+        }],
+      },
+    });
+    const container = createContainer();
+    render(<AgentPetController projectId="p1" containerRef={{ current: container }} />);
+
+    const refs = screen.getByTestId('agent-pet-media-refs');
+    expect(refs).toHaveTextContent('参考：林尘');
+  });
+
+  it('hides the refs row when the latest generation has no references', () => {
+    useAgentStore.setState({
+      artifacts: {
+        character: [{
+          id: 'char-1',
+          asset_kind: 'character',
+          name: '林尘',
+          prompt: 'four-view portrait',
+          model_id: 'gpt-image-2',
+        }],
+      },
+    });
+    const container = createContainer();
+    render(<AgentPetController projectId="p1" containerRef={{ current: container }} />);
+
+    expect(screen.queryByTestId('agent-pet-media-refs')).toBeNull();
+  });
 });

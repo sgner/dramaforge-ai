@@ -388,6 +388,10 @@ Do not use a raw upload in downstream shots when a normalized derivative exists.
 
 ### Task 4.3: Add visible recovery worker semantics
 
+> **设计决策（2026-07-26）**：采用"媒体失败即暂停"语义，不实现旁路 worker
+> （`runtime.py` `_pause_for_media_failure`，`test_agent_media_recovery.py` 为现行契约）。
+> 本 Task 收缩为可见性补偿：`media_recovery_progress` 事件 + ThoughtStream/桌宠展示。
+
 **Files:**
 - Modify: `backend/app/agent/events.py`
 - Modify: `backend/app/agent/runtime.py`
@@ -405,11 +409,11 @@ media_recovery_progress { asset_id, status, message }
 media_recovery_finished { asset_id, success, error, result_asset_id }
 ```
 
-- [ ] Show “生成中 / 旁路重试中 / 已完成 / 失败” on the asset node and in ThoughtStream.
-- [ ] Show current prompt, model, referenced asset names, and job progress in the pet panel.
-- [ ] Keep main Agent status `running` while recovery is active unless the main plan truly requires the failed asset.
-- [ ] Make retry bounded and idempotent.
-- [ ] Test that a 502 produces a visible failed node immediately, then visible recovery events, without a silent wait.
+- [ ] Show “生成中 / 旁路重试中 / 已完成 / 失败” on the asset node and in ThoughtStream.（ThoughtStream 已覆盖；资产节点四态为 per-asset 跟踪，未做）
+- [x] Show current prompt, model, referenced asset names, and job progress in the pet panel.
+- [ ] Keep main Agent status `running` while recovery is active unless the main plan truly requires the failed asset.（已被"失败即暂停"设计决策取代）
+- [x] Make retry bounded and idempotent.
+- [ ] Test that a 502 produces a visible failed node immediately, then visible recovery events, without a silent wait.（后端 progress 事件已测；端到端未做）
 
 ### Task 4.4: Make cancellation terminate all work
 

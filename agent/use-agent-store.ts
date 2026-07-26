@@ -909,6 +909,18 @@ export const useAgentStore = create<AgentState>((set, get) => {
             }],
             status: 'running',
           };
+        case 'media_recovery_progress': {
+          const progressText = p.status === 'fallback_model'
+            ? `媒体生成切换降级模型：${p.from_model || '?'} → ${p.to_model || '?'}`
+            : `旁路重试中（第 ${p.attempt ?? '?'}/${p.max_attempts ?? '?'} 次）：${p.tool || ''}`;
+          return {
+            thoughts: [...state.thoughts, {
+              ...event,
+              payload: { ...p, text: progressText },
+            }],
+            status: 'running',
+          };
+        }
         case 'media_recovery_finished':
           return {
             thoughts: [...state.thoughts, {
