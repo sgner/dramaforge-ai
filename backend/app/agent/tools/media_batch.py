@@ -61,6 +61,13 @@ class GenerateMediaBatchTool(BaseTool):
         service: MediaService = ctx.media_service or get_default_media_service()
         jobs = list(params["jobs"])
 
+        # 从画布连线收集 asset_ref，应用到每个 job（与单个生成工具一致：
+        # 用户在画布上连到生成节点的资产即视为参考资产）。
+        canvas_refs: list[str] = []
+        if ctx.db and ctx.project_id:
+            from .asset_registry_helpers import collect_canvas_references
+            canvas_refs = collect_canvas_references(ctx.db, ctx.project_id)
+
         async def run(index: int, job: dict) -> dict:
             source_prompt = str(job["prompt"])
             prompt = source_prompt
@@ -68,19 +75,21 @@ class GenerateMediaBatchTool(BaseTool):
             canonical = _CANONICAL_LAYOUT_BY_KIND.get(asset_kind)
             # 分镜：按文本出现解析角色/场景/道具参考资产（角色卡名出现在
             # job name/prompt 中即引用），否则批量分镜没有任何参考图。
-            ref_ids: list[str] = []
+            ref_ids: list[str] = list(canvas_refs)
             ref_urls = list(job.get("reference_urls") or [])
             if asset_kind == "storyboard":
-                ref_ids = resolve_reference_ids_by_text(
+                for ref_id in resolve_reference_ids_by_text(
                     getattr(ctx, "artifacts", None),
                     f"{job.get('name') or ''}\n{source_prompt}",
-                )
-                if ref_ids and ctx.db and ctx.project_id:
-                    url_by_id = {
-                        item["asset_id"]: item["url"]
-                        for item in resolve_asset_references(ctx.db, ctx.project_id, ref_ids, media_kind="image")
-                    }
-                    ref_urls = [url_by_id[i] for i in ref_ids if i in url_by_id] + ref_urls
+                ):
+                    if ref_id not in ref_ids:
+                        ref_ids.append(ref_id)
+            if ref_ids and ctx.db and ctx.project_id:
+                url_by_id = {
+                    item["asset_id"]: item["url"]
+                    for item in resolve_asset_references(ctx.db, ctx.project_id, ref_ids, media_kind=job["kind"])
+                }
+                ref_urls = [url_by_id[i] for i in ref_ids if i in url_by_id] + ref_urls
             try:
                 if canonical:
                     # canonical 资产：agent 的 job prompt 已是 LLM 写好的描述，

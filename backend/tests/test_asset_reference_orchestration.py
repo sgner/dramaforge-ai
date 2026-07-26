@@ -6,9 +6,11 @@ from sqlalchemy.pool import StaticPool
 
 from app.database import Base
 from app.schemas import ConnectionOut
-from app.models import Connection
+from app.models import Asset, Connection
+from app.agent.media_service import MediaResult
 from app.agent.tools.asset_registry_helpers import collect_canvas_references
 from app.agent.tools.base import ToolContext
+from app.agent.llm import LLMResponse
 
 
 @pytest.fixture
@@ -153,3 +155,123 @@ class TestBackwardCompat:
         )
         assert conn.data == {}
         assert conn.from_port == "out"
+
+
+class _RecordingMediaService:
+    """记录 MediaRequest 的测试用媒体服务。"""
+
+    def __init__(self):
+        self.requests = []
+
+    async def generate(self, request):
+        self.requests.append(request)
+        return MediaResult(url=f"https://example.com/{request.kind}-result", kind=request.kind)
+
+
+class _PromptLLM:
+    model = "test-prompt-model"
+
+    async def generate(self, messages, **kwargs):
+        return LLMResponse(content="optimized: " + messages[-1]["content"])
+
+
+def _seed_canvas_ref(db_session, asset_id="a1", url="https://example.com/char.png"):
+    db_session.add(Asset(
+        id=asset_id, project_id="p1", kind="image",
+        asset_kind="character", name="林尘", url=url,
+    ))
+    db_session.add(Connection(
+        id="c1", project_id="p1", from_node="n1", to_node="n2",
+        data={"asset_ref": asset_id},
+    ))
+    db_session.commit()
+
+
+class TestGenerateVideoCanvasRefs:
+    @pytest.mark.asyncio
+    async def test_video_tool_collects_canvas_refs(self, db_session):
+        """画布连线的 asset_ref 自动注入 generate_video 的 reference_urls。"""
+        from app.agent.tools.video_tools import GenerateVideoTool
+        _seed_canvas_ref(db_session)
+        svc = _RecordingMediaService()
+        ctx = ToolContext(
+            task_id="t1", project_id="p1", db=db_session,
+            llm_client=_PromptLLM(), media_service=svc,
+        )
+        result = await GenerateVideoTool().call(ctx, {
+            "shot": {"scene": "咖啡店", "action": "林尘坐下", "duration_sec": 5},
+        })
+        assert "url" in result
+        assert len(svc.requests) == 1
+        assert "https://example.com/char.png" in svc.requests[0].reference_urls
+
+    @pytest.mark.asyncio
+    async def test_video_tool_preserves_explicit_reference_urls(self, db_session):
+        """画布引用自动注入后，显式 reference_urls 不能被丢弃。"""
+        from app.agent.tools.video_tools import GenerateVideoTool
+        _seed_canvas_ref(db_session)
+        svc = _RecordingMediaService()
+        ctx = ToolContext(
+            task_id="t1", project_id="p1", db=db_session,
+            llm_client=_PromptLLM(), media_service=svc,
+        )
+        await GenerateVideoTool().call(ctx, {
+            "shot": {"scene": "咖啡店", "action": "林尘坐下", "duration_sec": 5},
+            "reference_urls": ["https://example.com/first-frame.png"],
+        })
+        ref_urls = svc.requests[0].reference_urls
+        assert "https://example.com/char.png" in ref_urls
+        assert "https://example.com/first-frame.png" in ref_urls
+
+    @pytest.mark.asyncio
+    async def test_video_tool_without_db_keeps_working(self):
+        """无 db 上下文（旧行为）时 generate_video 不受影响。"""
+        from app.agent.tools.video_tools import GenerateVideoTool
+        svc = _RecordingMediaService()
+        ctx = ToolContext(task_id="t1", llm_client=_PromptLLM(), media_service=svc)
+        result = await GenerateVideoTool().call(ctx, {
+            "shot": {"scene": "咖啡店", "action": "林尘坐下", "duration_sec": 5},
+        })
+        assert "url" in result
+        assert svc.requests[0].reference_urls == []
+
+
+class TestMediaBatchCanvasRefs:
+    @pytest.mark.asyncio
+    async def test_batch_applies_canvas_refs_to_video_and_storyboard_jobs(self, db_session):
+        """批量任务中视频与分镜 job 都携带画布连线引用。"""
+        from app.agent.tools.media_batch import GenerateMediaBatchTool
+        _seed_canvas_ref(db_session)
+        svc = _RecordingMediaService()
+        ctx = ToolContext(
+            task_id="t1", project_id="p1", db=db_session,
+            llm_client=_PromptLLM(), media_service=svc,
+        )
+        result = await GenerateMediaBatchTool().call(ctx, {
+            "jobs": [
+                {"kind": "video", "prompt": "林尘在咖啡店坐下", "duration_sec": 5},
+                {"kind": "image", "asset_kind": "storyboard", "prompt": "分镜1：咖啡店全景"},
+            ],
+        })
+        assert result["succeeded"] == 2
+        assert len(svc.requests) == 2
+        for request in svc.requests:
+            assert "https://example.com/char.png" in request.reference_urls
+        for item in result["results"]:
+            assert "a1" in item["reference_asset_ids"]
+
+    @pytest.mark.asyncio
+    async def test_batch_without_connections_behaves_as_before(self, db_session):
+        """无画布连线时批量任务保持旧行为（无引用注入）。"""
+        from app.agent.tools.media_batch import GenerateMediaBatchTool
+        svc = _RecordingMediaService()
+        ctx = ToolContext(
+            task_id="t1", project_id="p1", db=db_session,
+            llm_client=_PromptLLM(), media_service=svc,
+        )
+        result = await GenerateMediaBatchTool().call(ctx, {
+            "jobs": [{"kind": "video", "prompt": "林尘在咖啡店坐下", "duration_sec": 5}],
+        })
+        assert result["succeeded"] == 1
+        assert svc.requests[0].reference_urls == []
+        assert result["results"][0]["reference_asset_ids"] == []

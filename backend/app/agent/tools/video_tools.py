@@ -25,11 +25,14 @@ def _resolve_service(ctx: ToolContext) -> MediaService:
 
 def _resolve_reference_urls(ctx: ToolContext, params: dict) -> list[str]:
     asset_ids = list(params.get("reference_asset_ids") or [])
+    explicit_urls = list(params.get("reference_urls") or [])
     if not asset_ids:
-        return list(params.get("reference_urls") or [])
+        return explicit_urls
     if not ctx.db or not ctx.project_id:
         raise ValueError("reference_asset_ids require a project-scoped database context")
-    return [item["url"] for item in resolve_asset_references(ctx.db, ctx.project_id, asset_ids, media_kind="video")]
+    resolved = [item["url"] for item in resolve_asset_references(ctx.db, ctx.project_id, asset_ids, media_kind="video")]
+    # 画布连线自动注入 reference_asset_ids 后，显式 reference_urls 不能被丢弃
+    return resolved + [u for u in explicit_urls if u not in resolved]
 
 
 def _build_video_prompt(shot: dict, references: list[dict] | None = None) -> str:
@@ -167,6 +170,13 @@ class GenerateVideoTool(BaseTool):
         return None
 
     async def execute(self, ctx: ToolContext, params: dict) -> dict:
+        # 从画布连线收集 asset_ref（与 image 工具一致：用户在画布上连到
+        # 生成节点的资产即视为参考资产）
+        if ctx.db and ctx.project_id:
+            from .asset_registry_helpers import collect_canvas_references
+            canvas_refs = collect_canvas_references(ctx.db, ctx.project_id)
+            if canvas_refs:
+                params.setdefault("reference_asset_ids", []).extend(canvas_refs)
         svc = _resolve_service(ctx)
         shot = params["shot"]
         ref_ids = list(params.get("reference_asset_ids") or [])
