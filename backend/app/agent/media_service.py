@@ -87,6 +87,42 @@ class DatabaseMediaService:
             )
         raise MediaServiceError(f"no enabled {request.kind} provider/model is configured")
 
+    def check_reference_support(self, request: MediaRequest) -> dict | None:
+        """判定当前绑定的 provider/model 能否消费参考图。
+
+        返回 None 表示支持（或无法确定，按支持处理）；返回结构化 dict 表示
+        不支持，调用方据此降级为无参考生成。判定规则与 _resolve_ref_model
+        的 t2x/i2x 变体机制一致：绑定模型是 t2x 变体且 provider 模型列表里
+        没有可切换的 i2x 变体、也没有显式 ref_model_id 时，参考图不会生效。
+        """
+        if not request.reference_urls or request.kind not in ("image", "video"):
+            return None
+        binding = self.capability_bindings.get(request.kind) or {}
+        if binding.get("ref_model_id"):
+            return None
+        try:
+            provider = self._provider(request)
+        except MediaServiceError:
+            return None  # provider 不可用由 generate 抛错，不在此判定
+        model = provider.get("selected_model") or ""
+        t2x, i2x = ("-t2i", "-i2i") if request.kind == "image" else ("-t2v", "-i2v")
+        if not model.endswith(t2x):
+            return None
+        from ..routers.media import _resolve_ref_model
+        if _resolve_ref_model(provider, model, True, request.kind) != model:
+            return None
+        return {
+            "supported": False,
+            "reason": (
+                f"provider '{provider['provider_id']}' model '{model}' is text-only "
+                f"({t2x}) and no {i2x} variant or ref_model_id is configured"
+            ),
+            "provider_id": provider["provider_id"],
+            "model_id": model,
+            "media_kind": request.kind,
+            "reference_count": len(request.reference_urls),
+        }
+
     async def generate(self, request: MediaRequest) -> MediaResult:
         if request.kind == "audio":
             raise MediaServiceError("audio provider integration is not configured")

@@ -12,7 +12,7 @@ import re
 from typing import Any
 
 from ..media_service import MediaRequest, MediaService, get_default_media_service
-from ..asset_references import resolve_asset_references
+from ..asset_references import generate_with_reference_check, reference_urls_with_fallback, resolve_asset_references
 from ..prompt_engineering import (
     optimize_generation_prompt,
     collect_storyboard_reference_asset_ids,
@@ -103,7 +103,8 @@ def _resolve_reference_urls(ctx: ToolContext, params: dict, media_kind: str = "i
         return list(params.get("reference_urls") or [])
     if not ctx.db or not ctx.project_id:
         raise ValueError("reference_asset_ids require a project-scoped database context")
-    return [item["url"] for item in resolve_asset_references(ctx.db, ctx.project_id, asset_ids, media_kind=media_kind)]
+    items = resolve_asset_references(ctx.db, ctx.project_id, asset_ids, media_kind=media_kind)
+    return reference_urls_with_fallback(items)
 
 
 async def _check_existing_assets(
@@ -1319,7 +1320,7 @@ class GenerateCharacterPortraitTool(BaseTool):
             reference_urls=_resolve_reference_urls(ctx, params),
             extra={"asset_kind": "character", "character": char.get("name")},
         )
-        result = await svc.generate(req)
+        result = await generate_with_reference_check(ctx, svc, req)
         return {
             "url": result.url,
             "character": char.get("name"),
@@ -1402,7 +1403,7 @@ class GeneratePropImageTool(BaseTool):
             reference_urls=_resolve_reference_urls(ctx, params),
             extra={"asset_kind": "prop", "prop": prop.get("name")},
         )
-        result = await svc.generate(req)
+        result = await generate_with_reference_check(ctx, svc, req)
         return {
             "url": result.url,
             "prop": prop.get("name"),
@@ -1485,7 +1486,7 @@ class GenerateSceneImageTool(BaseTool):
             reference_urls=_resolve_reference_urls(ctx, params),
             extra={"asset_kind": "scene", "scene": scene.get("name")},
         )
-        result = await svc.generate(req)
+        result = await generate_with_reference_check(ctx, svc, req)
         return {
             "url": result.url,
             "scene": scene.get("name"),
@@ -1575,7 +1576,7 @@ class GenerateStoryboardImageTool(BaseTool):
             reference_urls=ref_urls,
             extra={"asset_kind": "shot", "shot_index": shot.get("index")},
         )
-        result = await svc.generate(req)
+        result = await generate_with_reference_check(ctx, svc, req)
         return {
             "url": result.url,
             "shot_index": shot.get("index"),

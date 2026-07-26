@@ -496,3 +496,170 @@ class TestGenerateVideoReferenceInheritance:
         ref_urls = svc.requests[0].reference_urls
         assert "https://example.com/canvas.png" in ref_urls
         assert "https://example.com/char.png" in ref_urls
+
+
+class TestFallbackReference:
+    def _seed_upload_with_derivative(self, db_session):
+        db_session.add(Asset(
+            id="raw-1", project_id="p1", kind="image", asset_kind="character",
+            name="林尘", url="https://example.com/raw.png", origin="uploaded",
+        ))
+        db_session.add(Asset(
+            id="norm-1", project_id="p1", kind="image", asset_kind="character",
+            name="林尘", url="https://example.com/norm.png",
+            origin="normalized", source_asset_id="raw-1",
+        ))
+        db_session.commit()
+
+    def test_resolve_includes_raw_upload_as_fallback(self, db_session):
+        """选中标准化衍生图时，原始上传图作为 fallback_url 保留。"""
+        from app.agent.asset_references import resolve_asset_references
+        self._seed_upload_with_derivative(db_session)
+        refs = resolve_asset_references(db_session, "p1", ["raw-1"], media_kind="image")
+        assert refs[0]["asset_id"] == "norm-1"
+        assert refs[0]["fallback_url"] == "https://example.com/raw.png"
+
+    def test_no_fallback_when_source_itself_selected(self, db_session):
+        from app.agent.asset_references import resolve_asset_references
+        db_session.add(Asset(
+            id="raw-1", project_id="p1", kind="image", asset_kind="character",
+            name="林尘", url="https://example.com/raw.png", origin="uploaded",
+        ))
+        db_session.commit()
+        refs = resolve_asset_references(db_session, "p1", ["raw-1"], media_kind="image")
+        assert refs[0]["asset_id"] == "raw-1"
+        assert refs[0]["fallback_url"] is None
+
+    def test_reference_urls_with_fallback_orders_primary_first(self):
+        from app.agent.asset_references import reference_urls_with_fallback
+        items = [
+            {"url": "a", "fallback_url": "b"},
+            {"url": "c", "fallback_url": "a"},
+        ]
+        assert reference_urls_with_fallback(items) == ["a", "c", "b"]
+
+    @pytest.mark.asyncio
+    async def test_video_reference_urls_include_fallback(self, db_session):
+        """视频工具的 reference_urls：衍生图在前，原始上传图兜底在后。"""
+        from app.agent.tools.video_tools import GenerateVideoTool
+        self._seed_upload_with_derivative(db_session)
+        svc = _RecordingMediaService()
+        ctx = ToolContext(
+            task_id="t1", project_id="p1", db=db_session,
+            llm_client=_PromptLLM(), media_service=svc,
+        )
+        await GenerateVideoTool().call(ctx, {
+            "shot": {"scene": "咖啡店", "action": "林尘坐下", "duration_sec": 5},
+            "reference_asset_ids": ["raw-1"],
+        })
+        assert svc.requests[0].reference_urls == [
+            "https://example.com/norm.png",
+            "https://example.com/raw.png",
+        ]
+
+
+class TestCheckReferenceSupport:
+    def _provider(self, db_session, models):
+        import json
+        from app.models import ProviderConfig
+        db_session.add(ProviderConfig(
+            provider_id="p1", name="p1",
+            base_url="https://example.test/v1", api_key="secret", enabled=True,
+            image_models_json=json.dumps(models),
+        ))
+        db_session.commit()
+
+    def _svc(self, db_session, binding):
+        from app.agent.media_service import DatabaseMediaService
+        return DatabaseMediaService(db_session, capability_bindings={"image": binding})
+
+    def test_t2i_without_i2i_variant_is_unsupported(self, db_session):
+        from app.agent.media_service import MediaRequest
+        self._provider(db_session, ["seedream-t2i"])
+        svc = self._svc(db_session, {"provider_id": "p1", "model_id": "seedream-t2i"})
+        verdict = svc.check_reference_support(
+            MediaRequest(kind="image", prompt="p", reference_urls=["https://x/ref.png"])
+        )
+        assert verdict["supported"] is False
+        assert verdict["provider_id"] == "p1"
+        assert verdict["model_id"] == "seedream-t2i"
+        assert verdict["reference_count"] == 1
+        assert "-t2i" in verdict["reason"]
+
+    def test_i2i_variant_available_is_supported(self, db_session):
+        from app.agent.media_service import MediaRequest
+        self._provider(db_session, ["seedream-t2i", "seedream-i2i"])
+        svc = self._svc(db_session, {"provider_id": "p1", "model_id": "seedream-t2i"})
+        assert svc.check_reference_support(
+            MediaRequest(kind="image", prompt="p", reference_urls=["https://x/ref.png"])
+        ) is None
+
+    def test_ref_model_id_binding_is_supported(self, db_session):
+        from app.agent.media_service import MediaRequest
+        self._provider(db_session, ["seedream-t2i", "seedream-i2i"])
+        svc = self._svc(db_session, {
+            "provider_id": "p1", "model_id": "seedream-t2i", "ref_model_id": "seedream-i2i",
+        })
+        assert svc.check_reference_support(
+            MediaRequest(kind="image", prompt="p", reference_urls=["https://x/ref.png"])
+        ) is None
+
+    def test_no_references_returns_none(self, db_session):
+        from app.agent.media_service import MediaRequest
+        self._provider(db_session, ["seedream-t2i"])
+        svc = self._svc(db_session, {"provider_id": "p1", "model_id": "seedream-t2i"})
+        assert svc.check_reference_support(MediaRequest(kind="image", prompt="p")) is None
+
+    def test_unsuffixed_model_treated_as_supported(self, db_session):
+        from app.agent.media_service import MediaRequest
+        self._provider(db_session, ["seedream-4-0"])
+        svc = self._svc(db_session, {"provider_id": "p1", "model_id": "seedream-4-0"})
+        assert svc.check_reference_support(
+            MediaRequest(kind="image", prompt="p", reference_urls=["https://x/ref.png"])
+        ) is None
+
+
+class TestGenerateWithReferenceCheck:
+    @pytest.mark.asyncio
+    async def test_degrades_and_annotates_when_unsupported(self):
+        """provider 不支持参考图：降级为无参考生成 + agent_notice + raw 标注。"""
+        from app.agent.asset_references import generate_with_reference_check
+        from app.agent.media_service import MediaRequest
+
+        class UnsupportedSvc:
+            def check_reference_support(self, request):
+                return {
+                    "supported": False, "reason": "text-only",
+                    "provider_id": "p1", "model_id": "m-t2i",
+                    "media_kind": "image",
+                    "reference_count": len(request.reference_urls),
+                }
+
+            async def generate(self, request):
+                self.last = request
+                return MediaResult(url="https://x/out.png", kind=request.kind)
+
+        events = []
+        ctx = ToolContext(task_id="t1", emit=lambda t, p: events.append((t, p)))
+        svc = UnsupportedSvc()
+        result = await generate_with_reference_check(
+            ctx, svc, MediaRequest(kind="image", prompt="p", reference_urls=["https://x/ref.png"]),
+        )
+        assert svc.last.reference_urls == []
+        assert result.raw["unsupported_references"]["supported"] is False
+        notices = [p for t, p in events if t == "agent_notice"]
+        assert len(notices) == 1
+        assert notices[0]["level"] == "warning"
+
+    @pytest.mark.asyncio
+    async def test_passes_through_when_no_checker(self):
+        """服务无 check_reference_support（如 Stub）时参考图原样传递。"""
+        from app.agent.asset_references import generate_with_reference_check
+        from app.agent.media_service import MediaRequest
+        svc = _RecordingMediaService()
+        ctx = ToolContext(task_id="t1")
+        result = await generate_with_reference_check(
+            ctx, svc, MediaRequest(kind="image", prompt="p", reference_urls=["https://x/ref.png"]),
+        )
+        assert svc.requests[0].reference_urls == ["https://x/ref.png"]
+        assert "unsupported_references" not in (result.raw or {})

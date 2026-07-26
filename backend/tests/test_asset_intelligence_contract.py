@@ -151,6 +151,8 @@ def test_asset_reference_resolution_prefers_normalized_derivative_and_is_project
         "source_asset_id": "source-character",
         "asset_kind": "character",
         "url": "/files/turnaround.png",
+        # 选中标准化衍生图时，原始上传图保留为兜底参考
+        "fallback_url": "/files/source.png",
     }]
     # 契约变更：解析阶段不再递增 usage_count；只在 provider 接受后
     # （finish_media_asset → record_asset_usage）计数，失败生成不虚增。

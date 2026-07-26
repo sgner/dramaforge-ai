@@ -8,7 +8,7 @@ from ..media_service import MediaRequest, MediaService, get_default_media_servic
 from .base import BaseTool, ToolContext, ToolParameter
 from .image_tools import CHARACTER_DESIGN_SHEET_PROMPT, PROP_FOUR_VIEW_LAYOUT, STORYBOARD_SIX_GRID_PROMPT
 from .llm_tools import _cap_prompt_length
-from ..asset_references import resolve_asset_references
+from ..asset_references import generate_with_reference_check, resolve_asset_references
 from ..prompt_engineering import optimize_generation_prompt, resolve_reference_ids_by_text
 
 
@@ -85,11 +85,17 @@ class GenerateMediaBatchTool(BaseTool):
                     if ref_id not in ref_ids:
                         ref_ids.append(ref_id)
             if ref_ids and ctx.db and ctx.project_id:
+                items = resolve_asset_references(ctx.db, ctx.project_id, ref_ids, media_kind=job["kind"])
                 url_by_id = {
                     item["asset_id"]: item["url"]
-                    for item in resolve_asset_references(ctx.db, ctx.project_id, ref_ids, media_kind=job["kind"])
+                    for item in items
                 }
-                ref_urls = [url_by_id[i] for i in ref_ids if i in url_by_id] + ref_urls
+                resolved_urls = [url_by_id[i] for i in ref_ids if i in url_by_id]
+                resolved_urls += [
+                    item["fallback_url"] for item in items
+                    if item.get("fallback_url") and item["fallback_url"] not in resolved_urls
+                ]
+                ref_urls = resolved_urls + ref_urls
             try:
                 if canonical:
                     # canonical 资产：agent 的 job prompt 已是 LLM 写好的描述，
@@ -116,7 +122,7 @@ class GenerateMediaBatchTool(BaseTool):
                     reference_urls=ref_urls,
                     extra={"asset_kind": job.get("asset_kind"), "name": job.get("name")},
                 )
-                result = await service.generate(request)
+                result = await generate_with_reference_check(ctx, service, request)
                 dev_fallback = bool((result.raw or {}).get("dev_fallback"))
                 return {
                     "job_index": index,

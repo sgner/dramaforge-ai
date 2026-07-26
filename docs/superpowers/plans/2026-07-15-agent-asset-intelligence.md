@@ -294,8 +294,8 @@ async def resolve_asset_refs(
 
 - [x] Reject asset IDs from another project.
 - [x] Prefer normalized derivatives over their raw source when both are available for a character/prop/scene.
-- [ ] Preserve the raw upload as a fallback reference.
-- [ ] Return a structured unsupported-reference result when the selected provider cannot accept reference images.
+- [x] Preserve the raw upload as a fallback reference.
+- [x] Return a structured unsupported-reference result when the selected provider cannot accept reference images.
 - [x] Increment `usage_count` only after a provider request is accepted.
 
 ### Task 3.2: Record usage and derivation relationships

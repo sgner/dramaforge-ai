@@ -121,6 +121,16 @@ def _build_normalization_prompt(target_kind: str, source: Asset) -> str:
 
 
 def _reference_payload(selected: Asset, source: Asset) -> dict[str, Any]:
+    # 选中标准化衍生图时，把原始上传图保留为兜底参考（fallback_url），
+    # 供媒体工具在主参考之后追加，provider 可按需取用。
+    fallback_url = None
+    if (
+        selected.id != source.id
+        and source.url
+        and not source.failed
+        and source.status not in {"failed", "superseded"}
+    ):
+        fallback_url = source.url
     return {
         "asset_id": selected.id,
         "source_asset_id": source.id if selected.id != source.id else None,
@@ -129,6 +139,7 @@ def _reference_payload(selected: Asset, source: Asset) -> dict[str, Any]:
         "status": selected.status,
         "version": selected.version,
         "url": selected.url,
+        "fallback_url": fallback_url,
         "prompt_source": selected.prompt_source,
         "prompt_optimized": selected.prompt_optimized,
     }

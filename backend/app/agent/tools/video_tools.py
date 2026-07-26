@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 from ..media_service import MediaRequest, MediaService, get_default_media_service
-from ..asset_references import resolve_asset_references
+from ..asset_references import generate_with_reference_check, reference_urls_with_fallback, resolve_asset_references
 from ..prompt_engineering import optimize_generation_prompt, resolve_reference_ids_by_text, sanitize_structured_field
 from .base import BaseTool, ToolContext, ToolParameter
 
@@ -43,7 +43,8 @@ def _resolve_reference_urls(ctx: ToolContext, params: dict) -> list[str]:
         return explicit_urls
     if not ctx.db or not ctx.project_id:
         raise ValueError("reference_asset_ids require a project-scoped database context")
-    resolved = [item["url"] for item in resolve_asset_references(ctx.db, ctx.project_id, asset_ids, media_kind="video")]
+    items = resolve_asset_references(ctx.db, ctx.project_id, asset_ids, media_kind="video")
+    resolved = reference_urls_with_fallback(items)
     # 画布连线自动注入 reference_asset_ids 后，显式 reference_urls 不能被丢弃
     return resolved + [u for u in explicit_urls if u not in resolved]
 
@@ -233,7 +234,7 @@ class GenerateVideoTool(BaseTool):
                 },
             },
         )
-        result = await svc.generate(req)
+        result = await generate_with_reference_check(ctx, svc, req)
         return {
             "url": result.url,
             "shot_index": shot.get("index"),
