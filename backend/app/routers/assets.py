@@ -207,6 +207,8 @@ def identify_asset(
     asset.name = payload.name
     if payload.story_entity_name:
         asset.story_entity_name = payload.story_entity_name
+    if payload.voice_id:
+        asset.voice_id = payload.voice_id
     models._ensure_story_entity(asset)
     asset.inspection_status = "ready"
     db.commit()
@@ -216,4 +218,5 @@ def identify_asset(
         "name": asset.name,
         "inspection_status": asset.inspection_status,
         "story_entity_id": asset.story_entity_id,
+        "voice_id": asset.voice_id,
     }

@@ -77,6 +77,7 @@ export const CanvasAssetPanel: React.FC<CanvasAssetPanelProps> = ({ open, onClos
   const [identifyingId, setIdentifyingId] = useState<string | null>(null);
   const [identifyName, setIdentifyName] = useState('');
   const [identifyKind, setIdentifyKind] = useState<string | null>(null);
+  const [identifyVoice, setIdentifyVoice] = useState('');
   const [identifySubmitting, setIdentifySubmitting] = useState(false);
 
   const taskAssets = useCanvasStore((s) => s.taskAssets);
@@ -219,6 +220,7 @@ export const CanvasAssetPanel: React.FC<CanvasAssetPanelProps> = ({ open, onClos
         const result = await apiClient.identifyAsset(item.id, {
           asset_kind: identifyKind,
           name: identifyName.trim() || item.name,
+          ...(identifyKind === 'character' && identifyVoice ? { voice_id: identifyVoice } : {}),
         });
         setTaskAssets(taskAssets.map((a) => a.id === item.id ? {
           ...a,
@@ -269,6 +271,19 @@ export const CanvasAssetPanel: React.FC<CanvasAssetPanelProps> = ({ open, onClos
           placeholder={item.name}
           onChange={(e) => setIdentifyName(e.target.value)}
         />
+        {identifyKind === 'character' && (
+          <select
+            data-testid="identify-voice-select"
+            value={identifyVoice}
+            onChange={(e) => setIdentifyVoice(e.target.value)}
+          >
+            <option value="">{t('canvasPanelIdentifyVoiceNone')}</option>
+            <option value="male_calm">{t('canvasPanelVoiceMaleCalm')}</option>
+            <option value="female_warm">{t('canvasPanelVoiceFemaleWarm')}</option>
+            <option value="child">{t('canvasPanelVoiceChild')}</option>
+            <option value="elder">{t('canvasPanelVoiceElder')}</option>
+          </select>
+        )}
         <div className="canvas-asset-identify-actions">
           <button
             type="button"

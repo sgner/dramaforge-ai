@@ -411,6 +411,8 @@ class AssetIdentifyRequest(BaseModel):
     asset_kind: str
     name: str
     story_entity_name: Optional[str] = None
+    # 角色声音画像：标识角色时可直接指定音色
+    voice_id: Optional[str] = None
 
 
 # ============ DramaTask ============

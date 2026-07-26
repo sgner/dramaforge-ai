@@ -85,8 +85,40 @@ describe('CanvasAssetPanel identify (Task 5.2.3/5.2.4)', () => {
     });
   });
 
-  it('falls back to the current name when the name input is left empty', async () => {
+  it('offers a voice selector for characters and submits voice_id', async () => {
     useCanvasStore.setState({
+      taskAssets: [
+        { id: 'up-3', kind: 'image', name: '侧脸照', url: '/u3.png', inspectionStatus: 'pending' } as any,
+      ],
+    } as any);
+    (api.identifyAsset as any).mockResolvedValue({
+      id: 'up-3',
+      asset_kind: 'character',
+      name: '林尘',
+      inspection_status: 'ready',
+      story_entity_id: 'entity-3',
+      voice_id: 'male_calm',
+    });
+
+    render(<CanvasAssetPanel open onClose={() => undefined} />);
+
+    fireEvent.click(screen.getByTestId('identify-open-up-3'));
+    // 未选角色类型前不出音色选择
+    expect(screen.queryByTestId('identify-voice-select')).toBeNull();
+    fireEvent.click(screen.getByTestId('identify-kind-character'));
+    fireEvent.change(screen.getByTestId('identify-voice-select'), { target: { value: 'male_calm' } });
+    fireEvent.click(screen.getByTestId('identify-submit'));
+
+    await waitFor(() => {
+      expect(api.identifyAsset).toHaveBeenCalledWith('up-3', {
+        asset_kind: 'character',
+        name: '侧脸照',
+        voice_id: 'male_calm',
+      });
+    });
+  });
+
+  it('falls back to the current name when the name input is left empty', async () => {    useCanvasStore.setState({
       taskAssets: [
         { id: 'up-2', kind: 'image', name: '青铜剑照片', url: '/u2.png', inspectionStatus: 'pending' } as any,
       ],

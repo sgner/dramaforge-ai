@@ -795,3 +795,35 @@ class TestVoiceIdSchema:
             db.query(Asset).filter(Asset.id == asset_id).delete()
             db.commit()
             db.close()
+
+
+class TestIdentifyWithVoice:
+    def test_identify_persists_voice_id(self):
+        import uuid as _uuid
+        from fastapi.testclient import TestClient
+        from app import app
+        from app.database import SessionLocal
+
+        asset_id = f"identify-voice-{_uuid.uuid4().hex[:8]}"
+        db = SessionLocal()
+        try:
+            db.add(Asset(id=asset_id, project_id="p-voice", kind="image", name="侧脸照", url="https://example.com/u.png"))
+            db.commit()
+            client = TestClient(app)
+            resp = client.post(f"/api/assets/{asset_id}/identify", json={
+                "asset_kind": "character",
+                "name": "林尘",
+                "voice_id": "male_calm",
+            })
+            assert resp.status_code == 200
+            payload = resp.json()
+            assert payload["voice_id"] == "male_calm"
+            db.expire_all()
+            asset = db.query(Asset).filter_by(id=asset_id).one()
+            assert asset.voice_id == "male_calm"
+            assert asset.asset_kind == "character"
+            assert asset.inspection_status == "ready"
+        finally:
+            db.query(Asset).filter(Asset.id == asset_id).delete()
+            db.commit()
+            db.close()
