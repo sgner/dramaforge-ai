@@ -310,3 +310,80 @@ class TestIdentifyExtractIdentity:
             db.query(Asset).filter(Asset.id == asset_id).delete()
             db.commit()
             db.close()
+
+
+# ========================
+# 工作室镜头回画布
+# ========================
+
+def test_persist_shot_asset_creates_canvas_node(db_session):
+    """shot 资产落库时同步创建画布节点，data 字段与 rebuild 约定对齐。"""
+    from app.models import Node
+
+    shot = studio._persist_shot_asset(
+        db_session,
+        project_id="p1",
+        brief="雨夜天台对峙",
+        shot_prompt="rooftop confrontation, rain, cinematic",
+        shot_notes="",
+        url="https://cdn.test/shot-node.png",
+        provider_id="img-p",
+        model="img-model",
+        round_no=1,
+        character_card_ids=["card1"],
+    )
+    node = db_session.query(Node).filter_by(id=f"studio-shot-{shot.id}").one()
+    assert node.project_id == "p1"
+    assert node.type == "image"
+    assert node.data["url"] == "https://cdn.test/shot-node.png"
+    assert node.data["_assetKind"] == "shot"
+    assert node.data["_assetPrompt"] == "rooftop confrontation, rain, cinematic"
+    assert node.data["_origin"] == "studio"
+
+
+def test_studio_shot_node_not_duplicated_by_rebuild(db_session):
+    """rebuild-from-nodes 不会把工作室镜头节点再复制成重复资产。"""
+    from app.routers.assets import rebuild_assets_from_nodes
+
+    studio._persist_shot_asset(
+        db_session,
+        project_id="p1",
+        brief="雨夜天台对峙",
+        shot_prompt="rooftop confrontation, rain, cinematic",
+        shot_notes="",
+        url="https://cdn.test/shot-node2.png",
+        provider_id="img-p",
+        model="img-model",
+        round_no=1,
+    )
+    assets_before = db_session.query(Asset).filter_by(project_id="p1", asset_kind="shot").count()
+
+    result = rebuild_assets_from_nodes("p1", db_session)
+
+    assert result["created"] == 0
+    assert db_session.query(Asset).filter_by(project_id="p1", asset_kind="shot").count() == assets_before
+
+
+def test_multiple_versions_each_get_own_node(db_session):
+    """多版本重生成：每个版本资产有自己的节点。"""
+    from app.models import Node
+
+    ids = []
+    for round_no in (1, 2):
+        shot = studio._persist_shot_asset(
+            db_session,
+            project_id="p1",
+            brief="雨夜天台对峙",
+            shot_prompt=f"round {round_no} prompt",
+            shot_notes="",
+            url=f"https://cdn.test/shot-v{round_no}.png",
+            provider_id="img-p",
+            model="img-model",
+            round_no=round_no,
+        )
+        ids.append(shot.id)
+    nodes = db_session.query(Node).filter(Node.id.in_([f"studio-shot-{i}" for i in ids])).all()
+    assert len(nodes) == 2
+    assert {n.data["url"] for n in nodes} == {
+        "https://cdn.test/shot-v1.png", "https://cdn.test/shot-v2.png",
+    }

@@ -171,7 +171,47 @@ def _persist_shot_asset(
     )
     db.add(asset)
     db.commit()
+    _upsert_studio_shot_node(db, asset)
     return asset
+
+
+def _upsert_studio_shot_node(db: Session, asset) -> None:
+    """工作室镜头回画布：为 shot 资产创建/更新对应的画布节点。
+
+    节点 id 由资产 id 确定性派生，重复生成（多版本）各自一个节点；
+    data 字段与 rebuild-from-nodes 的读取约定对齐（_assetKind/_assetPrompt），
+    保证反向同步不会把节点再复制成重复资产。
+    """
+    from ..models import Node
+
+    node_id = f"studio-shot-{asset.id}"
+    node = db.query(Node).filter(Node.id == node_id).first()
+    if node is None:
+        count = db.query(Node).filter(Node.project_id == asset.project_id).count()
+        node = Node(
+            id=node_id,
+            project_id=asset.project_id,
+            type="image",
+            x=60 + (count % 4) * 340,
+            y=60 + (count // 4) * 260,
+            w=320,
+            h=180,
+            data={},
+        )
+        db.add(node)
+    node.data = {
+        **(node.data or {}),
+        "url": asset.url,
+        "title": asset.title or asset.name or "",
+        "name": asset.name or "",
+        "_assetKind": asset.asset_kind,
+        "_assetPrompt": asset.prompt,
+        "_assetProviderId": asset.provider_id,
+        "_assetModelId": asset.model_id,
+        "_assetFailed": bool(asset.failed),
+        "_origin": "studio",
+    }
+    db.commit()
 
 
 # ============ 质检 agent ============
