@@ -141,6 +141,19 @@ def _ensure_story_entity(asset: Asset) -> None:
     asset.story_entity_name = asset.name
 
 
+class AssetUsage(Base):
+    """资产使用记录：哪个任务/分镜/媒体资产引用了该资产。"""
+    __tablename__ = "asset_usages"
+
+    id = Column(String, primary_key=True)
+    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    asset_id = Column(String, ForeignKey("assets.id", ondelete="CASCADE"), nullable=False, index=True)
+    consumer_type = Column(String, nullable=False)  # task | shot | media_asset
+    consumer_id = Column(String, nullable=False)
+    role = Column(String, nullable=True)  # 引用时的媒体角色：image / video 等
+    created_at = Column(DateTime, default=_now)
+
+
 # ========================
 # Agent 模型（v1.0 改造新增）
 # ========================

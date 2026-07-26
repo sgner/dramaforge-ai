@@ -130,6 +130,62 @@ def begin_media_asset(db: Any, *, project_id: str | None, kind: str, asset_kind:
     return _asset_dict(row)
 
 
+def record_asset_usage(
+    db: Any,
+    *,
+    project_id: str | None,
+    asset_ids: list[str],
+    consumer_type: str,
+    consumer_id: str,
+    role: str | None = None,
+) -> list[dict]:
+    """生成被 provider 接受后记录资产使用。
+
+    每个被引用资产写一行 AssetUsage 并递增 usage_count。
+    幂等：同一 (asset_id, consumer_type, consumer_id) 只记一行，
+    重试 / 重复 finish 不会重复计数。
+    """
+    from ..models import Asset, AssetUsage
+
+    if not project_id:
+        return []
+    recorded: list[dict] = []
+    for asset_id in dict.fromkeys(asset_ids or []):
+        asset = db.query(Asset).filter(
+            Asset.id == asset_id,
+            Asset.project_id == project_id,
+        ).first()
+        if asset is None:
+            continue
+        existing = db.query(AssetUsage).filter(
+            AssetUsage.asset_id == asset_id,
+            AssetUsage.consumer_type == consumer_type,
+            AssetUsage.consumer_id == consumer_id,
+        ).first()
+        if existing is not None:
+            continue
+        row = AssetUsage(
+            id=f"usage-{uuid.uuid4().hex[:16]}",
+            project_id=project_id,
+            asset_id=asset_id,
+            consumer_type=consumer_type,
+            consumer_id=consumer_id,
+            role=role,
+        )
+        db.add(row)
+        asset.usage_count = (asset.usage_count or 0) + 1
+        recorded.append({
+            "id": row.id,
+            "asset_id": asset_id,
+            "consumer_type": consumer_type,
+            "consumer_id": consumer_id,
+            "role": role,
+        })
+    if recorded:
+        db.commit()
+    return recorded
+
+
 def finish_media_asset(
     db: Any,
     asset_id: str,
@@ -170,4 +226,17 @@ def finish_media_asset(
     row.status = "warning" if dev_fallback else ("failed" if error else "ready")
     db.commit()
     db.refresh(row)
+    # 生成被接受（成功且非 dev fallback）后记录引用资产的使用：
+    # 每个 reference_asset_id 写一行 AssetUsage 并递增其 usage_count。
+    if not error and not dev_fallback:
+        reference_ids = (extra or {}).get("reference_asset_ids") or (row.extra or {}).get("reference_asset_ids")
+        if reference_ids:
+            record_asset_usage(
+                db,
+                project_id=row.project_id,
+                asset_ids=list(reference_ids),
+                consumer_type="media_asset",
+                consumer_id=row.id,
+                role=row.kind,
+            )
     return _asset_dict(row)

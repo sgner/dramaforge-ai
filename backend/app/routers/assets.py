@@ -159,6 +159,35 @@ def search_assets_api(
     return group_by_entity(results)
 
 
+@router.get("/{asset_id}/usage")
+def get_asset_usage(asset_id: str, db: Session = Depends(get_db)):
+    """资产使用记录：哪些任务/分镜/媒体资产引用了该资产。"""
+    asset = db.query(models.Asset).filter(models.Asset.id == asset_id).first()
+    if not asset:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    rows = (
+        db.query(models.AssetUsage)
+        .filter(models.AssetUsage.asset_id == asset_id)
+        .order_by(models.AssetUsage.created_at.desc())
+        .all()
+    )
+    return {
+        "asset_id": asset_id,
+        "usage_count": asset.usage_count or 0,
+        "usages": [
+            {
+                "id": row.id,
+                "project_id": row.project_id,
+                "consumer_type": row.consumer_type,
+                "consumer_id": row.consumer_id,
+                "role": row.role,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            }
+            for row in rows
+        ],
+    }
+
+
 @router.post("/{asset_id}/identify")
 def identify_asset(
     asset_id: str,

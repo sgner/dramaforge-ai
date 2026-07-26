@@ -275,3 +275,153 @@ class TestMediaBatchCanvasRefs:
         assert result["succeeded"] == 1
         assert svc.requests[0].reference_urls == []
         assert result["results"][0]["reference_asset_ids"] == []
+
+
+class TestRecordAssetUsage:
+    def test_records_usage_and_increments_count(self, db_session):
+        from app.agent.media_assets import record_asset_usage
+        from app.models import AssetUsage
+        db_session.add(Asset(id="prop-1", project_id="p1", kind="image", asset_kind="prop", name="剑", url="https://example.com/sword.png"))
+        db_session.commit()
+
+        recorded = record_asset_usage(
+            db_session, project_id="p1", asset_ids=["prop-1"],
+            consumer_type="media_asset", consumer_id="shot-1", role="image",
+        )
+        assert len(recorded) == 1
+        rows = db_session.query(AssetUsage).filter(AssetUsage.asset_id == "prop-1").all()
+        assert len(rows) == 1
+        assert rows[0].consumer_id == "shot-1"
+        assert rows[0].role == "image"
+        asset = db_session.query(Asset).filter(Asset.id == "prop-1").one()
+        assert asset.usage_count == 1
+
+    def test_idempotent_per_consumer(self, db_session):
+        """同一 consumer 重复记录（重试/重复 finish）不重复计数。"""
+        from app.agent.media_assets import record_asset_usage
+        from app.models import AssetUsage
+        db_session.add(Asset(id="prop-1", project_id="p1", kind="image", asset_kind="prop", name="剑", url="https://example.com/sword.png"))
+        db_session.commit()
+
+        for _ in range(2):
+            record_asset_usage(
+                db_session, project_id="p1", asset_ids=["prop-1"],
+                consumer_type="media_asset", consumer_id="shot-1", role="image",
+            )
+        rows = db_session.query(AssetUsage).filter(AssetUsage.asset_id == "prop-1").all()
+        assert len(rows) == 1
+        assert db_session.query(Asset).filter(Asset.id == "prop-1").one().usage_count == 1
+
+    def test_same_prop_used_by_multiple_consumers(self, db_session):
+        """计划示例：一个道具被多个分镜引用 → 一个道具资产，多行 usage。"""
+        from app.agent.media_assets import record_asset_usage
+        from app.models import AssetUsage
+        db_session.add(Asset(id="prop-1", project_id="p1", kind="image", asset_kind="prop", name="剑", url="https://example.com/sword.png"))
+        db_session.commit()
+
+        for consumer_id in ("char-1", "char-2", "shot-1", "shot-2", "shot-3"):
+            record_asset_usage(
+                db_session, project_id="p1", asset_ids=["prop-1"],
+                consumer_type="media_asset", consumer_id=consumer_id, role="image",
+            )
+        rows = db_session.query(AssetUsage).filter(AssetUsage.asset_id == "prop-1").all()
+        assert len(rows) == 5
+        assert db_session.query(Asset).filter(Asset.id == "prop-1").one().usage_count == 5
+        assert db_session.query(Asset).filter(Asset.name == "剑").count() == 1
+
+    def test_skips_assets_from_other_projects(self, db_session):
+        from app.agent.media_assets import record_asset_usage
+        from app.models import AssetUsage
+        db_session.add(Asset(id="a-other", project_id="p2", kind="image", asset_kind="prop", name="剑", url="https://example.com/sword.png"))
+        db_session.commit()
+
+        recorded = record_asset_usage(
+            db_session, project_id="p1", asset_ids=["a-other"],
+            consumer_type="media_asset", consumer_id="shot-1", role="image",
+        )
+        assert recorded == []
+        assert db_session.query(AssetUsage).count() == 0
+
+
+class TestFinishMediaAssetUsage:
+    def _seed(self, db_session):
+        db_session.add(Asset(id="ref-1", project_id="p1", kind="image", asset_kind="character", name="林尘", url="https://example.com/char.png"))
+        db_session.add(Asset(id="m-1", project_id="p1", kind="video", asset_kind="shot", name="镜头1", generating=True, status="processing"))
+        db_session.commit()
+
+    def test_success_records_usage(self, db_session):
+        from app.agent.media_assets import finish_media_asset
+        from app.models import AssetUsage
+        self._seed(db_session)
+        finish_media_asset(
+            db_session, "m-1",
+            url="https://example.com/video.mp4",
+            extra={"reference_asset_ids": ["ref-1"]},
+        )
+        rows = db_session.query(AssetUsage).filter(AssetUsage.asset_id == "ref-1").all()
+        assert len(rows) == 1
+        assert rows[0].consumer_type == "media_asset"
+        assert rows[0].consumer_id == "m-1"
+        assert rows[0].role == "video"
+        assert db_session.query(Asset).filter(Asset.id == "ref-1").one().usage_count == 1
+
+    def test_failure_does_not_record(self, db_session):
+        from app.agent.media_assets import finish_media_asset
+        from app.models import AssetUsage
+        self._seed(db_session)
+        finish_media_asset(
+            db_session, "m-1",
+            error="provider timeout",
+            extra={"reference_asset_ids": ["ref-1"]},
+        )
+        assert db_session.query(AssetUsage).count() == 0
+        assert db_session.query(Asset).filter(Asset.id == "ref-1").one().usage_count == 0
+
+    def test_dev_fallback_does_not_record(self, db_session):
+        from app.agent.media_assets import finish_media_asset
+        from app.models import AssetUsage
+        self._seed(db_session)
+        finish_media_asset(
+            db_session, "m-1",
+            url="https://example.com/placeholder.mp4",
+            extra={"reference_asset_ids": ["ref-1"]},
+            dev_fallback=True,
+        )
+        assert db_session.query(AssetUsage).count() == 0
+
+
+class TestAssetUsageEndpoint:
+    def test_usage_endpoint_returns_rows(self):
+        import uuid as _uuid
+        from fastapi.testclient import TestClient
+        from app import app
+        from app.database import SessionLocal
+        from app.models import AssetUsage
+
+        suffix = _uuid.uuid4().hex[:8]
+        asset_id = f"usage-asset-{suffix}"
+        db = SessionLocal()
+        try:
+            db.add(Asset(id=asset_id, project_id="p-usage", kind="image", asset_kind="prop", name="剑", url="https://example.com/sword.png", usage_count=1))
+            db.add(AssetUsage(
+                id=f"usage-{suffix}", project_id="p-usage", asset_id=asset_id,
+                consumer_type="media_asset", consumer_id="shot-1", role="image",
+            ))
+            db.commit()
+
+            client = TestClient(app)
+            resp = client.get(f"/api/assets/{asset_id}/usage")
+            assert resp.status_code == 200
+            payload = resp.json()
+            assert payload["asset_id"] == asset_id
+            assert payload["usage_count"] == 1
+            assert len(payload["usages"]) == 1
+            assert payload["usages"][0]["consumer_id"] == "shot-1"
+
+            resp404 = client.get("/api/assets/nonexistent-asset/usage")
+            assert resp404.status_code == 404
+        finally:
+            db.query(AssetUsage).filter(AssetUsage.asset_id == asset_id).delete()
+            db.query(Asset).filter(Asset.id == asset_id).delete()
+            db.commit()
+            db.close()
