@@ -152,7 +152,9 @@ def test_asset_reference_resolution_prefers_normalized_derivative_and_is_project
         "asset_kind": "character",
         "url": "/files/turnaround.png",
     }]
-    assert db_session.query(Asset).filter_by(id="normalized-character").one().usage_count == 1
+    # 契约变更：解析阶段不再递增 usage_count；只在 provider 接受后
+    # （finish_media_asset → record_asset_usage）计数，失败生成不虚增。
+    assert db_session.query(Asset).filter_by(id="normalized-character").one().usage_count == 0
 
     with pytest.raises(ValueError, match="does not belong to project"):
         resolve_asset_references(db_session, "project-a", ["other-project-asset"], media_kind="image")
@@ -262,7 +264,7 @@ async def test_character_generation_resolves_logical_reference_asset_id(db_sessi
     assert "left-right split" not in result["source_prompt"]
     assert "F0EDE8" in result["source_prompt"]
     assert "no visible numbers" in result["source_prompt"]
-    assert db_session.query(Asset).filter_by(id="reference-character").one().usage_count == 1
+    assert db_session.query(Asset).filter_by(id="reference-character").one().usage_count == 0
 
 
 @pytest.mark.asyncio

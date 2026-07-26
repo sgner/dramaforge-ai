@@ -292,11 +292,11 @@ async def resolve_asset_refs(
     # return id, role, url, prompt_identity, and provider compatibility
 ```
 
-- [ ] Reject asset IDs from another project.
-- [ ] Prefer normalized derivatives over their raw source when both are available for a character/prop/scene.
+- [x] Reject asset IDs from another project.
+- [x] Prefer normalized derivatives over their raw source when both are available for a character/prop/scene.
 - [ ] Preserve the raw upload as a fallback reference.
 - [ ] Return a structured unsupported-reference result when the selected provider cannot accept reference images.
-- [ ] Increment `usage_count` only after a provider request is accepted.
+- [x] Increment `usage_count` only after a provider request is accepted.
 
 ### Task 3.2: Record usage and derivation relationships
 
@@ -319,10 +319,10 @@ class AssetUsage(Base):
     created_at: datetime
 ```
 
-- [ ] Record that `prop-001` is used by every shot/media asset that references it.
-- [ ] Record `source_asset_id` for normalized derivatives.
-- [ ] Expose `GET /api/projects/{project_id}/assets/{asset_id}/usage`.
-- [ ] Test the same prop referenced by two characters and three shots produces one prop asset and three usage rows.
+- [x] Record that `prop-001` is used by every shot/media asset that references it.
+- [x] Record `source_asset_id` for normalized derivatives.
+- [x] Expose `GET /api/projects/{project_id}/assets/{asset_id}/usage`.（实现为 `GET /api/assets/{asset_id}/usage`，与现有路由结构一致）
+- [x] Test the same prop referenced by two characters and three shots produces one prop asset and three usage rows.
 
 ### Task 3.3: Extend all media tools to consume logical asset references
 
@@ -342,11 +342,11 @@ Each media request must support:
 }
 ```
 
-- [ ] Resolve IDs in the Agent layer, never let the LLM construct provider URLs.
-- [ ] Pass resolved URLs to image and video providers.
-- [ ] Store `reference_asset_ids` in the generated asset `extra` field.
-- [ ] In batch mode, resolve references independently per job before `asyncio.gather`.
-- [ ] Test one prop reused by two concurrent jobs and verify both jobs carry the same reference asset ID.
+- [x] Resolve IDs in the Agent layer, never let the LLM construct provider URLs.
+- [x] Pass resolved URLs to image and video providers.
+- [x] Store `reference_asset_ids` in the generated asset `extra` field.
+- [x] In batch mode, resolve references independently per job before `asyncio.gather`.
+- [x] Test one prop reused by two concurrent jobs and verify both jobs carry the same reference asset ID.
 
 ---
 

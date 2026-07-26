@@ -492,8 +492,8 @@ def resolve_reference_assets(*args, **kwargs) -> list[dict[str, Any]]:
             raise ValueError(f"asset '{asset_id}' is not ready for role '{role}'")
 
         selected = filtered[0]
-        selected.usage_count = int(selected.usage_count or 0) + 1
+        # usage_count 只在 provider 请求被接受后递增（finish_media_asset →
+        # record_asset_usage），解析阶段不计数，避免失败/取消的生成虚增使用次数。
         resolved.append(_reference_payload(selected, source))
 
-    db.commit()
     return resolved
