@@ -1,6 +1,6 @@
 # Agent Question Internationalization Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Make Agent clarification questions use the task's creation-time UI language for Chinese, English, Japanese, and Korean without exposing internal parameter names.
 
@@ -29,17 +29,17 @@
 - Consumes: `AgentTaskCreate.language: Literal["zh", "en", "ja", "ko"]`
 - Produces: `TaskProfile.language: Literal["zh", "en", "ja", "ko"]`, defaulting to `"en"`
 
-- [ ] **Step 1: Write failing persistence tests**
+- [x] **Step 1: Write failing persistence tests**
 
 Add tests that POST an Agent task with `language: "ja"` and assert `task_profile.language == "ja"`, and validate that `TaskProfile.model_validate()` defaults missing legacy language to `"en"`.
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run: `cd backend && .venv/Scripts/python.exe -m pytest tests/test_agent_task_profile_persistence.py -q`
 
 Expected: FAIL because the schema/profile do not yet accept or persist `language`.
 
-- [ ] **Step 3: Add the minimal validated fields and persistence**
+- [x] **Step 3: Add the minimal validated fields and persistence**
 
 Add:
 
@@ -58,7 +58,7 @@ profile = _profile_for_goal(db, body.user_goal, body.project_id).model_copy(
 )
 ```
 
-- [ ] **Step 4: Run tests and verify GREEN**
+- [x] **Step 4: Run tests and verify GREEN**
 
 Run: `cd backend && .venv/Scripts/python.exe -m pytest tests/test_agent_task_profile_persistence.py -q`
 
@@ -76,17 +76,17 @@ Expected: all tests pass.
 - Produces: `missing_source_question(task_type: str, language: str) -> dict[str, object]`
 - Result keys: `question: str`, `options: list[str]`
 
-- [ ] **Step 1: Write failing translation tests**
+- [x] **Step 1: Write failing translation tests**
 
 Create parameterized tests for `zh`, `en`, `ja`, and `ko` that assert each result contains native-language copy. Add fallback tests for an unknown language and assertions that neither `structured_source` nor `agreed_deliverables` appears in any result.
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run: `cd backend && .venv/Scripts/python.exe -m pytest tests/test_agent_user_messages.py -q`
 
 Expected: FAIL because `app.agent.user_messages` does not exist.
 
-- [ ] **Step 3: Implement the translation table and English fallback**
+- [x] **Step 3: Implement the translation table and English fallback**
 
 Create a module-level dictionary with full sentences for each task type (`promotion`, `commercial`, `custom`, and `default`) and the localized “let Agent write the script” option. Implement language normalization as:
 
@@ -99,7 +99,7 @@ def normalize_language(language: str | None) -> str:
 
 Return complete user-facing sentences rather than interpolating internal field names.
 
-- [ ] **Step 4: Wire Runtime to localized copy**
+- [x] **Step 4: Wire Runtime to localized copy**
 
 Replace `source_label` construction in `_pause_for_script_requirement` with:
 
@@ -112,7 +112,7 @@ question = {
 }
 ```
 
-- [ ] **Step 5: Run tests and verify GREEN**
+- [x] **Step 5: Run tests and verify GREEN**
 
 Run: `cd backend && .venv/Scripts/python.exe -m pytest tests/test_agent_user_messages.py tests/test_agent_task_profile_persistence.py tests/test_task_profiles.py -q`
 
@@ -129,7 +129,7 @@ Expected: all tests pass.
 - Consumes: `useI18n().lang`
 - Produces: `startAgent(..., { language: Language })` and JSON field `language`
 
-- [ ] **Step 1: Write a failing frontend test**
+- [x] **Step 1: Write a failing frontend test**
 
 Render `AgentMode` under an `I18nProvider` with language set to Japanese, submit a goal, and assert:
 
@@ -141,17 +141,17 @@ expect(api.startAgent).toHaveBeenCalledWith(
 );
 ```
 
-- [ ] **Step 2: Run test and verify RED**
+- [x] **Step 2: Run test and verify RED**
 
 Run: `npm test -- tests/agent/agent-mode.test.tsx --run`
 
 Expected: FAIL because `language` is not passed.
 
-- [ ] **Step 3: Extend the API and component**
+- [x] **Step 3: Extend the API and component**
 
 Add `language?: Language` to `startAgent` options and serialize it as `language: opts.language ?? 'en'`. In `AgentMode`, read `const { lang } = useI18n()` and pass `language: lang` with provider/model IDs.
 
-- [ ] **Step 4: Run test and verify GREEN**
+- [x] **Step 4: Run test and verify GREEN**
 
 Run: `npm test -- tests/agent/agent-mode.test.tsx --run`
 
@@ -166,25 +166,25 @@ Expected: all tests pass.
 - Consumes: persisted task language and localized Runtime copy
 - Produces: verified four-language Agent clarification flow
 
-- [ ] **Step 1: Run focused backend tests**
+- [x] **Step 1: Run focused backend tests**
 
 Run: `cd backend && .venv/Scripts/python.exe -m pytest tests/test_agent_user_messages.py tests/test_agent_task_profile_persistence.py tests/test_task_profiles.py -q`
 
 Expected: zero failures.
 
-- [ ] **Step 2: Run focused frontend tests**
+- [x] **Step 2: Run focused frontend tests**
 
 Run: `npm test -- tests/agent/agent-mode.test.tsx tests/i18n-locales-parity.test.ts --run`
 
 Expected: zero failures.
 
-- [ ] **Step 3: Build frontend**
+- [x] **Step 3: Build frontend**
 
 Run: `npm run build`
 
 Expected: exit code 0.
 
-- [ ] **Step 4: Review user-facing strings**
+- [x] **Step 4: Review user-facing strings**
 
 Search:
 
