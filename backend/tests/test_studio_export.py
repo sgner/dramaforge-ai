@@ -219,3 +219,49 @@ def test_export_endpoint_with_captions(client, db_session, fake_ffmpeg):
     })
     assert r.status_code == 400
     assert "captions" in r.json()["detail"]
+
+
+def test_export_burns_captions_with_drawtext(client, db_session, fake_ffmpeg, monkeypatch, tmp_path):
+    """提供 captions 且字体可用时，片段命令带 drawtext 烧录。"""
+    from app.agent import studio_export
+
+    font = tmp_path / "test-font.ttf"
+    font.write_bytes(b"fake-font")
+    monkeypatch.setattr(studio_export, "_caption_font", lambda: str(font))
+
+    _add_asset(db_session, "a1", "image", "https://cdn.test/1.png")
+    _add_asset(db_session, "a2", "image", "https://cdn.test/2.png")
+    r = client.post("/api/studio/export", json={
+        "project_id": "p1", "asset_ids": ["a1", "a2"],
+        "captions": ["雨夜开场", "天台对决"],
+    })
+    assert r.status_code == 200, r.text
+    seg_cmds = [" ".join(c) for c in fake_ffmpeg if "concat" not in c]
+    assert "drawtext" in seg_cmds[0]
+    assert "雨夜开场" in seg_cmds[0]
+    assert "drawtext" in seg_cmds[1]
+    assert "天台对决" in seg_cmds[1]
+
+
+def test_export_skips_burning_when_no_font(client, db_session, fake_ffmpeg, monkeypatch):
+    """字体不可用时跳过烧录但不失败，captions 仍登记。"""
+    from app.agent import studio_export
+    from app.models import Asset
+
+    monkeypatch.setattr(studio_export, "_caption_font", lambda: None)
+
+    _add_asset(db_session, "a1", "image", "https://cdn.test/1.png")
+    r = client.post("/api/studio/export", json={
+        "project_id": "p1", "asset_ids": ["a1"], "captions": ["雨夜开场"],
+    })
+    assert r.status_code == 200, r.text
+    seg_cmds = [" ".join(c) for c in fake_ffmpeg if "concat" not in c]
+    assert "drawtext" not in seg_cmds[0]
+    asset = db_session.query(Asset).filter_by(id=r.json()["asset_id"]).one()
+    assert asset.extra["captions"] == ["雨夜开场"]
+
+
+def test_escape_drawtext_special_chars():
+    from app.agent.studio_export import _escape_drawtext
+    assert _escape_drawtext("他说: 50% 的, 夜晚") == "他说\\: 50\\% 的\\, 夜晚"
+    assert _escape_drawtext("it's") == "it\\'s"
