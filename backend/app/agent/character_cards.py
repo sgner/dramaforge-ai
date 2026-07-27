@@ -201,8 +201,8 @@ def reference_urls(db: Session, card) -> list[str]:
 async def check_consistency(db: Session, card, shot_asset, llm) -> dict:
     """质检：镜头 vs 角色卡参考身份。返回 {consistent, score, issues}。
 
-    解析失败时不阻塞流程：按 consistent=True + score=0.5 放行并在 issues 里记录，
-    避免上游模型偶发输出格式问题把整个闭环卡死。
+    解析失败不再静默放行：返回 consistent=False + check_error=True，
+    由闭环把镜头直接交人审（质检自身故障不该触发又一轮真实生成）。
     """
     content: list[dict] = [
         {"type": "text", "text": (
@@ -226,7 +226,13 @@ async def check_consistency(db: Session, card, shot_asset, llm) -> dict:
     )
     data = _parse_json_dict(resp.content or "")
     if not data:
-        return {"consistent": True, "score": 0.5, "issues": ["consistency check unparsable, passed through"], "character": card.name}
+        return {
+            "consistent": False,
+            "score": 0.0,
+            "check_error": True,
+            "issues": ["consistency check unparsable, needs human review"],
+            "character": card.name,
+        }
     score = float(data.get("score") or 0.0)
     issues = [str(i) for i in (data.get("issues") or [])]
     consistent = bool(data.get("consistent", score >= 0.6)) and score >= 0.6

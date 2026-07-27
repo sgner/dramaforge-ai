@@ -309,7 +309,12 @@ async def run_studio_shot(
         # ---- 质检 agent（基础检查 + 逐卡一致性） ----
         base_inspection = await inspect_asset(db, project_id, asset.id, llm)
         consistency = [await check_consistency(db, c, asset, llm) for c in cards]
-        approved = bool(base_inspection.get("meets_standard")) and all(c["consistent"] for c in consistency)
+        check_errors = [c for c in consistency if c.get("check_error")]
+        approved = (
+            bool(base_inspection.get("meets_standard"))
+            and all(c["consistent"] for c in consistency)
+            and not check_errors
+        )
         last_inspection = {**base_inspection, "consistency": consistency}
         issues = [i for c in consistency for i in c["issues"] if not c["consistent"]]
         trace.append(StudioStep(
@@ -321,6 +326,15 @@ async def run_studio_shot(
             _mark_shot_review_pending(db, asset, "approved")
             return StudioShotResult(
                 status="approved", asset_id=asset.id, url=out.url,
+                prompt=shot_prompt, rounds=round_no,
+                inspection=last_inspection, trace=trace,
+            )
+        if check_errors:
+            # 质检自身故障（一致性结果解析失败），不是创作失败：
+            # 不再烧一轮真实生成，直接把当前镜头交人审裁决。
+            _mark_shot_review_pending(db, asset, "check_error")
+            return StudioShotResult(
+                status="check_error", asset_id=asset.id, url=out.url,
                 prompt=shot_prompt, rounds=round_no,
                 inspection=last_inspection, trace=trace,
             )

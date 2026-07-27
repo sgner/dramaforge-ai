@@ -135,9 +135,11 @@ async def test_consistency_check_parsing(db_session):
     bad = await check_consistency(db_session, card, shot, FakeLLM({"identity": {"consistent": False, "score": 0.3, "issues": ["hair color changed"]}}))
     assert bad["consistent"] is False and "hair color changed" in bad["issues"]
 
-    # 解析失败放行不阻塞
-    passthrough = await check_consistency(db_session, card, shot, FakeLLM({"identity": "not json at all"}))
-    assert passthrough["consistent"] is True and passthrough["score"] == 0.5
+    # 解析失败不再静默放行：check_error 标记，由闭环交人审
+    unparsable = await check_consistency(db_session, card, shot, FakeLLM({"identity": "not json at all"}))
+    assert unparsable["consistent"] is False
+    assert unparsable["check_error"] is True
+    assert unparsable["score"] == 0.0
 
 
 # ---------- studio 闭环接入角色卡 ----------
@@ -225,3 +227,34 @@ async def test_consistency_failure_loops_back_with_issues(db_session, studio_moc
     # 第二轮编剧收到一致性问题反馈
     second_writer_msg = llm.calls[1][-1]["content"]
     assert "hair color changed" in second_writer_msg
+
+
+@pytest.mark.asyncio
+async def test_consistency_check_error_goes_to_human_review_without_extra_round(db_session, studio_mocks, monkeypatch):
+    """一致性解析失败（check_error）：不再烧一轮生成，直接交人审。"""
+    llm, _ = studio_mocks
+    _make_card(db_session)
+    calls = {"n": 0}
+
+    async def fake_consistency(db, card, shot, llm_):
+        calls["n"] += 1
+        return {
+            "consistent": False, "score": 0.0, "check_error": True,
+            "issues": ["consistency check unparsable, needs human review"],
+            "character": card.name,
+        }
+
+    monkeypatch.setattr(studio, "check_consistency", fake_consistency)
+    result = await run_studio_shot(
+        db_session, project_id="p1", brief="雨夜天台对峙",
+        image_provider_id="img-p", image_model="img-model",
+        character_card_ids=["card1"],
+    )
+    # 只跑一轮就交人审，不触发 max_rounds 的重复生成
+    assert result.status == "check_error"
+    assert result.rounds == 1
+    assert calls["n"] == 1
+    from app.models import Asset
+    asset = db_session.query(Asset).filter_by(id=result.asset_id).one()
+    assert asset.extra["critic_status"] == "check_error"
+    assert asset.extra["review_status"] == "pending_review"
