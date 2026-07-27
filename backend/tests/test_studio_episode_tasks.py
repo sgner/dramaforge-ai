@@ -68,7 +68,7 @@ async def test_registry_task_completes(monkeypatch):
     monkeypatch.setattr(director, "run_studio_episode", _fake_episode(result))
     task_id = studio_tasks.start_episode_task(**_EPISODE_BODY)
     # 直接 await 注册表里的 task 对象，确定性等待完成
-    await studio_tasks._tasks[task_id]["task"]
+    await studio_tasks._tasks[task_id]
 
     entry = studio_tasks.get_episode_task(task_id)
     assert entry["status"] == "done"
@@ -86,7 +86,7 @@ async def test_registry_task_error(monkeypatch):
 
     monkeypatch.setattr(director, "run_studio_episode", boom)
     task_id = studio_tasks.start_episode_task(**_EPISODE_BODY)
-    await studio_tasks._tasks[task_id]["task"]
+    await studio_tasks._tasks[task_id]
 
     entry = studio_tasks.get_episode_task(task_id)
     assert entry["status"] == "error"
@@ -194,3 +194,56 @@ def test_character_cards_list_filtered(client, db_session):
     assert cards[0]["identity"] == {"face_anchor": "sharp jaw"}
     assert cards[0]["reference_asset_ids"] == ["r1", "r2"]
     assert cards[0]["url"] == "https://cdn.test/hero.png"
+
+
+# ========================
+# 持久化注册表（重启可查 + interrupted 恢复）
+# ========================
+
+@pytest.mark.asyncio
+async def test_task_state_persists_in_db(monkeypatch):
+    """任务状态落 studio_episode_tasks 表，新 session 也能读到。"""
+    from app.database import SessionLocal
+    from app.models import StudioEpisodeTask
+
+    result = {"status": "done", "url": "/files/ep.mp4", "shots": []}
+    monkeypatch.setattr(director, "run_studio_episode", _fake_episode(result))
+    task_id = studio_tasks.start_episode_task(**_EPISODE_BODY)
+    await studio_tasks._tasks[task_id]
+
+    db = SessionLocal()
+    try:
+        row = db.query(StudioEpisodeTask).filter_by(id=task_id).one()
+        assert row.status == "done"
+        assert row.result == result
+        assert row.progress["phase"] == "shooting"
+        assert row.project_id == _EPISODE_BODY["project_id"]
+    finally:
+        db.query(StudioEpisodeTask).filter_by(id=task_id).delete()
+        db.commit()
+        db.close()
+
+
+def test_interrupted_recovery_marks_stale_running_rows():
+    """启动恢复：残留 running 行被标记为 interrupted（不自动重跑）。"""
+    from app.database import SessionLocal, _recover_studio_episode_tasks
+    from app.models import StudioEpisodeTask
+
+    db = SessionLocal()
+    task_id = "ep-stale-running"
+    try:
+        db.add(StudioEpisodeTask(
+            id=task_id, project_id="p1", status="running",
+            progress={"phase": "shooting"},
+        ))
+        db.commit()
+
+        _recover_studio_episode_tasks()
+
+        db.expire_all()
+        row = db.query(StudioEpisodeTask).filter_by(id=task_id).one()
+        assert row.status == "interrupted"
+    finally:
+        db.query(StudioEpisodeTask).filter_by(id=task_id).delete()
+        db.commit()
+        db.close()

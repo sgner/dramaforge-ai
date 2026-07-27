@@ -167,6 +167,21 @@ class StudioTimeline(Base):
     updated_at = Column(DateTime, default=_now, onupdate=_now)
 
 
+class StudioEpisodeTask(Base):
+    """整集生成任务（持久化注册表；进程重启后状态可查）。"""
+    __tablename__ = "studio_episode_tasks"
+
+    id = Column(String, primary_key=True)
+    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    # running | done | partial | failed | error | interrupted（重启时 running 被标记）
+    status = Column(String, nullable=False, default="running")
+    progress = Column(JSON, default=dict)
+    result = Column(JSON, nullable=True)
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=_now)
+    updated_at = Column(DateTime, default=_now, onupdate=_now)
+
+
 # ========================
 # Agent 模型（v1.0 改造新增）
 # ========================

@@ -44,6 +44,19 @@ def init_db():
     _migrate_performance_indexes()
     _migrate_agent_conversation_columns()
     _migrate_connection_data_column()
+    _recover_studio_episode_tasks()
+
+
+def _recover_studio_episode_tasks():
+    """进程重启后，残留 running 的整集任务标记为 interrupted。
+
+    asyncio 句柄不可恢复（内存态），任务不会自动重跑——与 agent 任务的
+    zombie→paused 语义一致：状态可查，由用户显式重新提交。
+    """
+    with engine.begin() as connection:
+        connection.execute(text(
+            "UPDATE studio_episode_tasks SET status = 'interrupted' WHERE status = 'running'"
+        ))
 
 
 def _migrate_connection_data_column():
