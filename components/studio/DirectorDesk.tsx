@@ -93,6 +93,14 @@ export const DirectorDesk: React.FC<DirectorDeskProps> = ({
   const [imageModel, setImageModel] = useState('');
   const [reviewingId, setReviewingId] = useState<string | null>(null);
   const [regeneratingId, setRegeneratingId] = useState<string | null>(null);
+  // 单镜头成本预估（后端 estimate：最多 N 轮 × 每轮 1 次图像生成）
+  const [maxGenerations, setMaxGenerations] = useState<number | null>(null);
+
+  useEffect(() => {
+    api.getStudioEstimate()
+      .then((res) => setMaxGenerations(res.max_image_generations))
+      .catch((e) => console.warn('[DirectorDesk] estimate failed', e));
+  }, []);
 
   /** 完整加载流程：同步画布产物 → 拉脚本 / 资产 / 审片记录 → URL 匹配。 */
   const load = useCallback(async () => {
@@ -431,6 +439,14 @@ export const DirectorDesk: React.FC<DirectorDeskProps> = ({
         <span className="text-[11px] font-medium text-white/45 pb-2">
           {t('studioGenSettings')}
         </span>
+        {maxGenerations !== null && (
+          <span
+            data-testid="studio-cost-estimate"
+            className="text-[11px] text-white/35 pb-2"
+          >
+            {t('studioCostEstimateHint').replace('{0}', String(maxGenerations))}
+          </span>
+        )}
         <div className="w-44">
           <label className={labelCls}>{t('studioImageProvider')}</label>
           <select

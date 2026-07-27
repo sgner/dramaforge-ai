@@ -235,6 +235,26 @@ def _critic_feedback(inspection: dict) -> str:
 
 # ============ Orchestrator ============
 
+DEFAULT_MAX_ROUNDS = 3
+MAX_ROUNDS_LIMIT = 5
+
+
+def estimate_shot_cost(max_rounds: int = DEFAULT_MAX_ROUNDS) -> dict:
+    """单镜头闭环成本预估：每轮 1 次图像生成，上限 = 轮数。
+
+    编剧/质检走文本/vision LLM，成本远小于图像生成，不计入上限。
+    """
+    rounds = max(1, min(int(max_rounds), MAX_ROUNDS_LIMIT))
+    return {
+        "max_rounds": rounds,
+        "max_image_generations": rounds,
+        "note": (
+            f"单镜头最多 {rounds} 轮编剧→美术→质检闭环，"
+            f"每轮 1 次图像生成，成本上限 ≈ {rounds} 张图"
+        ),
+    }
+
+
 async def run_studio_shot(
     db: Session,
     *,
@@ -256,7 +276,7 @@ async def run_studio_shot(
     """
     if not brief.strip():
         raise ValueError("brief is empty")
-    max_rounds = max(1, min(int(max_rounds), 5))
+    max_rounds = max(1, min(int(max_rounds), MAX_ROUNDS_LIMIT))
 
     configs = load_llm_configs(db)
     llm = select_llm_for_task(llm_provider_id, configs, llm_model_id)

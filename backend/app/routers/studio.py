@@ -184,6 +184,13 @@ async def get_entity_impact(story_entity_id: str, project_id: str = Query(...), 
     return {"story_entity_id": story_entity_id, "impact": impact, "impacted_shots": len(impact)}
 
 
+@router.get("/estimate")
+async def get_cost_estimate(max_rounds: int = Query(3, ge=1, le=5)):
+    """单镜头闭环成本预估（成本上限 = 最多 N 轮 × 每轮 1 次图像生成）。"""
+    from ..agent.studio import estimate_shot_cost
+    return estimate_shot_cost(max_rounds)
+
+
 class ShotRegenerateIn(BaseModel):
     project_id: str
     asset_id: str

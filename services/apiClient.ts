@@ -193,6 +193,10 @@ export const api = {
       impact: { asset_id: string; title: string; brief: string; url?: string | null; status?: string; created_at?: string | null }[];
       impacted_shots: number;
     }>(`/studio/entities/${encodeURIComponent(storyEntityId)}/impact?project_id=${encodeURIComponent(projectId)}`),
+  getStudioEstimate: (maxRounds = 3) =>
+    request<{ max_rounds: number; max_image_generations: number; note: string }>(
+      `/studio/estimate?max_rounds=${maxRounds}`
+    ),
 
   // ---------- Uploads ----------
   uploadImage: async (file: File): Promise<{ url: string; filename: string; size: number }> => {

@@ -28,6 +28,7 @@ const mockArrange = vi.fn();
 const mockUpdateAsset = vi.fn();
 const mockGetTimeline = vi.fn();
 const mockSaveTimeline = vi.fn();
+const mockGetEstimate = vi.fn();
 
 vi.mock('@/services/apiClient', () => ({
   api: {
@@ -43,6 +44,7 @@ vi.mock('@/services/apiClient', () => ({
     updateAsset: (...args: any[]) => mockUpdateAsset(...args),
     getStudioTimeline: (...args: any[]) => mockGetTimeline(...args),
     saveStudioTimeline: (...args: any[]) => mockSaveTimeline(...args),
+    getStudioEstimate: (...args: any[]) => mockGetEstimate(...args),
   },
 }));
 
@@ -178,6 +180,7 @@ describe('<StudioPanel />', () => {
     mockUpdateAsset.mockResolvedValue({ ok: true });
     mockGetTimeline.mockResolvedValue({ project_id: 'proj-1', items: [] });
     mockSaveTimeline.mockResolvedValue({ project_id: 'proj-1', items: [], dropped: 0 });
+    mockGetEstimate.mockResolvedValue({ max_rounds: 3, max_image_generations: 3, note: '' });
     mockGetDramaTask.mockResolvedValue({
       id: 'proj-1',
       name: '测试剧',
@@ -229,6 +232,8 @@ describe('<StudioPanel />', () => {
     expect(mockListAssets).toHaveBeenCalledWith('proj-1');
     expect(mockListShots).toHaveBeenCalledWith('proj-1');
     expect(mockListProviders).toHaveBeenCalled();
+    // 成本预估提示（最多 3 次图像生成）
+    expect(screen.getByTestId('studio-cost-estimate')).toBeInTheDocument();
   });
 
   it('导演台：展示脚本镜头结构（序号/场景/角色）与视频状态徽章（已有/生成中/缺失）', async () => {
