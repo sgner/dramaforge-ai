@@ -81,7 +81,7 @@ def main():
     print(f"replaying {len(commits)} commits onto {BRANCH} (remote at {remote_sha[:7]})")
 
     parent = remote_sha
-    parent_tree = git("rev-parse", f"{remote_sha}^{{tree}}")
+    parent_tree = api("GET", f"/git/commits/{remote_sha}")["tree"]["sha"]
     for sha in commits:
         message = git("log", "-1", "--format=%B", sha)
         entries = []
