@@ -476,6 +476,15 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
+  // 剪辑台时间线持久化（每项目一条，整体覆盖式保存）。
+  getStudioTimeline: (projectId: string) =>
+    request<StudioTimelineOut>(`/studio/timeline?project_id=${encodeURIComponent(projectId)}`),
+  saveStudioTimeline: (projectId: string, items: StudioTimelineItemPayload[]) =>
+    request<StudioTimelineOut>('/studio/timeline', {
+      method: 'PUT',
+      body: JSON.stringify({ project_id: projectId, items }),
+    }),
+
   // ---------- Bootstrap (首屏合并端点) ----------
   // 合并 listDramaTasks + listProviders + getUserPreference('model_bindings')
   // 三个首屏请求为单个 /api/bootstrap，减少 RTT（3 → 1）。
@@ -729,7 +738,23 @@ export interface StudioExportCreatePayload {
   sec_per_image?: number;
   /** 逐镜头秒数（与 asset_ids 等长）；给了就优先于 sec_per_image。 */
   durations?: number[];
+  /** 逐镜头旁白（与 asset_ids 等长）；随导出资产登记，不再丢失。 */
+  captions?: string[];
   title?: string;
+}
+
+/** GET/PUT /api/studio/timeline：剪辑台时间线持久化。 */
+export interface StudioTimelineItemPayload {
+  asset_id: string;
+  sec: number;
+  caption: string;
+}
+
+export interface StudioTimelineOut {
+  project_id: string;
+  items: StudioTimelineItemPayload[];
+  updated_at?: string | null;
+  dropped?: number;
 }
 
 /** POST /api/studio/arrange 请求体：LLM 智能编排时间线。 */

@@ -156,6 +156,17 @@ class AssetUsage(Base):
     created_at = Column(DateTime, default=_now)
 
 
+class StudioTimeline(Base):
+    """剪辑台时间线（每项目一条，items 为 [{asset_id, sec, caption}]）。"""
+    __tablename__ = "studio_timelines"
+
+    id = Column(String, primary_key=True)
+    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+    items = Column(JSON, default=list)
+    created_at = Column(DateTime, default=_now)
+    updated_at = Column(DateTime, default=_now, onupdate=_now)
+
+
 # ========================
 # Agent 模型（v1.0 改造新增）
 # ========================

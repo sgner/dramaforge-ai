@@ -270,6 +270,8 @@ class StudioExportIn(BaseModel):
     title: str = ""
     # 可选逐镜头秒数；非 None 时长度必须等于 asset_ids（export_sequence 校验）
     durations: list[float] | None = None
+    # 可选逐镜头旁白；非 None 时长度必须等于 asset_ids，随导出资产登记（不再丢失）
+    captions: list[str] | None = None
 
 
 @router.post("/export")
@@ -282,12 +284,77 @@ async def create_studio_export(body: StudioExportIn, db: Session = Depends(get_d
             sec_per_image=body.sec_per_image,
             title=body.title,
             durations=body.durations,
+            captions=body.captions,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
         # ffmpeg 缺失 / 下载失败 / 转码失败等运行期错误
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------- 剪辑台时间线持久化 ----------
+
+
+class TimelineItemIn(BaseModel):
+    asset_id: str
+    sec: float = Field(3.0, gt=0, le=30)
+    caption: str = ""
+
+
+class StudioTimelineIn(BaseModel):
+    project_id: str
+    items: list[TimelineItemIn] = []
+
+
+@router.get("/timeline")
+def get_studio_timeline(project_id: str = Query(...), db: Session = Depends(get_db)):
+    """读取项目时间线（无记录时返回空列表）。"""
+    from ..models import StudioTimeline
+    row = db.query(StudioTimeline).filter(StudioTimeline.project_id == project_id).first()
+    return {
+        "project_id": project_id,
+        "items": (row.items if row else []) or [],
+        "updated_at": row.updated_at.isoformat() if row and row.updated_at else None,
+    }
+
+
+@router.put("/timeline")
+def save_studio_timeline(body: StudioTimelineIn, db: Session = Depends(get_db)):
+    """保存项目时间线（整体覆盖式 upsert）。
+
+    未知/跨项目的 asset_id 会被丢弃并在 dropped 计数中返回，
+    防止时间线引用悬空资产。
+    """
+    import uuid as _uuid
+    from ..models import StudioTimeline
+    ids = [item.asset_id for item in body.items]
+    existing: set[str] = set()
+    if ids:
+        existing = {
+            row.id
+            for row in db.query(Asset).filter(
+                Asset.project_id == body.project_id,
+                Asset.id.in_(ids),
+            ).all()
+        }
+    items = [item.model_dump() for item in body.items if item.asset_id in existing]
+    row = db.query(StudioTimeline).filter(StudioTimeline.project_id == body.project_id).first()
+    if row is None:
+        row = StudioTimeline(
+            id=f"tl-{_uuid.uuid4().hex[:12]}",
+            project_id=body.project_id,
+            items=items,
+        )
+        db.add(row)
+    else:
+        row.items = items
+    db.commit()
+    return {
+        "project_id": body.project_id,
+        "items": items,
+        "dropped": len(body.items) - len(items),
+    }
 
 
 # ---------- 资产智能编排 ----------

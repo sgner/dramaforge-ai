@@ -26,6 +26,8 @@ const mockExport = vi.fn();
 const mockListAssets = vi.fn();
 const mockArrange = vi.fn();
 const mockUpdateAsset = vi.fn();
+const mockGetTimeline = vi.fn();
+const mockSaveTimeline = vi.fn();
 
 vi.mock('@/services/apiClient', () => ({
   api: {
@@ -39,6 +41,8 @@ vi.mock('@/services/apiClient', () => ({
     listAssets: (...args: any[]) => mockListAssets(...args),
     arrangeStudioAssets: (...args: any[]) => mockArrange(...args),
     updateAsset: (...args: any[]) => mockUpdateAsset(...args),
+    getStudioTimeline: (...args: any[]) => mockGetTimeline(...args),
+    saveStudioTimeline: (...args: any[]) => mockSaveTimeline(...args),
   },
 }));
 
@@ -172,6 +176,8 @@ describe('<StudioPanel />', () => {
     mockListProviders.mockResolvedValue(PROVIDERS);
     mockRebuild.mockResolvedValue({ ok: true, created: 0 });
     mockUpdateAsset.mockResolvedValue({ ok: true });
+    mockGetTimeline.mockResolvedValue({ project_id: 'proj-1', items: [] });
+    mockSaveTimeline.mockResolvedValue({ project_id: 'proj-1', items: [], dropped: 0 });
     mockGetDramaTask.mockResolvedValue({
       id: 'proj-1',
       name: '测试剧',
@@ -472,6 +478,7 @@ describe('<StudioPanel />', () => {
         project_id: 'proj-1',
         asset_ids: ['asset-2'],
         durations: [2],
+        captions: [''],
         title: undefined,
       });
     });
@@ -651,6 +658,7 @@ describe('<StudioPanel />', () => {
         project_id: 'proj-1',
         asset_ids: ['asset-1', 'asset-2'],
         durations: [2, 4],
+        captions: ['', ''],
         title: '雨夜寻猫 第一集',
       });
     });
@@ -878,5 +886,54 @@ describe('<StudioPanel />', () => {
       '还没有成片，去剪辑台导出第一个'
     );
     expect(screen.queryByTestId('studio-film-grid')).toBeNull();
+  });
+
+  it('剪辑台：进入项目时从后端恢复已保存的时间线（缺失资产跳过）', async () => {
+    mockGetTimeline.mockResolvedValue({
+      project_id: 'proj-1',
+      items: [
+        { asset_id: 'asset-1', sec: 3, caption: '雨夜开场' },
+        { asset_id: 'ghost', sec: 2, caption: '悬空引用' },
+      ],
+    });
+    render(<StudioPanel projectId="proj-1" onClose={() => {}} />);
+
+    // hydrate 完成后切到剪辑台：时间线里应有 asset-1 的 clip（ghost 被跳过）
+    fireEvent.click(screen.getByTestId('studio-stage-timeline'));
+    fireEvent.click(screen.getByTestId('studio-bin-expand'));
+    await waitFor(() => {
+      expect(screen.getByTestId('studio-tl-clip-0')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('studio-tl-clip-1')).toBeNull();
+    // hydrate 是读取，不触发保存
+    expect(mockSaveTimeline).not.toHaveBeenCalled();
+  });
+
+  it('剪辑台：时间线变更去抖保存到后端', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      render(<StudioPanel projectId="proj-1" onClose={() => {}} />);
+      // 等 hydrate 完成（空时间线）
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(50);
+      });
+
+      fireEvent.click(screen.getByTestId('studio-stage-timeline'));
+      fireEvent.click(screen.getByTestId('studio-bin-expand'));
+      await waitFor(() => {
+        expect(screen.getByTestId('studio-tl-asset-asset-1')).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByTestId('studio-tl-asset-asset-1'));
+
+      // 去抖 800ms 后保存
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(900);
+      });
+      expect(mockSaveTimeline).toHaveBeenCalledWith('proj-1', [
+        { asset_id: 'asset-1', sec: 2, caption: '' },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

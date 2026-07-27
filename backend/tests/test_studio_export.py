@@ -197,3 +197,25 @@ def test_export_endpoint_with_durations(client, db_session, fake_ffmpeg):
     })
     assert r.status_code == 400
     assert "durations" in r.json()["detail"]
+
+
+def test_export_endpoint_with_captions(client, db_session, fake_ffmpeg):
+    """端点透传 captions 并登记进成片资产 extra；长度不匹配 → 400。"""
+    from app.models import Asset
+
+    _add_asset(db_session, "a1", "image", "https://cdn.test/1.png")
+    _add_asset(db_session, "a2", "image", "https://cdn.test/2.png")
+    r = client.post("/api/studio/export", json={
+        "project_id": "p1", "asset_ids": ["a1", "a2"],
+        "durations": [2.0, 5.0],
+        "captions": ["雨夜开场", "天台对决"],
+    })
+    assert r.status_code == 200, r.text
+    asset = db_session.query(Asset).filter_by(id=r.json()["asset_id"]).one()
+    assert asset.extra["captions"] == ["雨夜开场", "天台对决"]
+
+    r = client.post("/api/studio/export", json={
+        "project_id": "p1", "asset_ids": ["a1", "a2"], "captions": ["只有一条"],
+    })
+    assert r.status_code == 400
+    assert "captions" in r.json()["detail"]

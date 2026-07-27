@@ -23,7 +23,7 @@
  *   POST /api/studio/arrange                        → LLM 智能编排时间线（无 LLM 配置 400）
  *   POST /api/studio/export                         → 时间线合成 mp4（登记为项目资产）
  */
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
   ArrowLeft,
@@ -161,12 +161,54 @@ export const StudioPanel: React.FC<StudioPanelProps> = ({
     };
   }, []);
 
-  // 项目切换时清空时间线等状态
+  // 时间线持久化：hydrate 完成的项目 id（完成前禁止保存，防止空数组覆盖后端）
+  const tlHydratedFor = useRef<string | null>(null);
+
+  // 项目切换时清空时间线等状态，并从后端恢复已保存的时间线
   useEffect(() => {
     setTimeline([]);
     setTlExportResult(null);
     setSelectedClipIndex(-1);
+    const pid = selectedProjectId.trim();
+    tlHydratedFor.current = null;
+    if (!pid) return;
+    let cancelled = false;
+    Promise.all([api.getStudioTimeline(pid), api.listAssets(pid)])
+      .then(([tl, assets]) => {
+        if (cancelled) return;
+        const byId = new Map<string, AssetOut>((assets || []).map((a) => [a.id, a]));
+        const items = (tl.items || [])
+          .map((it) => {
+            const asset = byId.get(it.asset_id);
+            return asset ? { asset, sec: it.sec, caption: it.caption || '' } : null;
+          })
+          .filter(Boolean) as TimelineItem[];
+        setTimeline(items);
+        tlHydratedFor.current = pid;
+      })
+      .catch((e) => {
+        console.warn('[Studio] timeline hydrate failed', e);
+        // 失败也放行保存（否则该项目永远无法落盘），但保留空时间线由用户决定
+        tlHydratedFor.current = pid;
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [selectedProjectId]);
+
+  // 时间线变更去抖保存（800ms；hydrate 完成前不保存）
+  useEffect(() => {
+    const pid = selectedProjectId.trim();
+    if (!pid || tlHydratedFor.current !== pid) return;
+    const timer = setTimeout(() => {
+      api.saveStudioTimeline(pid, timeline.map((it) => ({
+        asset_id: it.asset.id,
+        sec: it.sec,
+        caption: it.caption || '',
+      }))).catch((e) => console.warn('[Studio] timeline save failed', e));
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [timeline, selectedProjectId]);
 
   // 进入剪辑台阶段时拉取项目资产，供补充素材 bin 挑选
   useEffect(() => {
@@ -318,6 +360,8 @@ export const StudioPanel: React.FC<StudioPanelProps> = ({
         project_id: selectedProjectId.trim(),
         asset_ids: timeline.map((it) => it.asset.id),
         durations: timeline.map((it) => it.sec),
+        // 旁白随导出登记（字幕烧录未做，先保证不丢失）
+        captions: timeline.map((it) => it.caption || ''),
         title: filmTitle.trim() || undefined,
       });
       setTlExportResult(res);

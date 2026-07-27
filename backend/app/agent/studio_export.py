@@ -118,11 +118,15 @@ async def export_sequence(
     sec_per_image: float = 3.0,
     title: str = "",
     durations: list[float] | None = None,
+    captions: list[str] | None = None,
 ) -> dict:
     """把 asset_ids 指定的镜头按顺序合成一个 mp4，落 uploads 并登记 Asset。
 
     durations：可选逐镜头秒数，非 None 时长度必须等于 asset_ids，
     每个镜头用 durations[i] 替代 sec_per_image；为 None 时行为不变。
+
+    captions：可选逐镜头旁白，非 None 时长度必须等于 asset_ids；
+    登记进导出资产的 extra.captions（字幕烧录未做，先保证不丢失）。
 
     Returns: {"asset_id", "url", "segments", "width", "height", "fps"}
     """
@@ -133,6 +137,10 @@ async def export_sequence(
     if durations is not None and len(durations) != len(asset_ids):
         raise ValueError(
             f"durations length ({len(durations)}) must match asset_ids length ({len(asset_ids)})"
+        )
+    if captions is not None and len(captions) != len(asset_ids):
+        raise ValueError(
+            f"captions length ({len(captions)}) must match asset_ids length ({len(asset_ids)})"
         )
     ffmpeg = _ffmpeg_path()
 
@@ -186,6 +194,7 @@ async def export_sequence(
                 "segment_asset_ids": asset_ids,
                 "sec_per_image": sec_per_image,
                 "durations": durations,
+                "captions": captions,
                 "width": WIDTH, "height": HEIGHT, "fps": FPS,
             },
         )
