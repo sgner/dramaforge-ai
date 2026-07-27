@@ -897,3 +897,32 @@ describe('media_recovery_progress', () => {
     expect(s.thoughts[0].payload.text).toContain('m-i2v');
   });
 });
+
+describe('studio_step', () => {
+  beforeEach(() => {
+    useAgentStore.getState().reset();
+  });
+
+  it('renders studio role steps into the thought stream', () => {
+    useAgentStore.getState().setTask('t-studio', 'running');
+    useAgentStore.getState().applyEvent({
+      type: 'studio_step',
+      payload: { role: '编剧', action: 'write_shot_prompt', summary: '镜头 prompt 就绪', round: 1 },
+      timestamp: 1,
+    });
+    const s = useAgentStore.getState();
+    expect(s.thoughts).toHaveLength(1);
+    expect(s.thoughts[0].payload.text).toBe('[编剧] 镜头 prompt 就绪');
+    expect(s.status).toBe('running');
+  });
+
+  it('falls back to [studio] label when role is missing', () => {
+    useAgentStore.getState().setTask('t-studio', 'running');
+    useAgentStore.getState().applyEvent({
+      type: 'studio_step',
+      payload: { action: 'shooting' },
+      timestamp: 1,
+    });
+    expect(useAgentStore.getState().thoughts[0].payload.text).toBe('[studio] shooting');
+  });
+});

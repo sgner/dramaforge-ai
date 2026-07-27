@@ -6,14 +6,14 @@ from app.agent.tools.base import BaseTool, ToolRegistry
 
 
 def test_all_tools_count_is_18():
-    """新增资产搜索工具后，ALL_TOOLS 必须正好 25 个。"""
-    assert len(ALL_TOOLS) == 25
+    """工作室工具合入后，ALL_TOOLS 必须正好 27 个。"""
+    assert len(ALL_TOOLS) == 27
 
 
 def test_all_tools_have_unique_names():
     """所有工具 name 唯一。"""
     names = [cls().name for cls in ALL_TOOLS]
-    assert len(set(names)) == 25, f"重复 name: {[n for n in names if names.count(n) > 1]}"
+    assert len(set(names)) == 27, f"重复 name: {[n for n in names if names.count(n) > 1]}"
 
 
 def test_all_tools_have_required_fields():
@@ -31,24 +31,24 @@ def test_all_tools_have_required_fields():
 
 def test_tools_have_valid_categories():
     """工具 category 必须在白名单中。"""
-    allowed = {"planning", "llm", "image", "video", "audio", "asset"}
+    allowed = {"planning", "llm", "image", "video", "audio", "asset", "studio"}
     for cls in ALL_TOOLS:
         t = cls()
         assert t.category in allowed, f"{t.name} 用了未注册的 category: {t.category}"
 
 
 def test_build_default_registry_registers_18():
-    """build_default_registry 返回的 registry 应有 25 个工具。"""
+    """build_default_registry 返回的 registry 应有 27 个工具。"""
     registry = build_default_registry()
     assert isinstance(registry, ToolRegistry)
-    assert len(registry.list()) == 25
+    assert len(registry.list()) == 27
 
 
 def test_build_default_registry_categories():
     """registry.categories() 应包含所有 6 个分类。"""
     registry = build_default_registry()
     cats = set(registry.categories())
-    assert cats == {"planning", "llm", "image", "video", "audio", "asset"}
+    assert cats == {"planning", "llm", "image", "video", "audio", "asset", "studio"}
 
 
 def test_build_default_registry_only_filter():
@@ -61,10 +61,10 @@ def test_build_default_registry_only_filter():
 
 
 def test_registry_to_openai_schema_lists_all_18():
-    """to_openai_schema 应能为 25 个工具生成 function calling schema。"""
+    """to_openai_schema 应能为 27 个工具生成 function calling schema。"""
     registry = build_default_registry()
     schemas = registry.to_openai_schema()
-    assert len(schemas) == 25
+    assert len(schemas) == 27
     for s in schemas:
         assert s["type"] == "function"
         assert "name" in s["function"]
@@ -110,7 +110,7 @@ def test_asset_tools_count():
 
 
 def test_all_categories_sum_to_18():
-    """所有分类工具数加起来等于 25。"""
+    """所有分类工具数加起来等于 27。"""
     registry = build_default_registry()
     total = sum(len(registry.list(category=c)) for c in registry.categories())
-    assert total == 25
+    assert total == 27

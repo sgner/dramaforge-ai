@@ -36,7 +36,7 @@ Agent 系统是 DramaForge AI 的自动化生产引擎：用户用一句自然�
 │        │                                                                        │
 │  AgentRuntime（runtime.py：ReAct 主循环、状态机、熔断、媒体门禁、记忆压缩）       │
 │        │                                                                        │
-│  ToolRegistry（24 个工具）→ LLM 抽象层 / MediaService / assets 表               │
+│  ToolRegistry（27 个工具）→ LLM 抽象层 / MediaService / assets 表               │
 │  EventBus（per-task 内存日志 + Queue 订阅，MAX_LOG 5000）                        │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -152,7 +152,7 @@ Agent 系统是 DramaForge AI 的自动化生产引擎：用户用一句自然�
 - **`llm_factory.py`**：从统一 `provider_configs` 表选 LLM；找不到抛 `NoLLMConfigured`——**绝不回退 stub**（stub 路径已删除）。
 - 媒体侧 `StubMediaService` 仍存在（data URL 占位，仅供测试）。
 
-### 4.3 工具系统（24 个工具）
+### 4.3 工具系统（27 个工具）
 
 **基类**（`tools/base.py`）：错误层级 `ToolError → ToolValidationError / RetryableError / NonRetryableError`；`ToolContext` 携带 task/project/db/llm/media_service/artifacts（与 memory.artifacts 同引用）/emit；`RetryableTool` 装饰器实现 重试→fallback 模型 两阶段容错（成功清零失败 streak）。
 
@@ -179,6 +179,9 @@ Agent 系统是 DramaForge AI 的自动化生产引擎：用户用一句自然�
 | asset | `read_text_asset / update_text_asset` | 读/写 novel、script 正文（version+1，发 asset_updated） |
 | asset | `inspect_asset` | 多模态 LLM 检查上传资产是否达标；文本自动路由 read_text_asset |
 | asset | `prepare_character_asset` | 不达标角色图→创建标准化衍生资产 |
+| asset | `search_project_assets` | 项目资产搜索（按 story_entity 聚合） |
+| studio | `studio_generate_shot` | 单镜头三角闭环（编剧→美术→质检，发 studio_step） |
+| studio | `studio_generate_episode` | 整集编排（导演拆镜头→逐镜头过审→合成 mp4，on_progress 桥接 studio_step） |
 
 **媒体执行链路**（同步 await，batch 内部并行）：
 
@@ -248,7 +251,7 @@ generate_* 工具 → _build_*_prompt（结构化构建，拒绝 LLM 塞入的 p
 
 | 方法 + 路径 | 用途 |
 |---|---|
-| GET `/tools` | 工具元数据列表（docstring 写"18 个"已过时，实际 24） |
+| GET `/tools` | 工具元数据列表（docstring 写"18 个"已过时，实际 27） |
 | POST `/tasks` | 创建任务（user_goal/language/project_id/max_steps/skip_confirm/llm 绑定）；存 task_profile 后异步 spawn |
 | GET `/tasks?project_id=` | 任务列表 |
 | GET `/tasks/{id}` | 任务详情（含从最近 pending ask_user step 推导的 pending_question） |

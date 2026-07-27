@@ -51,6 +51,7 @@ from .asset_tools import (
 )
 from .asset_intelligence_tools import InspectAssetTool, PrepareCharacterAssetTool
 from .asset_registry_tools import SearchProjectAssetsTool
+from .studio_tools import StudioGenerateEpisodeTool, StudioGenerateShotTool
 
 
 # 全部工具的元组，便于注册
@@ -86,6 +87,9 @@ ALL_TOOLS: tuple[type[BaseTool], ...] = (
     InspectAssetTool,
     PrepareCharacterAssetTool,
     SearchProjectAssetsTool,
+    # studio（工作室多 agent 流程：编排层合并）
+    StudioGenerateShotTool,
+    StudioGenerateEpisodeTool,
 )
 
 

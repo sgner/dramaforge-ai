@@ -60,14 +60,19 @@ extra 写 brief/character_card_ids/story_entity_ids）→ 质检（`inspect_asse
 
 ## 4. 技术债 Top 5
 
-1. **两套 agent 体系并存语义重叠**：ReAct runtime 与硬编码 RoleAgent 流程无共享编排层；
-   `/studio/episodes` 前端死代码（apiClient.ts:418-425）。
-2. **episode 任务注册表纯内存**（studio_tasks.py）：重启丢任务、无法恢复。
-3. **导演台 URL 匹配脆弱**：bigShot↔Asset 靠 URL 字符串相等，无显式外键。
-4. **时间线纯内存态**：刷新即丢；caption 导出丢失（字幕烧录未做）。
+1. ~~**两套 agent 体系并存语义重叠**~~（已合并 2026-07-26）：studio 三角闭环与整集编排已封装为
+   ReAct 工具 `studio_generate_shot` / `studio_generate_episode`（studio_tools.py），studio 流程获得
+   SSE 事件（studio_step）/取消/持久化；内部确定性 for 循环保持不变。
+   `/studio/episodes` 前端死代码（apiClient.ts:418-425）仍存在，后端 API 保留。
+2. ~~**episode 任务注册表纯内存**~~（已修复 2026-07-26）：落 studio_episode_tasks 表，
+   重启可查，残留 running 标记 interrupted。
+3. ~~**导演台 URL 匹配脆弱**~~（已修复 2026-07-26）：改为 extra.bigshot_id 显式关联优先，
+   URL 兜底 + 自愈回写（a3cb655）。
+4. ~~**时间线纯内存态**~~（已修复 2026-07-26）：studio_timelines 表持久化 + 去抖保存；
+   captions 随导出登记并可 drawtext 烧录（44221b9 / 48036ee）。
 5. ~~**质检标准错配**~~（已修复 2026-07-26）：`inspect_asset` 现在按资产类型选标准——
    shot/storyboard 用镜头级 `SHOT_STANDARD`（构图/运镜/连续性/保真度），其余沿用角色标准。
-   仍待做：一致性解析失败默认放行（character_cards.py:229）和单镜头成本预估。
+   ~~一致性解析失败默认放行~~已改为交人审（be6e795）；仍待做：单镜头成本预估。
 
 另：TransportBar/ClipInspector 大量视觉占位按钮（播放速度/Split/Transform/音量滑条均无逻辑）。
 

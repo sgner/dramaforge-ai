@@ -921,6 +921,16 @@ export const useAgentStore = create<AgentState>((set, get) => {
             status: 'running',
           };
         }
+        case 'studio_step': {
+          // studio 多 agent 流程步骤（编剧/美术/质检/导演），进 ThoughtStream
+          const roleLabel = p.role ? `[${p.role}]` : '[studio]';
+          return {
+            thoughts: [...state.thoughts, {
+              ...event,
+              payload: { ...p, text: `${roleLabel} ${p.summary || p.action || ''}` },
+            }],
+          };
+        }
         case 'media_recovery_finished':
           return {
             thoughts: [...state.thoughts, {

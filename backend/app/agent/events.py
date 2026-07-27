@@ -41,6 +41,8 @@ class EventType(str, Enum):
     MEDIA_RECOVERY_STARTED = "media_recovery_started"
     MEDIA_RECOVERY_PROGRESS = "media_recovery_progress"
     MEDIA_RECOVERY_FINISHED = "media_recovery_finished"
+    # studio 多 agent 流程步骤（编排层合并：编剧/美术/质检/导演）
+    STUDIO_STEP = "studio_step"
     ASSET_INSPECTION_STARTED = "asset_inspection_started"
     ASSET_INSPECTION_FINISHED = "asset_inspection_finished"
     ASSET_NORMALIZATION_STARTED = "asset_normalization_started"

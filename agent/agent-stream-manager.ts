@@ -72,6 +72,7 @@ const EVENT_TYPES = [
   'media_recovery_started',
   'media_recovery_progress',
   'media_recovery_finished',
+  'studio_step',
   'asset_inspection_started',
   'asset_inspection_finished',
   'asset_normalization_started',
