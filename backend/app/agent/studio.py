@@ -132,6 +132,7 @@ def _persist_shot_asset(
     model: str,
     round_no: int,
     character_card_ids: Optional[list[str]] = None,
+    bigshot_id: Optional[str] = None,
 ):
     from ..models import Asset
 
@@ -167,6 +168,8 @@ def _persist_shot_asset(
             "brief": brief,
             "character_card_ids": list(character_card_ids or []),
             "story_entity_ids": story_entity_ids,
+            # 与 drama-task 脚本 bigShot 的显式关联（替代脆弱的 URL 匹配）
+            **({"bigshot_id": bigshot_id} if bigshot_id else {}),
         },
     )
     db.add(asset)
@@ -243,11 +246,13 @@ async def run_studio_shot(
     llm_model_id: Optional[str] = None,
     max_rounds: int = 3,
     character_card_ids: Optional[list[str]] = None,
+    bigshot_id: Optional[str] = None,
 ) -> StudioShotResult:
     """编剧 → 美术 → 质检 三角闭环；质检不过则带反馈回到编剧，最多 max_rounds 轮。
 
     character_card_ids 非空时启用 Track C 一致性锁定：
     编剧注入身份描述块、美术带参考图、质检逐卡做一致性比对。
+    bigshot_id 非空时写入镜头 extra，与 drama-task 脚本 bigShot 建立显式关联。
     """
     if not brief.strip():
         raise ValueError("brief is empty")
@@ -292,6 +297,7 @@ async def run_studio_shot(
             shot_notes=shot_notes, url=out.url,
             provider_id=image_provider_id, model=image_model, round_no=round_no,
             character_card_ids=[c.id for c in cards],
+            bigshot_id=bigshot_id,
         )
         trace.append(StudioStep(
             round=round_no, role="artist", action="generate_shot_image",
@@ -341,11 +347,13 @@ async def regenerate_shot(
     llm_provider_id: Optional[str] = None,
     llm_model_id: Optional[str] = None,
     max_rounds: int = 3,
+    bigshot_id: Optional[str] = None,
 ) -> StudioShotResult:
     """一键重生成某个已有镜头：用资产里存的 brief + 角色卡关联重跑闭环。
 
     配合 Story Bible 影响分析使用：用户改了角色身份后，对受影响镜头逐个
     调本函数重生成（决策在人，系统自动传播只到这里为止）。
+    bigshot_id 未显式传时继承旧资产 extra 里的关联。
     """
     from ..models import Asset
 
@@ -360,6 +368,7 @@ async def regenerate_shot(
     if not brief.strip():
         raise ValueError(f"shot asset '{asset_id}' 没有可复用的 brief")
     card_ids = (row.extra or {}).get("character_card_ids") or []
+    effective_bigshot_id = bigshot_id or (row.extra or {}).get("bigshot_id")
     return await run_studio_shot(
         db,
         project_id=project_id,
@@ -370,6 +379,7 @@ async def regenerate_shot(
         llm_model_id=llm_model_id,
         max_rounds=max_rounds,
         character_card_ids=card_ids,
+        bigshot_id=effective_bigshot_id,
     )
 
 

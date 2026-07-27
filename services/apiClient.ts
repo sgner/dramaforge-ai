@@ -708,6 +708,8 @@ export interface StudioShotRegeneratePayload {
   llm_provider_id?: string;
   llm_model_id?: string;
   max_rounds?: number;
+  /** 与 drama-task 脚本 bigShot 的显式关联（导演台断链修复） */
+  bigshot_id?: string;
 }
 
 /** POST /api/studio/shots/regenerate 响应体（新资产 = 同 brief 新版本）。 */

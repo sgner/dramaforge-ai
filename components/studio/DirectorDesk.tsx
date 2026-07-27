@@ -132,7 +132,13 @@ export const DirectorDesk: React.FC<DirectorDeskProps> = ({
       console.warn('[DirectorDesk] listStudioShots failed', e);
     }
 
-    // 4) URL 匹配：videoUrl 优先，storyboardImageUrl 兜底；同镜头多版本取最新
+    // 4) 匹配：优先显式关联（asset.extra.bigshot_id），URL 匹配兜底（兼容旧数据）；
+    //    URL 匹配成功但缺显式关联时回写 bigshot_id 自愈断链。
+    const assetByBigshotId = new Map<string, AssetOut>();
+    for (const a of assets) {
+      const bigshotId = (a as any).extra?.bigshot_id;
+      if (bigshotId && !assetByBigshotId.has(bigshotId)) assetByBigshotId.set(bigshotId, a);
+    }
     const assetByUrl = new Map<string, AssetOut>();
     for (const a of assets) {
       if (a.url && !assetByUrl.has(a.url)) assetByUrl.set(a.url, a);
@@ -143,18 +149,28 @@ export const DirectorDesk: React.FC<DirectorDeskProps> = ({
       const prev = shotByUrl.get(s.url);
       if (!prev || s.version > prev.version) shotByUrl.set(s.url, s);
     }
+    const relinkQueue: AssetOut[] = [];
     const rows: DeskShot[] = bigShots.map((shot, i) => {
       const urls = [shot.videoUrl, shot.storyboardImageUrl].filter(Boolean) as string[];
-      let asset: AssetOut | null = null;
+      let asset: AssetOut | null = assetByBigshotId.get(shot.id) || null;
       let studioShot: StudioShotOut | null = null;
       for (const u of urls) {
         if (!asset) asset = assetByUrl.get(u) || null;
         if (!studioShot) studioShot = shotByUrl.get(u) || null;
       }
+      if (asset && !(asset as any).extra?.bigshot_id) relinkQueue.push(asset);
       return { shot, index: i + 1, asset, studioShot };
     });
     setDeskShots(rows);
     setLoading(false);
+    // 自愈：把 URL 匹配上的资产回写显式 bigshot_id（fire-and-forget）
+    for (const asset of relinkQueue) {
+      const shotId = rows.find((r) => r.asset?.id === asset.id)?.shot.id;
+      if (!shotId) continue;
+      api.updateAsset(asset.id, {
+        extra: { ...((asset as any).extra || {}), bigshot_id: shotId },
+      } as any).catch((e) => console.warn('[DirectorDesk] relink bigshot_id failed', e));
+    }
   }, [projectId]);
 
   // 进入阶段 / 切项目时加载
@@ -229,6 +245,8 @@ export const DirectorDesk: React.FC<DirectorDeskProps> = ({
         asset_id: s.asset_id,
         image_provider_id: imageProviderId,
         image_model: imageModel,
+        // 新版本继承显式 bigshot 关联，重生成换 URL 也不会断链
+        bigshot_id: row.shot.id,
       });
       await load(); // 新版本出现：整体刷新
     } catch (e: any) {

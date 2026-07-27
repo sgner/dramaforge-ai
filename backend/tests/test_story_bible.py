@@ -387,3 +387,94 @@ def test_multiple_versions_each_get_own_node(db_session):
     assert {n.data["url"] for n in nodes} == {
         "https://cdn.test/shot-v1.png", "https://cdn.test/shot-v2.png",
     }
+
+
+# ========================
+# 导演台断链修复（bigshot_id 显式关联）
+# ========================
+
+def test_persist_shot_asset_records_bigshot_id(db_session):
+    shot = studio._persist_shot_asset(
+        db_session,
+        project_id="p1",
+        brief="雨夜天台对峙",
+        shot_prompt="rooftop confrontation",
+        shot_notes="",
+        url="https://cdn.test/shot-bs.png",
+        provider_id="img-p",
+        model="img-model",
+        round_no=1,
+        bigshot_id="bs-1",
+    )
+    assert shot.extra["bigshot_id"] == "bs-1"
+
+
+def test_persist_shot_asset_without_bigshot_id_omits_key(db_session):
+    shot = studio._persist_shot_asset(
+        db_session,
+        project_id="p1",
+        brief="雨夜天台对峙",
+        shot_prompt="rooftop confrontation",
+        shot_notes="",
+        url="https://cdn.test/shot-bs2.png",
+        provider_id="img-p",
+        model="img-model",
+        round_no=1,
+    )
+    assert "bigshot_id" not in shot.extra
+
+
+@pytest.mark.asyncio
+async def test_regenerate_shot_inherits_bigshot_id(db_session, monkeypatch):
+    """重生成未显式传 bigshot_id 时继承旧资产 extra 里的关联。"""
+    db_session.add(Asset(
+        id="shot-old", project_id="p1", kind="image", asset_kind="shot",
+        name="镜头1", url="https://cdn.test/old.png", status="ready",
+        extra={"brief": "雨夜天台对峙", "bigshot_id": "bs-1"},
+    ))
+    db_session.commit()
+
+    captured: dict = {}
+
+    class _Result:
+        def to_dict(self):
+            return {}
+
+    async def fake_run(db, **kwargs):
+        captured.update(kwargs)
+        return _Result()
+
+    monkeypatch.setattr(studio, "run_studio_shot", fake_run)
+    await studio.regenerate_shot(
+        db_session, project_id="p1", asset_id="shot-old",
+        image_provider_id="img-p", image_model="img-model",
+    )
+    assert captured["bigshot_id"] == "bs-1"
+
+
+@pytest.mark.asyncio
+async def test_regenerate_shot_explicit_bigshot_id_wins(db_session, monkeypatch):
+    db_session.add(Asset(
+        id="shot-old2", project_id="p1", kind="image", asset_kind="shot",
+        name="镜头2", url="https://cdn.test/old2.png", status="ready",
+        extra={"brief": "雨夜天台对峙", "bigshot_id": "bs-old"},
+    ))
+    db_session.commit()
+
+    captured: dict = {}
+
+    class _Result:
+        def to_dict(self):
+            return {}
+
+    async def fake_run(db, **kwargs):
+        captured.update(kwargs)
+        return _Result()
+
+    monkeypatch.setattr(studio, "run_studio_shot", fake_run)
+    await studio.regenerate_shot(
+        db_session, project_id="p1", asset_id="shot-old2",
+        image_provider_id="img-p", image_model="img-model",
+        bigshot_id="bs-new",
+    )
+    assert captured["bigshot_id"] == "bs-new"

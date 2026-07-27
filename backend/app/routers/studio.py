@@ -192,6 +192,8 @@ class ShotRegenerateIn(BaseModel):
     llm_provider_id: str | None = None
     llm_model_id: str | None = None
     max_rounds: int = 3
+    # 与 drama-task 脚本 bigShot 的显式关联（导演台断链修复）
+    bigshot_id: str | None = None
 
 
 @router.post("/shots/regenerate")
@@ -207,6 +209,7 @@ async def regenerate_shot_endpoint(body: ShotRegenerateIn, db: Session = Depends
             llm_provider_id=body.llm_provider_id,
             llm_model_id=body.llm_model_id,
             max_rounds=body.max_rounds,
+            bigshot_id=body.bigshot_id,
         )
     except NoLLMConfigured as e:
         raise HTTPException(status_code=400, detail=str(e))

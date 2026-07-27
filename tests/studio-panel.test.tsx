@@ -25,6 +25,7 @@ const mockRegenerate = vi.fn();
 const mockExport = vi.fn();
 const mockListAssets = vi.fn();
 const mockArrange = vi.fn();
+const mockUpdateAsset = vi.fn();
 
 vi.mock('@/services/apiClient', () => ({
   api: {
@@ -37,6 +38,7 @@ vi.mock('@/services/apiClient', () => ({
     createStudioExport: (...args: any[]) => mockExport(...args),
     listAssets: (...args: any[]) => mockListAssets(...args),
     arrangeStudioAssets: (...args: any[]) => mockArrange(...args),
+    updateAsset: (...args: any[]) => mockUpdateAsset(...args),
   },
 }));
 
@@ -169,6 +171,7 @@ describe('<StudioPanel />', () => {
     vi.clearAllMocks();
     mockListProviders.mockResolvedValue(PROVIDERS);
     mockRebuild.mockResolvedValue({ ok: true, created: 0 });
+    mockUpdateAsset.mockResolvedValue({ ok: true });
     mockGetDramaTask.mockResolvedValue({
       id: 'proj-1',
       name: '测试剧',
@@ -258,6 +261,51 @@ describe('<StudioPanel />', () => {
     );
   });
 
+  it('导演台：extra.bigshot_id 显式关联优先于 URL 匹配（重生成换 URL 不断链）', async () => {
+    // asset-9 的 URL 与 bs-1 的 videoUrl 完全不同（重生成后的新 URL），
+    // 但 extra.bigshot_id === 'bs-1'，必须仍被匹配到。
+    mockListAssets.mockResolvedValue([
+      makeAsset({
+        id: 'asset-9', kind: 'video', asset_kind: 'shot',
+        title: '雨夜街道 v2', url: '/files/v2-new.mp4',
+        extra: { bigshot_id: 'bs-1' },
+      }),
+    ]);
+    render(<StudioPanel projectId="proj-1" onClose={() => {}} />);
+    await enterDirector();
+
+    expect(screen.getByTestId('studio-dir-video-bs-1')).toHaveTextContent('已有视频');
+    // 显式关联命中 → 不需要自愈回写
+    expect(mockUpdateAsset).not.toHaveBeenCalled();
+  });
+
+  it('导演台：URL 匹配上的资产缺 bigshot_id 时自愈回写', async () => {
+    render(<StudioPanel projectId="proj-1" onClose={() => {}} />);
+    await enterDirector();
+
+    // asset-1 仅靠 videoUrl 匹配 bs-1，extra 无 bigshot_id → 触发回写
+    await waitFor(() => {
+      expect(mockUpdateAsset).toHaveBeenCalledWith('asset-1', {
+        extra: { bigshot_id: 'bs-1' },
+      });
+    });
+  });
+
+  it('导演台：重生成携带 bigshot_id，新版本继承显式关联', async () => {
+    mockRegenerate.mockResolvedValue({ status: 'approved' });
+    render(<StudioPanel projectId="proj-1" onClose={() => {}} />);
+    await enterDirector();
+    await fillGenSettings();
+
+    fireEvent.click(screen.getByTestId('studio-dir-regen-bs-1'));
+
+    await waitFor(() => {
+      expect(mockRegenerate).toHaveBeenCalledWith(
+        expect.objectContaining({ asset_id: 'shot-a1', bigshot_id: 'bs-1' }),
+      );
+    });
+  });
+
   it('导演台：通过/退回调 review API 并就地把状态更新', async () => {
     mockReview.mockResolvedValue({
       asset_id: 'shot-a1',
@@ -337,6 +385,7 @@ describe('<StudioPanel />', () => {
         asset_id: 'shot-a1',
         image_provider_id: 'img-prov',
         image_model: 'img-v1',
+        bigshot_id: 'bs-1',
       });
     });
     await waitFor(() => {
