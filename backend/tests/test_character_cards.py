@@ -258,3 +258,62 @@ async def test_consistency_check_error_goes_to_human_review_without_extra_round(
     asset = db_session.query(Asset).filter_by(id=result.asset_id).one()
     assert asset.extra["critic_status"] == "check_error"
     assert asset.extra["review_status"] == "pending_review"
+
+
+# ---------- 结构化 diff 一致性前置 ----------
+
+def test_structured_diff_scores_token_overlap():
+    from app.agent.character_cards import structured_diff
+    identity = {
+        "face_anchor": "oval face, scar on left eyebrow",
+        "hair": "short black hair",
+        "clothing": "navy jacket, white shirt",
+        "distinctive_features": "silver ring",
+        "style": "cinematic realistic",
+    }
+    full = structured_diff(identity, "林岚 oval face with a scar on left eyebrow, short black hair, navy jacket and white shirt, silver ring, cinematic realistic style")
+    assert full["score"] == 1.0
+    assert full["missing"] == []
+
+    partial = structured_diff(identity, "a girl in red dress, long blonde hair")
+    assert partial["score"] < 0.4
+    assert "navy" in partial["missing"] or "jacket" in partial["missing"]
+
+    empty = structured_diff({}, "anything")
+    assert empty["score"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_check_consistency_structured_reject_skips_vision(db_session):
+    """结构化比对严重不符 → 直接判不一致，不调 vision LLM。"""
+    _make_card(db_session)
+    card = db_session.query(Asset).filter_by(id="card1").one()
+    shot = Asset(
+        id="shot-mismatch", project_id="p1", kind="image",
+        url="https://cdn.test/shot.png",
+        prompt="a completely different person, blonde curly hair, red gown",
+    )
+
+    class _ShouldNotBeCalled:
+        async def generate_structured(self, messages, **kwargs):
+            raise AssertionError("vision LLM should not be called on structured reject")
+
+    result = await check_consistency(db_session, card, shot, _ShouldNotBeCalled())
+    assert result["consistent"] is False
+    assert result["via"] == "structured"
+    assert result["score"] < 0.4
+
+
+@pytest.mark.asyncio
+async def test_check_consistency_empty_shot_text_falls_back_to_vision(db_session):
+    """镜头无文本可比时不做结构化判断，走 vision 路径。"""
+    _make_card(db_session)
+    card = db_session.query(Asset).filter_by(id="card1").one()
+    shot = Asset(id="shot-notext", project_id="p1", kind="image", url="https://cdn.test/shot.png")
+
+    result = await check_consistency(
+        db_session, card, shot,
+        FakeLLM({"identity": {"consistent": True, "score": 0.9, "issues": []}}),
+    )
+    assert result["consistent"] is True
+    assert result["score"] == 0.9

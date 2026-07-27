@@ -25,6 +25,47 @@ logger = logging.getLogger("dramaforge.studio.character_cards")
 
 IDENTITY_FIELDS = ["face_anchor", "hair", "clothing", "distinctive_features", "style"]
 
+# 结构化 diff 的停用词（英文功能词；身份描述里无区分度）
+_DIFF_STOPWORDS = {
+    "a", "an", "the", "and", "or", "of", "with", "in", "on", "at", "to", "for",
+    "is", "are", "no", "not", "his", "her", "its", "their", "that", "this",
+}
+
+
+def _diff_tokens(text: str) -> list[str]:
+    """把身份字段文本切成有区分度的 token（≥2 字符、去停用词、去重保序）。"""
+    tokens: list[str] = []
+    for raw in re.split(r"[^0-9A-Za-z一-鿿]+", (text or "").lower()):
+        if len(raw) >= 2 and raw not in _DIFF_STOPWORDS and raw not in tokens:
+            tokens.append(raw)
+    return tokens
+
+
+def structured_diff(visual_identity: dict, shot_text: str) -> dict:
+    """Story Bible 字段级一致性比对（确定性，不调 LLM）。
+
+    从角色卡 visual_identity 提取身份 token，与镜头 brief/prompt 文本比对：
+    返回 {matched, missing, score}。score = matched / 总 token 数；
+    无身份字段时 score=1.0（无据可查，不拦截）。
+    """
+    haystack = (shot_text or "").lower()
+    matched: list[str] = []
+    missing: list[str] = []
+    for field in IDENTITY_FIELDS:
+        for token in _diff_tokens(str((visual_identity or {}).get(field) or "")):
+            if token in haystack:
+                matched.append(token)
+            else:
+                missing.append(token)
+    total = len(matched) + len(missing)
+    score = (len(matched) / total) if total else 1.0
+    return {"matched": matched, "missing": missing, "score": score}
+
+
+# 结构化比对低于此分数直接判不一致（跳过 vision 调用省钱）；
+# 阈值保守，只拦"明显换了个人"的镜头，边缘情况仍交 vision。
+STRUCTURED_DIFF_REJECT_SCORE = 0.4
+
 _CARD_EXTRACT_SYSTEM = """You are the art director agent building a character identity card from reference images.
 Return JSON only:
 {"face_anchor": "<face shape, eyes, eyebrows, nose, lips, skin, distinguishing marks>",
@@ -201,9 +242,32 @@ def reference_urls(db: Session, card) -> list[str]:
 async def check_consistency(db: Session, card, shot_asset, llm) -> dict:
     """质检：镜头 vs 角色卡参考身份。返回 {consistent, score, issues}。
 
+    两道防线（结构化为主、vision 为辅）：
+    1. 结构化 diff：卡身份 token 与镜头 brief/prompt 确定性比对，
+       score < STRUCTURED_DIFF_REJECT_SCORE 直接判不一致（via="structured"），
+       跳过 vision 调用——明显换人的镜头不烧模型额度。
+    2. vision 抽检：边缘情况交 vision LLM 比对参考图。
     解析失败不再静默放行：返回 consistent=False + check_error=True，
     由闭环把镜头直接交人审（质检自身故障不该触发又一轮真实生成）。
     """
+    shot_text = " ".join(str(v) for v in (
+        (shot_asset.extra or {}).get("brief"),
+        shot_asset.prompt,
+        shot_asset.name,
+    ) if v)
+    diff = structured_diff(card.visual_identity or {}, shot_text)
+    # 镜头无文本可比（无 brief/prompt）时不做结构化判断，交 vision
+    if shot_text.strip() and diff["missing"] and diff["score"] < STRUCTURED_DIFF_REJECT_SCORE:
+        return {
+            "consistent": False,
+            "score": diff["score"],
+            "via": "structured",
+            "issues": [
+                f"structured diff: identity tokens missing from shot text: "
+                f"{', '.join(diff['missing'][:8])}"
+            ],
+            "character": card.name,
+        }
     content: list[dict] = [
         {"type": "text", "text": (
             f"Character '{card.name}' identity:\n{identity_block(card)}\n\n"
