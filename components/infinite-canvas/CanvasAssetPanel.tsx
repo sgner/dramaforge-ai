@@ -26,6 +26,8 @@ interface AssetItem {
   promptSource?: string;
   promptOptimized?: string;
   inspectionStatus?: string;
+  storyEntityId?: string;
+  storyEntityName?: string;
 }
 
 interface AssetCategory {
@@ -80,8 +82,11 @@ export const CanvasAssetPanel: React.FC<CanvasAssetPanelProps> = ({ open, onClos
   const [identifyVoice, setIdentifyVoice] = useState('');
   const [identifyExtract, setIdentifyExtract] = useState(true);
   const [identifySubmitting, setIdentifySubmitting] = useState(false);
+  const [impactForId, setImpactForId] = useState<string | null>(null);
+  const [impactData, setImpactData] = useState<Record<string, { count: number; titles: string[] }>>({});
 
   const taskAssets = useCanvasStore((s) => s.taskAssets);
+  const projectId = useCanvasStore((s) => s.projectId);
   const retryFailedAsset = useCanvasStore((s) => s.retryFailedAsset);
   const setTaskAssets = useCanvasStore((s) => s.setTaskAssets);
   const openTextReader = useCanvasStore((s) => s.openTextReader);
@@ -108,6 +113,8 @@ export const CanvasAssetPanel: React.FC<CanvasAssetPanelProps> = ({ open, onClos
       promptSource: a.promptSource,
       promptOptimized: a.promptOptimized,
       inspectionStatus: a.inspectionStatus,
+      storyEntityId: a.storyEntityId,
+      storyEntityName: a.storyEntityName,
     }));
     return [...taskItems, ...localAssets];
   }, [taskAssets, localAssets, t]);
@@ -314,6 +321,53 @@ export const CanvasAssetPanel: React.FC<CanvasAssetPanelProps> = ({ open, onClos
     );
   };
 
+  const renderEntityImpact = (item: AssetItem) => {
+    // 实体影响查看（Story Bible）：点击实体徽章展开"出现于哪些镜头"。
+    if (!item.storyEntityId) return null;
+    const toggle = async () => {
+      if (impactForId === item.id) {
+        setImpactForId(null);
+        return;
+      }
+      setImpactForId(item.id);
+      if (!impactData[item.id] && projectId && item.storyEntityId) {
+        const res = await apiClient.getEntityImpact(item.storyEntityId, projectId);
+        setImpactData((prev) => ({
+          ...prev,
+          [item.id]: {
+            count: res.impacted_shots,
+            titles: res.impact.map((entry) => entry.title || entry.brief || entry.asset_id),
+          },
+        }));
+      }
+    };
+    const data = impactData[item.id];
+    return (
+      <div className="canvas-asset-entity" onClick={(e) => e.stopPropagation()}>
+        <button
+          type="button"
+          data-testid={`entity-impact-${item.id}`}
+          className="canvas-asset-entity-badge"
+          onClick={toggle}
+        >
+          ⧉ {item.storyEntityName || item.storyEntityId}
+        </button>
+        {impactForId === item.id && data && (
+          <div data-testid={`entity-impact-list-${item.id}`} className="canvas-asset-entity-impact">
+            <div className="canvas-asset-entity-impact-count">
+              {data.count === 0
+                ? t('canvasPanelEntityImpactNone')
+                : t('canvasPanelEntityImpactCount').replace('{0}', String(data.count))}
+            </div>
+            {data.titles.slice(0, 5).map((title, index) => (
+              <div key={index} className="canvas-asset-entity-impact-shot">{title}</div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const renderFailedCard = (item: AssetItem) => {
     const isRetrying = !!item.generating;
     return (
@@ -466,6 +520,7 @@ export const CanvasAssetPanel: React.FC<CanvasAssetPanelProps> = ({ open, onClos
               {item.url ? <img src={item.url} alt={item.name} draggable={false} /> : <div className="canvas-asset-empty" style={{ minHeight: 80 }}>{item.name}</div>}
               {renderImageMeta(item)}
               {renderIdentifyBlock(item)}
+              {renderEntityImpact(item)}
               {item.tags && item.tags.length > 0 && (
                 <div className="asset-item-tags">
                   {item.tags.slice(0, 2).map((tag) => (

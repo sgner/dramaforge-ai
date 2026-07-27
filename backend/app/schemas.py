@@ -114,6 +114,9 @@ class AssetOut(BaseModel):
     usage_count: int = 0
     # 角色声音画像：资产级音色绑定（TTS 默认音色）
     voice_id: Optional[str] = None
+    # Story Bible 实体外键
+    story_entity_id: Optional[str] = None
+    story_entity_name: Optional[str] = None
     # 文本资产正文（小说/脚本）— 来自 extra.body
     body: Optional[str] = None
     # 文本资产统计：words / scenes / chapters
@@ -198,6 +201,8 @@ class AssetOut(BaseModel):
             reference_capabilities=a.reference_capabilities or {},
             usage_count=a.usage_count or 0,
             voice_id=getattr(a, "voice_id", None),
+            story_entity_id=getattr(a, "story_entity_id", None),
+            story_entity_name=getattr(a, "story_entity_name", None),
             body=extra.get("body") or a.url,  # 兼容：旧数据 url 即 body
             text_stats=extra.get("text_stats") or {},
             extra=extra,

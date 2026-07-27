@@ -191,6 +191,9 @@ export interface TaskAssetRef {
   promptSource?: string;
   promptOptimized?: string;
   inspectionStatus?: string;
+  /** Story Bible 实体外键 */
+  storyEntityId?: string;
+  storyEntityName?: string;
   /** 文本资产正文（小说/脚本用） */
   body?: string;
   /** 文本资产字数/场数（统计字段，避免每次计算） */

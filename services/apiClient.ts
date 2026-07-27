@@ -88,6 +88,9 @@ export interface AssetOut {
   visual_identity?: Record<string, any>;
   reference_capabilities?: Record<string, any>;
   usage_count?: number;
+  voice_id?: string | null;
+  story_entity_id?: string | null;
+  story_entity_name?: string | null;
   // 文本资产正文（小说/脚本）— 后端从 extra.body 提升
   body?: string | null;
   text_stats?: Record<string, any>;
@@ -184,6 +187,12 @@ export const api = {
       inspection_status: string; story_entity_id: string | null; voice_id?: string | null;
       visual_identity?: Record<string, string>;
     }>(`/assets/${assetId}/identify`, { method: 'POST', body: JSON.stringify(payload) }),
+  getEntityImpact: (storyEntityId: string, projectId: string) =>
+    request<{
+      story_entity_id: string;
+      impact: { asset_id: string; title: string; brief: string; url?: string | null; status?: string; created_at?: string | null }[];
+      impacted_shots: number;
+    }>(`/studio/entities/${encodeURIComponent(storyEntityId)}/impact?project_id=${encodeURIComponent(projectId)}`),
 
   // ---------- Uploads ----------
   uploadImage: async (file: File): Promise<{ url: string; filename: string; size: number }> => {

@@ -185,6 +185,8 @@ function toTaskAssetRef(a: AssetOut): TaskAssetRef {
     promptSource: a.prompt_source || undefined,
     promptOptimized: a.prompt_optimized || undefined,
     inspectionStatus: a.inspection_status || undefined,
+    storyEntityId: a.story_entity_id || undefined,
+    storyEntityName: a.story_entity_name || undefined,
     // 文本资产正文（后端从 extra.body 提升到顶层）
     body: a.body || undefined,
     textStats: a.text_stats || undefined,
