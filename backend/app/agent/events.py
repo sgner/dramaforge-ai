@@ -59,7 +59,7 @@ class EventType(str, Enum):
 class AgentEvent:
     """agent 事件（轻量级 dict-friendly 对象）。"""
 
-    __slots__ = ("task_id", "step_id", "type", "payload", "timestamp")
+    __slots__ = ("task_id", "step_id", "type", "payload", "timestamp", "seq")
 
     def __init__(
         self,
@@ -68,12 +68,15 @@ class AgentEvent:
         payload: dict | None = None,
         step_id: str | None = None,
         timestamp: float | None = None,
+        seq: int = 0,
     ):
         self.task_id = task_id
         self.step_id = step_id
         self.type = type.value if isinstance(type, EventType) else type
         self.payload = payload or {}
         self.timestamp = timestamp if timestamp is not None else time.time()
+        # per-task 单调序号，由 EventBus.publish 赋值（0 = 未分配）
+        self.seq = seq
 
     def to_dict(self) -> dict:
         return {
@@ -82,6 +85,7 @@ class AgentEvent:
             "type": self.type,
             "payload": self.payload,
             "timestamp": self.timestamp,
+            "seq": self.seq,
         }
 
     def to_json(self) -> str:
@@ -115,6 +119,7 @@ class EventBus:
     def __init__(self):
         self._subscribers: dict[str, list[asyncio.Queue]] = defaultdict(list)
         self._event_log: dict[str, list[AgentEvent]] = defaultdict(list)
+        self._seq: dict[str, int] = defaultdict(int)
 
     def subscribe(self, task_id: str) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue()
@@ -131,31 +136,40 @@ class EventBus:
                 del self._subscribers[task_id]
 
     async def publish(self, event: AgentEvent) -> None:
-        # 1. 写入 per-task 日志（供 late subscriber 重放）
+        # 1. 分配 per-task 单调序号（重连续传 / 前端去重 / 缺页检测的依据）
+        self._seq[event.task_id] += 1
+        event.seq = self._seq[event.task_id]
+
+        # 2. 写入 per-task 日志（供 late subscriber 重放）
         log = self._event_log[event.task_id]
         log.append(event)
         if len(log) > self.MAX_LOG_PER_TASK:
-            # 超过上限：丢弃最早的事件（FIFO）。对前端 UI 来说，最新事件最重要。
+            # 超过上限：丢弃最早的事件（FIFO）。序号保留，前端可检测缺页。
             del log[: len(log) - self.MAX_LOG_PER_TASK]
 
-        # 2. Fan-out 给当前所有 subscriber
+        # 3. Fan-out 给当前所有 subscriber
         queues = self._subscribers.get(event.task_id, [])
         for q in queues:
             await q.put(event)
 
-    def get_replay(self, task_id: str) -> list[AgentEvent]:
-        """返回该 task 目前为止发布过的全部事件（不修改 subscribers）。
+    def get_replay(self, task_id: str, after_seq: int = 0) -> list[AgentEvent]:
+        """返回该 task 的事件历史（after_seq > 0 时只返回序号在其之后的事件）。
 
         新 SSE subscriber 在创建 queue 之后、开始 await queue.get() 之前，
         应先调用本方法把历史事件一次性 yield 给客户端，
         再 await queue.get() 接收 live 事件——这样无论客户端何时打开 SSE
         都能看到完整流程，不会出现"既无想法也无动作"的空白。
+        after_seq 用于 Last-Event-ID 续传：重连只补断线期间错过的事件。
         """
-        return list(self._event_log.get(task_id, []))
+        events = self._event_log.get(task_id, [])
+        if after_seq > 0:
+            return [e for e in events if e.seq > after_seq]
+        return list(events)
 
     def clear_log(self, task_id: str) -> None:
-        """清空某 task 的事件日志（task 终态后回收内存）。"""
+        """清空某 task 的事件日志（task 终态后回收内存）；序号一并重置（retry 是新生命周期）。"""
         self._event_log.pop(task_id, None)
+        self._seq.pop(task_id, None)
 
     def subscriber_count(self, task_id: str) -> int:
         return len(self._subscribers.get(task_id, []))

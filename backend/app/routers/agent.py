@@ -10,7 +10,7 @@ from typing import Any, Optional
 
 from ..models import _now
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -299,28 +299,31 @@ def _sse_heartbeat() -> str:
 
 
 @router.get("/tasks/{task_id}/stream")
-async def stream_events(task_id: str):
+async def stream_events(task_id: str, request: Request, last_seq: int = Query(0, ge=0)):
     """SSE 推送 agent 事件。
 
     关键行为：
-    1. 订阅时立即 yield `event_bus.get_replay(task_id)` 的全部历史事件
+    1. 订阅时立即 yield `event_bus.get_replay(task_id)` 的历史事件
        ——修复"runtime 启动 vs SSE subscribe"的竞态丢失（用户重连也能看到进度）。
+       支持 Last-Event-ID / ?last_seq=N 续传：重连只补断线期间错过的事件，
+       不再全量重放（事件带 per-task 单调 seq，SSE id 即 seq）。
     2. 之后 await queue.get() 接收 live 事件。
     3. 收到 task_done / task_failed 时 break，断开 SSE。
     4. 每 HEARTBEAT_INTERVAL_S 无事件 yield heartbeat 防代理超时。
     """
     queue = event_bus.subscribe(task_id)
-    pending_response_holder: dict[str, Any] = {"value": None, "event": None}
+    # EventSource 自动重连时带 Last-Event-ID；前端手动重连用 ?last_seq=
+    cursor = last_seq
+    header_last_id = request.headers.get("last-event-id")
+    if header_last_id and header_last_id.isdigit():
+        cursor = max(cursor, int(header_last_id))
 
     async def event_generator():
         try:
-            # 1. 重放历史事件：把 runtime 已经 emit 过的所有事件补发给新 SSE 客户端。
-            #    这是修复"前端显示 0 想法 0 动作"的关键——runtime 在 create_task
-            #    返回后立即启动并开始 emit，而 EventSource 在前端 setTask 之后才
-            #    打开，中间的所有事件都进不了 SSE；重放保证不丢。
-            replay_events = event_bus.get_replay(task_id)
+            # 1. 重放历史事件（或从 cursor 续传）
+            replay_events = event_bus.get_replay(task_id, after_seq=cursor)
             for idx, past in enumerate(replay_events):
-                yield past.to_sse(event_id=int(past.timestamp * 1000))
+                yield past.to_sse(event_id=past.seq or None)
                 # 只有当 TASK_DONE/TASK_FAILED 是最后一个事件时才关闭 stream。
                 # 如果不是最后一个（说明 task 之前失败过但后来 retry/resume 了），
                 # 继续重放后续事件，避免前端误判 task 已结束。
@@ -332,7 +335,7 @@ async def stream_events(task_id: str):
             while True:
                 try:
                     event: AgentEvent = await asyncio.wait_for(queue.get(), timeout=HEARTBEAT_INTERVAL_S)
-                    yield event.to_sse(event_id=int(event.timestamp * 1000))
+                    yield event.to_sse(event_id=event.seq or None)
                     if event.type in (EventType.TASK_DONE, EventType.TASK_FAILED):
                         break
                 except asyncio.TimeoutError:

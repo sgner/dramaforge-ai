@@ -24,6 +24,9 @@ let currentTaskId: string | null = null;
 let lastEventTime = 0;
 let heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
 let stableTimer: ReturnType<typeof setTimeout> | null = null;
+// 事件序号游标（per-task 单调 seq）：重连续传 / 去重 / 缺页检测
+let lastSeq = 0;
+let gapNoticePending = false;
 const MAX_RETRIES = 8;
 const BACKOFF_MS = 1000;
 const MAX_BACKOFF_MS = 30000;
@@ -85,7 +88,31 @@ const EVENT_TYPES = [
 ];
 
 function streamUrl(taskId: string): string {
-  return `/api/agent/tasks/${encodeURIComponent(taskId)}/stream`;
+  const base = `/api/agent/tasks/${encodeURIComponent(taskId)}/stream`;
+  // 手动重连带上序号游标，服务端只补断线期间错过的事件（不全量重放）
+  return lastSeq > 0 ? `${base}?last_seq=${lastSeq}` : base;
+}
+
+/**
+ * 事件序号闸：返回 true 表示应应用该事件。
+ * - seq <= lastSeq：重放/重复事件，跳过（续传场景下服务端已裁剪，这里是双保险）。
+ * - seq > lastSeq + 1：检测到缺页（FIFO 溢出或丢帧），触发一次 rehydrate 兜底。
+ * - seq 为 0/缺失（旧后端或 heartbeat 等非序号事件）：直接放行。
+ */
+function acceptSeq(seq: unknown, taskId: string): boolean {
+  const n = typeof seq === 'number' && Number.isFinite(seq) ? seq : 0;
+  if (n <= 0) return true;
+  if (n <= lastSeq) return false;
+  if (n > lastSeq + 1 && lastSeq > 0 && !gapNoticePending) {
+    gapNoticePending = true;
+    // eslint-disable-next-line no-console
+    console.warn(`[agent-stream-manager] event seq gap: ${lastSeq} -> ${n}, rehydrating`);
+    void rehydrateAfterReconnect(taskId).finally(() => {
+      gapNoticePending = false;
+    });
+  }
+  lastSeq = Math.max(lastSeq, n);
+  return true;
 }
 
 /**
@@ -208,6 +235,7 @@ async function rehydrateAfterReconnect(taskId: string): Promise<void> {
 function open(taskId: string, resetRetries = false): void {
   if (typeof EventSource === 'undefined') return;
   if (es) close();
+  if (currentTaskId !== taskId) lastSeq = 0; // 换任务：序号游标重置
   currentTaskId = taskId;
   if (resetRetries) retryCount = 0;
   lastEventTime = Date.now();
@@ -268,6 +296,7 @@ function open(taskId: string, resetRetries = false): void {
       try {
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed === 'object') {
+          if (!acceptSeq(parsed.seq, taskId)) return;
           if ('type' in parsed) {
             useAgentStore.getState().applyEvent({
               type: parsed.type,
@@ -291,6 +320,7 @@ function open(taskId: string, resetRetries = false): void {
     try {
       const parsed = JSON.parse(ev.data);
       if (parsed && typeof parsed === 'object' && 'type' in parsed) {
+        if (!acceptSeq(parsed.seq, taskId)) return;
         useAgentStore.getState().applyEvent({
           type: parsed.type,
           payload: parsed.payload || {},
@@ -325,6 +355,7 @@ export function setActiveTask(taskId: string | null): void {
 export function stopStream(): void {
   close();
   currentTaskId = null;
+  lastSeq = 0;
   setStatus('disconnected', 'stopped');
 }
 
@@ -399,3 +430,10 @@ useAgentStore.subscribe((state) => {
     lastKnownStatus = st;
   }
 });
+
+// 测试面：事件序号闸（不改生产语义）
+export const __streamSeqTest__ = {
+  acceptSeq,
+  setLastSeq: (n: number) => { lastSeq = n; },
+  getLastSeq: () => lastSeq,
+};
