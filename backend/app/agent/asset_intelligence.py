@@ -23,6 +23,23 @@ CHARACTER_STANDARD = {
 }
 
 
+# 镜头级质检标准：studio 三角闭环的 critic 用（构图/运镜/连续性/保真度），
+# 不再复用角色资产标准（质检标准错配修复）。
+SHOT_STANDARD = {
+    "composition": "clear focal subject, cinematic framing, no awkward crops",
+    "camera": "shot size and camera angle match the brief",
+    "continuity": "characters, props and scene match their reference assets",
+    "fidelity": "follows the brief; no text overlays, watermarks or rendering artifacts",
+}
+
+
+def _inspection_standard(asset: Asset) -> tuple[str, dict]:
+    """按资产类型选质检标准：镜头用镜头级标准，其余沿用角色/通用标准。"""
+    if _normalize_role(getattr(asset, "asset_kind", None)) in {"shot", "storyboard"}:
+        return "Shot standard", SHOT_STANDARD
+    return "Character standard", CHARACTER_STANDARD
+
+
 NORMALIZATION_TEMPLATES: dict[str, str] = {
     "prop": (
         "Create a production-ready prop reference image. Keep the object isolated, centered, and unobstructed. "
@@ -299,6 +316,7 @@ async def inspect_asset(*args, **kwargs) -> dict[str, Any]:
     if llm_client is None:
         raise ValueError("vision-capable LLM is required to inspect assets")
     original_asset_kind = asset.asset_kind
+    standard_label, standard = _inspection_standard(asset)
 
     messages = [
         {
@@ -308,7 +326,7 @@ async def inspect_asset(*args, **kwargs) -> dict[str, Any]:
                 "Return JSON only with asset_type, confidence, subjects, meets_standard, missing_fields, "
                 "recommended_action, reference_role, prompt_source, prompt_optimized, visual_identity, "
                 "reference_capabilities, and notes. "
-                f"Character standard: {json.dumps(CHARACTER_STANDARD, ensure_ascii=False)}"
+                f"{standard_label}: {json.dumps(standard, ensure_ascii=False)}"
             ),
         },
         {

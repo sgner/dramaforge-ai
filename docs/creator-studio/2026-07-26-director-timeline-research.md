@@ -65,8 +65,9 @@ extra 写 brief/character_card_ids/story_entity_ids）→ 质检（`inspect_asse
 2. **episode 任务注册表纯内存**（studio_tasks.py）：重启丢任务、无法恢复。
 3. **导演台 URL 匹配脆弱**：bigShot↔Asset 靠 URL 字符串相等，无显式外键。
 4. **时间线纯内存态**：刷新即丢；caption 导出丢失（字幕烧录未做）。
-5. **质检标准错配**：critic 用角色资产标准而非镜头级标准；一致性解析失败默认放行
-   （consistent=True, score=0.5，character_cards.py:229）可能"静默通过"；单镜头最多 5 次真实生成，无成本预估。
+5. ~~**质检标准错配**~~（已修复 2026-07-26）：`inspect_asset` 现在按资产类型选标准——
+   shot/storyboard 用镜头级 `SHOT_STANDARD`（构图/运镜/连续性/保真度），其余沿用角色标准。
+   仍待做：一致性解析失败默认放行（character_cards.py:229）和单镜头成本预估。
 
 另：TransportBar/ClipInspector 大量视觉占位按钮（播放速度/Split/Transform/音量滑条均无逻辑）。
 

@@ -125,3 +125,57 @@ def test_resolve_reference_assets_is_deduplicated_and_role_aware(db_session):
 
     with pytest.raises(ValueError):
         resolve_reference_assets(db_session, "project-a", ["prop-1"], role="character")
+
+
+@pytest.mark.asyncio
+async def test_inspect_shot_asset_uses_shot_standard(db_session):
+    """镜头资产用镜头级质检标准（构图/运镜/连续性/保真度），不再复用角色标准。"""
+    db_session.add(Asset(
+        id="shot-1", project_id="project-a", kind="image", asset_kind="shot",
+        name="雨夜天台", url="/files/shot.png", status="ready",
+    ))
+    db_session.commit()
+
+    captured = {}
+
+    class VisionLLM:
+        async def generate_structured(self, messages, **kwargs):
+            captured["system"] = messages[0]["content"]
+            return LLMResponse(content=(
+                '{"asset_type":"shot","confidence":0.9,"subjects":["rooftop"],'
+                '"meets_standard":true,"missing_fields":[],'
+                '"recommended_action":"reuse","reference_role":"shot"}'
+            ))
+
+    await inspect_asset(db_session, "project-a", "shot-1", VisionLLM())
+
+    assert "Shot standard" in captured["system"]
+    assert "composition" in captured["system"]
+    assert "continuity" in captured["system"]
+    assert "Character standard" not in captured["system"]
+
+
+@pytest.mark.asyncio
+async def test_inspect_character_asset_keeps_character_standard(db_session):
+    """角色资产仍用角色标准（四视图/单主体/纯色背景）。"""
+    db_session.add(Asset(
+        id="char-1", project_id="project-a", kind="image", asset_kind="character",
+        name="林尘", url="/files/char.png", status="ready",
+    ))
+    db_session.commit()
+
+    captured = {}
+
+    class VisionLLM:
+        async def generate_structured(self, messages, **kwargs):
+            captured["system"] = messages[0]["content"]
+            return LLMResponse(content=(
+                '{"asset_type":"character","confidence":0.9,"subjects":["single_person"],'
+                '"meets_standard":true,"missing_fields":[],'
+                '"recommended_action":"reuse","reference_role":"character"}'
+            ))
+
+    await inspect_asset(db_session, "project-a", "char-1", VisionLLM())
+
+    assert "Character standard" in captured["system"]
+    assert "Shot standard" not in captured["system"]
