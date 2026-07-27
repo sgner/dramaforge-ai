@@ -65,10 +65,20 @@ def upload_blob(content: bytes) -> str:
 
 
 def main():
-    remote_sha = git("rev-parse", "origin/refactor/runway-ui")
+    # 以服务端实际 ref 为基（本地 origin 引用可能落后于 API 重放过的远端）
+    remote_sha = api("GET", f"/git/ref/heads/{BRANCH}")["object"]["sha"]
     head_sha = git("rev-parse", "HEAD")
-    commits = git("rev-list", "--reverse", f"{remote_sha}..{head_sha}").splitlines()
-    print(f"replaying {len(commits)} commits onto {BRANCH}")
+    # 本地 origin 引用落后于服务端时，以 argv[1] 或本地 origin 为起点找本地独有提交
+    local_origin = git("rev-parse", "origin/refactor/runway-ui")
+    base = sys.argv[1] if len(sys.argv) > 1 else local_origin
+    try:
+        commits = git("rev-list", "--reverse", f"{base}..{head_sha}").splitlines()
+    except RuntimeError:
+        commits = []
+    if not commits:
+        print("nothing to replay")
+        return
+    print(f"replaying {len(commits)} commits onto {BRANCH} (remote at {remote_sha[:7]})")
 
     parent = remote_sha
     parent_tree = git("rev-parse", f"{remote_sha}^{{tree}}")
