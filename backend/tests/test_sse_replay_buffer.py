@@ -11,6 +11,13 @@
 修复：event_bus 维护 per-task event log；subscribe 时 stream 端点先把
      log 全部重放给新客户端，再切到 live。
 """
+def _fake_request():
+    from unittest.mock import MagicMock
+    req = MagicMock()
+    req.headers = {}
+    return req
+
+
 import asyncio
 import time
 
@@ -171,7 +178,7 @@ def test_stream_endpoint_replays_history_to_subscriber():
 
     async def collect_replay():
         # stream_events 是 async 函数，必须先 await 拿 StreamingResponse
-        resp = await stream_events(task_id)
+        resp = await stream_events(task_id, _fake_request())
         # StreamingResponse 的 body_iterator 暴露内部 generator
         gen = resp.body_iterator
         chunks = []
@@ -230,7 +237,7 @@ def test_stream_endpoint_returns_replay_for_already_done_task():
 
     async def collect_all():
         # stream_events 是 async 函数，必须先 await 拿 StreamingResponse
-        resp = await stream_events(task_id)
+        resp = await stream_events(task_id, _fake_request())
         chunks = []
         async for chunk in resp.body_iterator:
             chunks.append(chunk)

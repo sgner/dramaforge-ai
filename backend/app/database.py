@@ -44,7 +44,18 @@ def init_db():
     _migrate_performance_indexes()
     _migrate_agent_conversation_columns()
     _migrate_connection_data_column()
+    _migrate_agent_task_client_request_id()
     _recover_studio_episode_tasks()
+
+
+def _migrate_agent_task_client_request_id():
+    """agent_tasks 增加 client_request_id 列（创建幂等键）。"""
+    existing = {column["name"] for column in inspect(engine).get_columns("agent_tasks")}
+    if "client_request_id" in existing:
+        return
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE agent_tasks ADD COLUMN client_request_id VARCHAR(64)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_agent_tasks_client_request_id ON agent_tasks (client_request_id)"))
 
 
 def _recover_studio_episode_tasks():
@@ -87,6 +98,9 @@ def _migrate_performance_indexes():
         ("assets", "project_id"),
         ("agent_tasks", "project_id"),
         ("agent_steps", "task_id"),
+        # 阶段 2.3：pending 问题查找（task+status）与资产派生链（source_asset_id）
+        ("agent_steps", "status"),
+        ("assets", "source_asset_id"),
     ]
     inspector = inspect(engine)
     with engine.begin() as connection:

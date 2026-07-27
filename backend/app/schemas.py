@@ -230,10 +230,13 @@ class AgentTaskCreate(BaseModel):
     # LLM 选择（仅 provider_id / model_id；API key 走后端 env）
     llm_provider_id: Optional[str] = None
     llm_model_id: Optional[str] = None
+    # 幂等键：重复提交（双击/重试）返回已有任务，不创建第二条执行链
+    client_request_id: Optional[str] = None
 
 
 class AgentTaskUpdate(BaseModel):
-    status: Optional[str] = None
+    # 状态转换受路由层 _TASK_TRANSITIONS 守卫，非法转换 409
+    status: Optional[Literal["pending", "running", "paused", "done", "failed", "cancelled"]] = None
     plan: Optional[list] = None
     artifacts: Optional[dict] = None
     pending_response: Optional[dict] = None
@@ -301,6 +304,8 @@ class AgentUserResponse(BaseModel):
     response: Optional[Any] = None
     custom_text: Optional[str] = None
     approved: bool = True
+    # 回答绑定：对应问题的 step_id。与当前 pending 问题不匹配时 409（防旧回答被新问题消费）
+    question_id: Optional[str] = None
     # Spec B: 失败恢复决策
     recovery_action: Optional[Literal["retry", "change_model", "skip"]] = None
     new_model_id: Optional[str] = None

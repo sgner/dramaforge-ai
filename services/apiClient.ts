@@ -224,6 +224,8 @@ export const api = {
   respondAgent: (taskId: string, payload: {
     response: string;
     approved?: boolean;
+    /** 回答绑定：对应问题的 step_id（与当前待答问题不匹配时后端 409） */
+    question_id?: string;
     /** Spec B: 工具失败恢复决策 (retry / change_model / skip) */
     recovery_action?: 'retry' | 'change_model' | 'skip';
     /** Spec B: 换模型时的新 model id */
@@ -271,6 +273,8 @@ export const api = {
       providerId?: string;
       modelId?: string;
       language?: Language;
+      /** 创建幂等键：重复提交返回已有任务，不创建第二条执行链 */
+      clientRequestId?: string;
     } = {}
   ) =>
     request<AgentTaskOut>('/agent/tasks', {
@@ -284,6 +288,7 @@ export const api = {
         llm_provider_id: opts.providerId ?? null,
         llm_model_id: opts.modelId ?? null,
         language: opts.language ?? 'en',
+        client_request_id: opts.clientRequestId ?? null,
       }),
     }),
 

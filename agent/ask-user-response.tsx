@@ -7,6 +7,7 @@ type ResponsePayload = {
   response: string | string[];
   custom_text?: string;
   approved?: boolean;
+  question_id?: string;
 };
 
 type QuestionDraft = {
@@ -72,6 +73,9 @@ export const AskUserResponse: React.FC = () => {
       ? typedAnswer
       : mode === 'text' ? typedAnswer : mode === 'multiple' ? selected : selected[0];
     const payload: ResponsePayload = { response };
+    // 回答绑定：把问题的 step_id 带给后端，旧问题的迟到回答不会被新问题消费
+    const questionId = question?.step_id ?? question?.id;
+    if (questionId) payload.question_id = String(questionId);
     if (customText.trim()) payload.custom_text = customText.trim();
     if (typedAnswer && hasValidSelection) payload.custom_text = typedAnswer;
     if (mode === 'confirm' && hasValidSelection) payload.approved = selected[0] === 'approved';

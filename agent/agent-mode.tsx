@@ -48,6 +48,8 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId, canvasContainer
   const [error, setError] = useState<string | null>(null);
   const [thoughtOpen, setThoughtOpen] = useState(false);
   const [toolDrawerOpen, setToolDrawerOpen] = useState(false);
+  // 创建任务的幂等键（本次提交会话内复用，成功后置空）
+  const submitRequestIdRef = useRef<string | null>(null);
   const [taskDrawerOpen, setTaskDrawerOpen] = useState(true);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [promptLibraryOpen, setPromptLibraryOpen] = useState(false);
@@ -183,6 +185,11 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId, canvasContainer
     if (!goal.trim() || submitting) return;
     setSubmitting(true);
     setError(null);
+    // 创建幂等键：本次提交（含双击/自动重试）共用同一 key，
+    // 后端返回已有任务而不是创建第二条执行链；成功后换新 key。
+    if (!submitRequestIdRef.current) {
+      submitRequestIdRef.current = crypto.randomUUID();
+    }
     try {
       if (!selectedProviderId || !selectedModelId) {
         setError('未配置 LLM 能力绑定，请先在 API 设置中绑定 LLM 平台和模型。');
@@ -220,7 +227,9 @@ export const AgentMode: React.FC<AgentModeProps> = ({ projectId, canvasContainer
         providerId,
         modelId,
         language: lang,
+        clientRequestId: submitRequestIdRef.current,
       });
+      submitRequestIdRef.current = null;
       setTask(t.id, 'running', projectId);
       // 后端在 TASK_STARTED 事件里也会再发一次 llm_mode，但 SSE 推送有几十 ms 延迟，
       // 提前把 store.llmMode 写成 'real'（只要画布步骤绑定了 provider 就是真实 LLM），

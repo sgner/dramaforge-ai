@@ -30,6 +30,18 @@ from ..agent.task_profiles import TaskProfile, classify_task
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# 任务状态机（阶段 2.1）：PATCH 状态更新的合法转换表。
+# 端点各自的业务校验（stop/retry/resume 的 ad-hoc 检查）保持不变，此表堵住
+# "PATCH 无校验直写 status" 的后门。当前状态不在表内（如历史数据）视为不可转换。
+_TASK_TRANSITIONS: dict[str, set[str]] = {
+    "pending": {"running", "cancelled"},
+    "running": {"paused", "done", "failed", "cancelled"},
+    "paused": {"running", "failed", "cancelled"},
+    "failed": {"pending"},     # retry 复位
+    "cancelled": {"pending"},  # retry 复位
+    "done": set(),             # 终态不可转换
+}
+
 
 def _gen_id() -> str:
     return uuid.uuid4().hex[:12]
@@ -183,6 +195,15 @@ async def create_task(body: schemas.AgentTaskCreate, db: Session = Depends(get_d
         # 没 binding 也没请求体参数 → 存 None，向后兼容
         llm_provider_id = None
         llm_model_id = None
+    # 幂等：同一 project + client_request_id 重复提交（双击/断线重试）返回已有任务，
+    # 不创建第二条执行链。已有任务照常返回（无论状态），由调用方决定后续动作。
+    if body.client_request_id:
+        existing = db.query(AgentTask).filter(
+            AgentTask.project_id == body.project_id,
+            AgentTask.client_request_id == body.client_request_id,
+        ).first()
+        if existing is not None:
+            return existing.to_dict()
     profile = _profile_for_goal(db, body.user_goal, body.project_id).model_copy(
         update={"language": body.language}
     )
@@ -199,6 +220,7 @@ async def create_task(body: schemas.AgentTaskCreate, db: Session = Depends(get_d
         skip_confirm=body.skip_confirm,
         llm_provider_id=llm_provider_id,
         llm_model_id=llm_model_id,
+        client_request_id=body.client_request_id,
         task_profile=profile.model_dump(mode="json"),
         rule_pack_version=profile.rule_pack_id.rsplit(".", 1)[-1],
     )
@@ -238,11 +260,17 @@ def get_task(task_id: str, db: Session = Depends(get_db)):
 
 @router.patch("/tasks/{task_id}", response_model=schemas.AgentTaskOut)
 def update_task(task_id: str, body: schemas.AgentTaskUpdate, db: Session = Depends(get_db)):
-    """更新任务状态/计划/资产。"""
+    """更新任务状态/计划/资产。状态转换受 _TASK_TRANSITIONS 守卫（非法转换 409）。"""
     task = db.query(AgentTask).filter_by(id=task_id).first()
     if not task:
         raise HTTPException(404, f"Task {task_id} not found")
     if body.status is not None:
+        allowed = _TASK_TRANSITIONS.get(task.status, set())
+        if body.status != task.status and body.status not in allowed:
+            raise HTTPException(
+                409,
+                f"illegal task status transition: {task.status} -> {body.status}",
+            )
         task.status = body.status
     if body.plan is not None:
         task.plan = body.plan
@@ -299,7 +327,7 @@ def _sse_heartbeat() -> str:
 
 
 @router.get("/tasks/{task_id}/stream")
-async def stream_events(task_id: str, request: Request, last_seq: int = Query(0, ge=0)):
+async def stream_events(task_id: str, request: Request, last_seq: int = 0):
     """SSE 推送 agent 事件。
 
     关键行为：
@@ -359,6 +387,20 @@ async def stream_events(task_id: str, request: Request, last_seq: int = Query(0,
 # 用户响应
 # ========================
 
+def _pending_question_step_id(task_id: str, db: Session) -> str | None:
+    """当前待答问题的 step_id（最近一个 status=pending 的 ask_user step）；无则 None。"""
+    from ..models import AgentStep
+    last = (
+        db.query(AgentStep)
+        .filter_by(task_id=task_id)
+        .order_by(AgentStep.step_number.desc())
+        .first()
+    )
+    if last and last.status == "pending" and (last.action or {}).get("tool") == "ask_user":
+        return ((last.action or {}).get("params") or {}).get("step_id")
+    return None
+
+
 @router.post("/tasks/{task_id}/respond")
 async def user_respond(task_id: str, body: schemas.AgentUserResponse, db: Session = Depends(get_db)):
     """接收用户对 ask_user / plan 审核 / 工具失败恢复的响应。
@@ -382,11 +424,25 @@ async def user_respond(task_id: str, body: schemas.AgentUserResponse, db: Sessio
     )
     if last_ask_step and (last_ask_step.action or {}).get("tool") == "ask_user":
         last_question = (last_ask_step.action.get("params") or {}).get("question", "")
+    # 回答绑定校验（阶段 2.1）：携带 question_id 时必须与当前待答问题一致，
+    # 否则说明这是针对旧问题的迟到回答，不能被新问题消费。
+    if body.question_id:
+        current_qid = _pending_question_step_id(task_id, db)
+        if current_qid is None:
+            raise HTTPException(409, "no pending question; the answer is stale")
+        if current_qid != body.question_id:
+            raise HTTPException(
+                409,
+                f"answer is bound to question '{body.question_id}', "
+                f"but the pending question is '{current_qid}'",
+            )
     task.pending_response = {
         "response": body.response,
         "custom_text": body.custom_text,
         "approved": body.approved,
     }
+    if body.question_id:
+        task.pending_response["question_id"] = body.question_id
     if last_question:
         task.pending_response["question"] = last_question
     if body.recovery_action:
@@ -1400,6 +1456,17 @@ async def resume_task(task_id: str, db: Session = Depends(get_db)):
     )
     if task.status != "paused" and not can_resume_answered_question:
         raise HTTPException(400, f"Cannot resume task in status {task.status}")
+    # 回答绑定校验：pending_response 绑定的 question_id 与当前待答问题不一致时
+    # 拒绝 resume（旧回答不能被新问题消费）。
+    bound_qid = (task.pending_response or {}).get("question_id")
+    if bound_qid:
+        current_qid = _pending_question_step_id(task_id, db)
+        if current_qid is not None and current_qid != bound_qid:
+            raise HTTPException(
+                409,
+                f"pending answer is bound to question '{bound_qid}', "
+                f"but the pending question is '{current_qid}'",
+            )
     if not task.pending_response:
         is_waiting_for_user = bool(
             last_step and last_step.status == "pending" and

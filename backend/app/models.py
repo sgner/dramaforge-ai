@@ -205,6 +205,8 @@ class AgentTask(Base):
     # LLM 选择（仅 provider_id / model_id；key 不入库）
     llm_provider_id = Column(String(64), nullable=True, default=None)
     llm_model_id = Column(String(128), nullable=True, default=None)
+    # 创建幂等键：同一 project + client_request_id 重复提交返回已有任务
+    client_request_id = Column(String(64), nullable=True, index=True)
     _task_profile_json = Column("task_profile", Text, nullable=True)
     rule_pack_version = Column(String(64), nullable=True)
     # 多轮对话记忆：每轮用户消息 + agent 完成摘要（按轮次追加）

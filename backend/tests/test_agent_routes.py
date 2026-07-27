@@ -134,9 +134,12 @@ def test_sse_stream_endpoint_registered(client):
     # forever. Inspect the response object directly so this test does not
     # wait for the intentionally long-lived stream.
     import asyncio
+    from unittest.mock import MagicMock
     from app.routers.agent import stream_events
 
-    response = asyncio.run(stream_events(task_id))
+    fake_request = MagicMock()
+    fake_request.headers = {}
+    response = asyncio.run(stream_events(task_id, fake_request))
     assert response.media_type == "text/event-stream"
     asyncio.run(response.body_iterator.aclose())
 
